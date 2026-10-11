@@ -15,6 +15,7 @@ endif()
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/res
 )
 
 # Common Windows System Libraries
@@ -31,6 +32,7 @@ if(MSVC)
         gdi32.lib
         advapi32.lib
         ole32.lib
+        uuid.lib
     )
 else()
     set(WIN32_LIBS
@@ -45,6 +47,7 @@ else()
         gdi32
         advapi32
         ole32
+        uuid
     )
 endif()
 
@@ -67,6 +70,11 @@ set(APP_SOURCES
 
 add_executable(QuickDNS WIN32 ${APP_SOURCES})
 target_link_libraries(QuickDNS PRIVATE quickdns_core ${WIN32_LIBS})
+
+if(MSVC)
+    # Avoid duplicate manifest embedding conflict between resource.rc and MSVC default manifest
+    set_target_properties(QuickDNS PROPERTIES LINK_FLAGS "/MANIFEST:NO")
+endif()
 
 # Diagnostic resources for test tools
 set(DIAG_RC res/resource_diag.rc)

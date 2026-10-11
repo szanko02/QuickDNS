@@ -15,7 +15,6 @@
 // Dynamic function pointer signatures for Windows 10 1809+ / Windows 11 DNS settings API
 #ifndef DNS_INTERFACE_SETTINGS_VERSION1
 #define DNS_INTERFACE_SETTINGS_VERSION1 1
-#endif
 
 #ifndef DNS_SETTING_IPV6
 #define DNS_SETTING_IPV6                 0x0001
@@ -36,8 +35,6 @@
 #define DNS_SETTING_PROFILE_NAMESERVER   0x0200
 #endif
 
-#ifndef _DNS_INTERFACE_SETTINGS_DEFINED
-#define _DNS_INTERFACE_SETTINGS_DEFINED
 typedef struct _DNS_INTERFACE_SETTINGS {
     ULONG Version;
     ULONG64 Flags;
