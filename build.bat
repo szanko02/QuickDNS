@@ -42,6 +42,7 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] Main compilation failed. & exit /b 1 )
 echo [5/6] Linking QuickDNS.exe with embedded App Icon...
 "!COMPILER_BIN!\clang++.exe" -std=c++20 -O2 -mwindows -municode -static -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -luuid -luser32 -lgdi32 -ladvapi32
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking QuickDNS.exe failed. & exit /b 1 )
+copy /Y build\QuickDNS.exe "%~dp0QuickDNS.exe" >nul
 
 echo [6/6] Linking Diagnostic tools (test_dns.exe, test_config.exe) with Diag Icons...
 "!COMPILER_BIN!\clang++.exe" -std=c++20 -O2 -static -I include tests\test_dns.cpp build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_dns.exe
@@ -49,7 +50,7 @@ echo [6/6] Linking Diagnostic tools (test_dns.exe, test_config.exe) with Diag Ic
 
 echo ===================================================
 echo [SUCCESS] All executables built with custom icons!
-echo  - Main App:   %~dp0build\QuickDNS.exe
+echo  - Main App:   %~dp0QuickDNS.exe
 echo  - Tests:      %~dp0build\test_dns.exe
 echo                %~dp0build\test_config.exe
 echo ===================================================

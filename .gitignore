@@ -3,6 +3,7 @@ build/
 bin/
 obj/
 out/
+dist/
 .vs/
 *.user
 *.suo

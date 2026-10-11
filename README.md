@@ -1,5 +1,11 @@
 # QuickDNS ⚡
 
+[![Download Ready Binary](https://img.shields.io/badge/Download-QuickDNS%20v1.0.0-blue?style=for-the-badge&logo=windows)](https://github.com/szanko02/QuickDNS/releases/latest)
+[![GitHub release](https://img.shields.io/github/v/release/szanko02/QuickDNS?style=for-the-badge)](https://github.com/szanko02/QuickDNS/releases/latest)
+
+> 🚀 **[Скачать готовую версию QuickDNS v1.0.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)**  
+> Приложение не требует сборки или установки: скачайте, запустите и переключайте DNS в 1 клик!
+
 **QuickDNS** — легковесное нативное приложение для Windows (C++20) с графическим интерфейсом для мгновенного переключения DNS-серверов в один клик.
 
 ## 🌟 Основные возможности
