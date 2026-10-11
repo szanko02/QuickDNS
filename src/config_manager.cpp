@@ -267,6 +267,18 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false
         },
         {
+            "malw",
+            "Malw.link DNS",
+            "dns.malw.link - Разблокировка сайтов, блокировка рекламы и трекеров",
+            "179.254.166.171",
+            "164.5.224.81",
+            "2a12:bec4:1bb0:27dd::2",
+            "2a13:82c0:0:d::3",
+            "https://dns.malw.link/dns-query",
+            true,
+            false
+        },
+        {
             "cloudflare",
             "Cloudflare (1.1.1.1)",
             "Cloudflare - Быстрый глобальный DNS с высокой приватностью",

@@ -18,6 +18,7 @@
 #define IDC_STATUS_DNS_VAL          1012
 #define IDC_CHECK_AUTORUN           1013
 #define IDC_CHECK_START_MINIMIZED   1014
+#define IDC_BTN_BENCHMARK           1015
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101
@@ -26,6 +27,13 @@
 #define IDC_EDIT_SEC_IPV4           1104
 #define IDC_BTN_SAVE_PROFILE        1105
 #define IDC_BTN_CANCEL_PROFILE      1106
+
+// Benchmark Dialog Controls
+#define IDC_LIST_BENCHMARK          1201
+#define IDC_BTN_BENCHMARK_APPLY     1202
+#define IDC_BTN_BENCHMARK_RETEST    1203
+#define IDC_BTN_BENCHMARK_CLOSE     1204
+#define IDC_STATUS_BENCHMARK        1205
 
 // Tray Menu Commands
 #define IDM_TRAY_SHOW               2001

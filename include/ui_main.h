@@ -50,6 +50,7 @@ private:
     void reset_to_dhcp();
     void flush_dns_cache();
     void open_add_profile_dialog();
+    void open_benchmark_dialog();
 
     // Tray Menu
     void show_tray_context_menu();
@@ -67,6 +68,7 @@ private:
     HWND m_hComboAdapter = nullptr;
     HWND m_hComboProfile = nullptr;
     HWND m_hBtnApply = nullptr;
+    HWND m_hBtnBenchmark = nullptr;
     HWND m_hBtnResetDhcp = nullptr;
     HWND m_hBtnFlushDns = nullptr;
     HWND m_hBtnAddProfile = nullptr;

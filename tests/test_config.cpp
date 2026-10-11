@@ -43,6 +43,12 @@ int main() {
         assert(zapret->doh_template == "https://dns.zapret.moe/dns-query");
         std::cout << "[PASS] Zapret preset verified: " << zapret->primary_ipv4 << " (DoH: " << zapret->doh_template << ")" << std::endl;
 
+        auto malw = cfg.get_profile_by_id("malw");
+        assert(malw.has_value());
+        assert(malw->primary_ipv4 == "179.254.166.171");
+        assert(malw->doh_template == "https://dns.malw.link/dns-query");
+        std::cout << "[PASS] Malw.link preset verified: " << malw->primary_ipv4 << " (DoH: " << malw->doh_template << ")" << std::endl;
+
         auto dhcp = cfg.get_profile_by_id("dhcp");
         assert(dhcp.has_value());
         assert(dhcp->is_dhcp == true);

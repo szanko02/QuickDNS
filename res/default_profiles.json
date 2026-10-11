@@ -50,6 +50,18 @@
       "is_dhcp": false
     },
     {
+      "id": "malw",
+      "name": "Malw.link DNS",
+      "description": "dns.malw.link - Разблокировка сайтов, блокировка рекламы и трекеров",
+      "primary_ipv4": "179.254.166.171",
+      "secondary_ipv4": "164.5.224.81",
+      "primary_ipv6": "2a12:bec4:1bb0:27dd::2",
+      "secondary_ipv6": "2a13:82c0:0:d::3",
+      "doh_template": "https://dns.malw.link/dns-query",
+      "is_builtin": true,
+      "is_dhcp": false
+    },
+    {
       "id": "cloudflare",
       "name": "Cloudflare",
       "description": "Cloudflare 1.1.1.1 - Максимальная скорость и конфиденциальность",

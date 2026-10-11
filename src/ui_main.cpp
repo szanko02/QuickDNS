@@ -1,5 +1,6 @@
 #include "ui_main.h"
 #include "dialog_add_profile.h"
+#include "dialog_benchmark.h"
 #include "encoding_utils.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
@@ -18,7 +19,7 @@ namespace {
     constexpr const wchar_t* WINDOW_CLASS_NAME = L"QuickDNS_MainWindowClass";
     constexpr const wchar_t* WINDOW_TITLE = L"QuickDNS — Быстрая смена DNS в 1 клик";
     constexpr int WINDOW_WIDTH = 520;
-    constexpr int WINDOW_HEIGHT = 580;
+    constexpr int WINDOW_HEIGHT = 630;
 
     // Dark theme colors
     constexpr COLORREF COLOR_BG_DARK = RGB(30, 30, 30);
@@ -155,6 +156,10 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             flush_dns_cache();
             return 0;
         }
+        if (wmId == IDC_BTN_BENCHMARK) {
+            open_benchmark_dialog();
+            return 0;
+        }
         if (wmId == IDC_BTN_ADD_PROFILE) {
             open_add_profile_dialog();
             return 0;
@@ -216,6 +221,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     case WM_APP_DNS_APPLIED: {
         m_isBusy = false;
         EnableWindow(m_hBtnApply, TRUE);
+        EnableWindow(m_hBtnBenchmark, TRUE);
         EnableWindow(m_hBtnResetDhcp, TRUE);
         EnableWindow(m_hBtnFlushDns, TRUE);
 
@@ -368,24 +374,31 @@ void MainWindow::create_controls() {
     // 4. Action Buttons
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"⚡ Применить DNS в 1 клик",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_DEFPUSHBUTTON | WS_TABSTOP,
-        marginX, startY, contentWidth, 42,
+        marginX, startY, contentWidth, 40,
         m_hWnd, (HMENU)IDC_BTN_APPLY, m_hInstance, nullptr);
     SendMessageW(m_hBtnApply, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-    startY += 52;
+    startY += 48;
+
+    m_hBtnBenchmark = CreateWindowExW(0, WC_BUTTONW, L"🚀 Проверить скорость всех DNS (пинг)",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+        marginX, startY, contentWidth, 34,
+        m_hWnd, (HMENU)IDC_BTN_BENCHMARK, m_hInstance, nullptr);
+    SendMessageW(m_hBtnBenchmark, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
+    startY += 44;
 
     int halfWidth = (contentWidth - 12) / 2;
     m_hBtnResetDhcp = CreateWindowExW(0, WC_BUTTONW, L"🔄 Сброс на DHCP (Авто)",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
-        marginX, startY, halfWidth, 34,
+        marginX, startY, halfWidth, 32,
         m_hWnd, (HMENU)IDC_BTN_RESET_DHCP, m_hInstance, nullptr);
     SendMessageW(m_hBtnResetDhcp, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
 
     m_hBtnFlushDns = CreateWindowExW(0, WC_BUTTONW, L"🧹 Сбросить DNS-кэш",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
-        marginX + halfWidth + 12, startY, halfWidth, 34,
+        marginX + halfWidth + 12, startY, halfWidth, 32,
         m_hWnd, (HMENU)IDC_BTN_FLUSH_DNS, m_hInstance, nullptr);
     SendMessageW(m_hBtnFlushDns, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 46;
+    startY += 42;
 
     // 5. Custom Profile Actions (Add Profile + Delete Profile buttons)
     m_hBtnAddProfile = CreateWindowExW(0, WC_BUTTONW, L"➕ Добавить свой DNS...",
@@ -566,6 +579,7 @@ void MainWindow::apply_selected_dns() {
 
     m_isBusy = true;
     EnableWindow(m_hBtnApply, FALSE);
+    EnableWindow(m_hBtnBenchmark, FALSE);
     EnableWindow(m_hBtnResetDhcp, FALSE);
     EnableWindow(m_hBtnFlushDns, FALSE);
 
@@ -619,6 +633,7 @@ void MainWindow::reset_to_dhcp() {
 
     m_isBusy = true;
     EnableWindow(m_hBtnApply, FALSE);
+    EnableWindow(m_hBtnBenchmark, FALSE);
     EnableWindow(m_hBtnResetDhcp, FALSE);
     EnableWindow(m_hBtnFlushDns, FALSE);
 
@@ -682,6 +697,22 @@ void MainWindow::open_add_profile_dialog() {
         show_tray_notification(L"Профиль добавлен", L"Профиль '" + pName + L"' успешно сохранен и выбран.");
     } else {
         MessageBoxW(m_hWnd, L"Не удалось добавить профиль (возможно, профиль с таким именем уже существует).", L"Ошибка", MB_OK | MB_ICONERROR);
+    }
+}
+
+void MainWindow::open_benchmark_dialog() {
+    auto selectedIdOpt = quickdns::BenchmarkDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id());
+    if (selectedIdOpt.has_value()) {
+        std::string selectedId = *selectedIdOpt;
+        for (size_t i = 0; i < m_profiles.size(); ++i) {
+            if (m_profiles[i].id == selectedId) {
+                m_selectedProfileIndex = static_cast<int>(i);
+                ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                on_profile_selected();
+                apply_selected_dns();
+                break;
+            }
+        }
     }
 }
 
