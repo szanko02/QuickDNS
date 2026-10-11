@@ -38,6 +38,18 @@
       "is_dhcp": false
     },
     {
+      "id": "zapret",
+      "name": "Zapret DNS",
+      "description": "Zapret DNS - Открытие заблокированных сервисов и нейросетей (Нидерланды)",
+      "primary_ipv4": "83.217.211.149",
+      "secondary_ipv4": "",
+      "primary_ipv6": "2a03:afc0:9::235d",
+      "secondary_ipv6": "",
+      "doh_template": "https://dns.zapret.moe/dns-query",
+      "is_builtin": true,
+      "is_dhcp": false
+    },
+    {
       "id": "cloudflare",
       "name": "Cloudflare",
       "description": "Cloudflare 1.1.1.1 - Максимальная скорость и конфиденциальность",

@@ -118,6 +118,23 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
                 }
             }
         }
+        for (const auto& def : defaultPresets) {
+            bool found = false;
+            for (const auto& p : m_profiles) {
+                if (p.id == def.id) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                if (!m_profiles.empty() && m_profiles.back().id == "dhcp") {
+                    m_profiles.insert(m_profiles.end() - 1, def);
+                } else {
+                    m_profiles.push_back(def);
+                }
+                updatedAny = true;
+            }
+        }
         if (updatedAny) {
             save_to_file();
         }
@@ -234,6 +251,18 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "",
             "",
             "https://dns.bezmezhau.com/dns-query",
+            true,
+            false
+        },
+        {
+            "zapret",
+            "Zapret DNS",
+            "Zapret DNS - Открытие заблокированных сервисов и нейросетей (Нидерланды)",
+            "83.217.211.149",
+            "",
+            "2a03:afc0:9::235d",
+            "",
+            "https://dns.zapret.moe/dns-query",
             true,
             false
         },

@@ -37,6 +37,12 @@ int main() {
         assert(bezmezhau->doh_template == "https://dns.bezmezhau.com/dns-query");
         std::cout << "[PASS] Bezmezhau preset verified: " << bezmezhau->primary_ipv4 << " (DoH: " << bezmezhau->doh_template << ")" << std::endl;
 
+        auto zapret = cfg.get_profile_by_id("zapret");
+        assert(zapret.has_value());
+        assert(zapret->primary_ipv4 == "83.217.211.149");
+        assert(zapret->doh_template == "https://dns.zapret.moe/dns-query");
+        std::cout << "[PASS] Zapret preset verified: " << zapret->primary_ipv4 << " (DoH: " << zapret->doh_template << ")" << std::endl;
+
         auto dhcp = cfg.get_profile_by_id("dhcp");
         assert(dhcp.has_value());
         assert(dhcp->is_dhcp == true);
