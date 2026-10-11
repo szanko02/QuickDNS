@@ -4,8 +4,8 @@
 101 ICON "diag_icon.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,0,0,0
-PRODUCTVERSION  1,0,0,0
+FILEVERSION     1,2,0,0
+PRODUCTVERSION  1,2,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          0x40004L
@@ -18,11 +18,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "QuickDNS Diagnostic Engine"
             VALUE "FileDescription",  "QuickDNS Diagnostics & Network Tests"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      "1.2.0"
             VALUE "InternalName",     "QuickDNS_Diag"
             VALUE "LegalCopyright",   "MIT License"
             VALUE "ProductName",      "QuickDNS Diagnostics"
-            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "ProductVersion",   "1.2.0"
         END
     END
     BLOCK "VarFileInfo"

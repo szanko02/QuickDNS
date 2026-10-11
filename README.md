@@ -15,7 +15,7 @@
 
 <br/>
 
-### 📥 [Скачать готовый релиз v1.0.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
+### 📥 [Скачать готовый релиз v1.2.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
 > **Не требует установки и сборки.** Просто скачайте архив или файл `QuickDNS.exe` и запустите.
 
 </div>

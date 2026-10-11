@@ -17,9 +17,9 @@ using QuickDns::Encoding::wide_to_utf8;
 
 namespace {
     constexpr const wchar_t* WINDOW_CLASS_NAME = L"QuickDNS_MainWindowClass";
-    constexpr const wchar_t* WINDOW_TITLE = L"QuickDNS — Быстрая смена DNS в 1 клик";
+    constexpr const wchar_t* WINDOW_TITLE = L"QuickDNS v1.2.0 — Быстрая смена DNS в 1 клик";
     constexpr int WINDOW_WIDTH = 520;
-    constexpr int WINDOW_HEIGHT = 630;
+    constexpr int WINDOW_HEIGHT = 650;
 
     // Dark theme colors
     constexpr COLORREF COLOR_BG_DARK = RGB(30, 30, 30);
@@ -238,7 +238,12 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = (HDC)wParam;
-        SetTextColor(hdcStatic, COLOR_TEXT_LIGHT);
+        HWND hwndStatic = (HWND)lParam;
+        if (hwndStatic == m_hFooterVersion) {
+            SetTextColor(hdcStatic, RGB(130, 130, 130));
+        } else {
+            SetTextColor(hdcStatic, COLOR_TEXT_LIGHT);
+        }
         SetBkMode(hdcStatic, TRANSPARENT);
         static HBRUSH hbrBg = CreateSolidBrush(COLOR_BG_DARK);
         return (INT_PTR)hbrBg;
@@ -297,7 +302,7 @@ void MainWindow::create_controls() {
     int contentWidth = WINDOW_WIDTH - 64;
 
     // 1. Status Card Header
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS — Менеджер DNS",
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.2.0 — Менеджер DNS",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -413,6 +418,14 @@ void MainWindow::create_controls() {
         m_hWnd, (HMENU)IDC_BTN_DELETE_PROFILE, m_hInstance, nullptr);
     SendMessageW(m_hBtnDeleteProfile, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     EnableWindow(m_hBtnDeleteProfile, FALSE);
+
+    // 6. Footer Version Info
+    startY += 40;
+    m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.2.0 • Portable",
+        WS_CHILD | WS_VISIBLE | SS_CENTER,
+        marginX, startY, contentWidth, 18,
+        m_hWnd, nullptr, m_hInstance, nullptr);
+    SendMessageW(m_hFooterVersion, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
 }
 
 void MainWindow::setup_tray_icon() {
@@ -424,7 +437,7 @@ void MainWindow::setup_tray_icon() {
     m_nid.uCallbackMessage = WM_APP_TRAYMSG;
     m_nid.hIcon = LoadIconW(m_hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     if (!m_nid.hIcon) m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(m_nid.szTip, L"QuickDNS — Быстрая смена DNS");
+    wcscpy_s(m_nid.szTip, L"QuickDNS v1.2.0 — Быстрая смена DNS");
 
     Shell_NotifyIconW(NIM_ADD, &m_nid);
 }

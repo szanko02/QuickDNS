@@ -3,8 +3,13 @@ name: Build QuickDNS
 on:
   push:
     branches: [ "master", "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "master", "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -26,6 +31,12 @@ jobs:
       working-directory: build
       run: ctest -C Release --output-on-failure
 
+    - name: Package Release ZIP
+      shell: pwsh
+      run: |
+        Copy-Item -Path build/Release/QuickDNS.exe -Destination QuickDNS.exe -Force
+        ./scripts/package_release.ps1
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
@@ -35,3 +46,15 @@ jobs:
           build/Release/test_dns.exe
           build/Release/test_config.exe
           build/Release/test_benchmark.exe
+          dist/QuickDNS-v1.2.0-Portable.zip
+
+    - name: Publish GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          build/Release/QuickDNS.exe
+          dist/QuickDNS-v1.2.0-Portable.zip
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

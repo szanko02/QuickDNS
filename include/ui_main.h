@@ -77,6 +77,7 @@ private:
     HWND m_hStatusDnsList = nullptr;
     HWND m_hStatusBadge = nullptr;
     HWND m_hProfileDetails = nullptr;
+    HWND m_hFooterVersion = nullptr;
 
     // System Tray
     NOTIFYICONDATAW m_nid = {};
