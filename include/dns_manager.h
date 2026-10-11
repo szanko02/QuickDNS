@@ -84,7 +84,8 @@ public:
      */
     bool set_static_dns(const NetworkAdapterInfo& adapter, 
                         const std::wstring& primary_dns, 
-                        const std::wstring& secondary_dns = L"");
+                        const std::wstring& secondary_dns = L"",
+                        const std::wstring& doh_template = L"");
 
     /**
      * @brief Resets the DNS configuration of the specified adapter back to DHCP.

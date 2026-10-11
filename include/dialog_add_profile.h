@@ -34,6 +34,7 @@ private:
     HWND m_hEditPri = nullptr;
     HWND m_hEditSec = nullptr;
     HWND m_hEditDesc = nullptr;
+    HWND m_hEditDoh = nullptr;
     HWND m_hBtnSave = nullptr;
     HWND m_hBtnCancel = nullptr;
 

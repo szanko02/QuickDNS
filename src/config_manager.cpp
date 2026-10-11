@@ -1,67 +1,71 @@
 #include "config_manager.h"
 #include <fstream>
 #include <sstream>
-#include <cstdlib>
 #include <algorithm>
-#include <cctype>
+#include <cstdlib>
 
 namespace {
-    // Escapes special characters for JSON output
-    std::string escape_json_string(const std::string& input) {
-        std::string out;
-        for (char c : input) {
-            switch (c) {
-                case '"': out += "\\\""; break;
-                case '\\': out += "\\\\"; break;
-                case '\b': out += "\\b"; break;
-                case '\f': out += "\\f"; break;
-                case '\n': out += "\\n"; break;
-                case '\r': out += "\\r"; break;
-                case '\t': out += "\\t"; break;
-                default:
-                    out += c;
-                    break;
-            }
+
+std::string escape_json_string(const std::string& input) {
+    std::ostringstream ss;
+    for (char c : input) {
+        switch (c) {
+            case '"': ss << "\\\""; break;
+            case '\\': ss << "\\\\"; break;
+            case '\b': ss << "\\b"; break;
+            case '\f': ss << "\\f"; break;
+            case '\n': ss << "\\n"; break;
+            case '\r': ss << "\\r"; break;
+            case '\t': ss << "\\t"; break;
+            default:
+                if ('\x00' <= c && c <= '\x1f') {
+                    // Control character
+                } else {
+                    ss << c;
+                }
         }
-        return out;
+    }
+    return ss.str();
+}
+
+std::string extract_json_value(const std::string& json, const std::string& key) {
+    std::string searchKey = "\"" + key + "\"";
+    size_t pos = json.find(searchKey);
+    if (pos == std::string::npos) return "";
+
+    pos = json.find(':', pos);
+    if (pos == std::string::npos) return "";
+
+    pos++; // move past ':'
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
+        pos++;
     }
 
-    // Helper to extract string value by key in a JSON-like text
-    std::string extract_json_value(const std::string& json, const std::string& key) {
-        std::string pattern = "\"" + key + "\"";
-        size_t pos = json.find(pattern);
-        if (pos == std::string::npos) return "";
+    if (pos >= json.size()) return "";
 
-        pos = json.find(':', pos + pattern.length());
-        if (pos == std::string::npos) return "";
-
-        // Skip whitespace
-        pos++;
-        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
-            pos++;
-        }
-
-        if (pos >= json.size()) return "";
-
-        if (json[pos] == '"') {
-            // String value
-            size_t endPos = pos + 1;
-            while (endPos < json.size() && (json[endPos] != '"' || json[endPos - 1] == '\\')) {
-                endPos++;
+    if (json[pos] == '"') {
+        // String value
+        size_t endPos = pos + 1;
+        while (endPos < json.size()) {
+            if (json[endPos] == '"' && json[endPos - 1] != '\\') {
+                break;
             }
-            return json.substr(pos + 1, endPos - pos - 1);
-        } else {
-            // Boolean or numeric
-            size_t endPos = pos;
-            while (endPos < json.size() && json[endPos] != ',' && json[endPos] != '}' && json[endPos] != '\n' && json[endPos] != '\r') {
-                endPos++;
-            }
-            std::string val = json.substr(pos, endPos - pos);
-            val.erase(std::remove_if(val.begin(), val.end(), ::isspace), val.end());
-            return val;
+            endPos++;
         }
+        return json.substr(pos + 1, endPos - pos - 1);
+    } else {
+        // Boolean or numeric
+        size_t endPos = pos;
+        while (endPos < json.size() && json[endPos] != ',' && json[endPos] != '}' && json[endPos] != '\n' && json[endPos] != '\r') {
+            endPos++;
+        }
+        std::string val = json.substr(pos, endPos - pos);
+        val.erase(std::remove_if(val.begin(), val.end(), ::isspace), val.end());
+        return val;
     }
 }
+
+} // anonymous namespace
 
 ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
     if (config_path.empty()) {
@@ -72,22 +76,51 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
 
     bool loaded = load_from_file();
 
-    // Check if loaded profiles contain corrupted data (e.g. from previous run with encoding issues)
-    bool has_corrupted_data = false;
+    bool needs_reset = false;
     if (loaded) {
         for (const auto& p : m_profiles) {
             if (p.name.find("\xEF\xBF\xBD") != std::string::npos ||
                 p.description.find("\xEF\xBF\xBD") != std::string::npos) {
-                has_corrupted_data = true;
+                needs_reset = true;
                 break;
             }
         }
     }
 
-    if (!loaded || has_corrupted_data) {
+    if (!loaded || needs_reset) {
         m_profiles = get_default_presets();
         m_active_profile_id = "dhcp";
         save_to_file();
+    } else {
+        // Synchronize built-in presets with the latest authoritative IPs and DoH templates
+        auto defaultPresets = get_default_presets();
+        bool updatedAny = false;
+        for (auto& p : m_profiles) {
+            if (p.is_builtin) {
+                for (const auto& def : defaultPresets) {
+                    if (def.id == p.id) {
+                        if (p.primary_ipv4 != def.primary_ipv4 ||
+                            p.secondary_ipv4 != def.secondary_ipv4 ||
+                            p.doh_template != def.doh_template ||
+                            p.name != def.name ||
+                            p.description != def.description) {
+                            p.primary_ipv4 = def.primary_ipv4;
+                            p.secondary_ipv4 = def.secondary_ipv4;
+                            p.primary_ipv6 = def.primary_ipv6;
+                            p.secondary_ipv6 = def.secondary_ipv6;
+                            p.doh_template = def.doh_template;
+                            p.name = def.name;
+                            p.description = def.description;
+                            updatedAny = true;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if (updatedAny) {
+            save_to_file();
+        }
     }
 }
 
@@ -171,11 +204,12 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
         {
             "comss",
             "Comss.one DNS",
-            "Comss.one DNS - Защита от цензуры, блокировок и рекламы",
-            "92.223.109.31",
-            "91.107.150.82",
+            "Comss.one DNS - Защита от цензуры, рекламы и быстрый доступ",
+            "83.220.169.155",
+            "212.109.195.93",
             "",
             "",
+            "https://dns.comss.one/dns-query",
             true,
             false
         },
@@ -183,21 +217,23 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "geohide",
             "GeoHide DNS",
             "GeoHide DNS - Обход региональных и географических ограничений",
-            "193.187.91.189",
-            "193.187.91.190",
+            "193.233.112.67",
+            "193.233.112.88",
             "",
             "",
+            "https://dns.geohide.ru/dns-query",
             true,
             false
         },
         {
             "bezmezhau",
             "Без межаў DNS",
-            "Без межаў DNS - Свободный доступ без ограничений",
-            "185.162.9.228",
-            "185.162.9.229",
+            "Без межаў DNS - Независимый и свободный доступ без цензуры",
+            "143.20.64.55",
+            "31.58.216.201",
             "",
             "",
+            "https://dns.bezmezhau.com/dns-query",
             true,
             false
         },
@@ -209,6 +245,7 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "1.0.0.1",
             "2606:4700:4700::1111",
             "2606:4700:4700::1001",
+            "https://cloudflare-dns.com/dns-query",
             true,
             false
         },
@@ -220,6 +257,7 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "8.8.4.4",
             "2001:4860:4860::8888",
             "2001:4860:4860::8844",
+            "https://dns.google/dns-query",
             true,
             false
         },
@@ -231,6 +269,19 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "149.112.112.112",
             "2620:fe::fe",
             "2620:fe::9",
+            "https://dns.quad9.net/dns-query",
+            true,
+            false
+        },
+        {
+            "adguard",
+            "AdGuard DNS",
+            "AdGuard DNS - Блокировка рекламы, трекеров и вредоносных сайтов",
+            "94.140.14.14",
+            "94.140.15.15",
+            "2a10:50c0::ad1:ff",
+            "2a10:50c0::ad2:ff",
+            "https://dns.adguard-dns.com/dns-query",
             true,
             false
         },
@@ -238,6 +289,7 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "dhcp",
             "Автоматически (DHCP)",
             "DNS по умолчанию от вашего сетевого маршрутизатора / интернет-провайдера",
+            "",
             "",
             "",
             "",
@@ -272,6 +324,7 @@ bool ConfigManager::save_to_file() {
             ss << "      \"secondary_ipv4\": \"" << escape_json_string(p.secondary_ipv4) << "\",\n";
             ss << "      \"primary_ipv6\": \"" << escape_json_string(p.primary_ipv6) << "\",\n";
             ss << "      \"secondary_ipv6\": \"" << escape_json_string(p.secondary_ipv6) << "\",\n";
+            ss << "      \"doh_template\": \"" << escape_json_string(p.doh_template) << "\",\n";
             ss << "      \"is_builtin\": " << (p.is_builtin ? "true" : "false") << ",\n";
             ss << "      \"is_dhcp\": " << (p.is_dhcp ? "true" : "false") << "\n";
             ss << "    }" << (i + 1 < m_profiles.size() ? "," : "") << "\n";
@@ -333,6 +386,7 @@ bool ConfigManager::load_from_file() {
                 p.secondary_ipv4 = extract_json_value(objStr, "secondary_ipv4");
                 p.primary_ipv6 = extract_json_value(objStr, "primary_ipv6");
                 p.secondary_ipv6 = extract_json_value(objStr, "secondary_ipv6");
+                p.doh_template = extract_json_value(objStr, "doh_template");
                 p.is_builtin = (extract_json_value(objStr, "is_builtin") == "true");
                 p.is_dhcp = (extract_json_value(objStr, "is_dhcp") == "true");
                 loadedProfiles.push_back(p);

@@ -586,7 +586,8 @@ std::optional<NetworkAdapterInfo> DnsManager::get_primary_adapter() {
 
 bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter, 
                                 const std::wstring& primary_dns, 
-                                const std::wstring& secondary_dns) {
+                                const std::wstring& secondary_dns,
+                                const std::wstring& doh_template) {
     if (primary_dns.empty()) {
         set_last_error(L"Адрес основного DNS не может быть пустым.");
         return false;
@@ -696,6 +697,21 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
                 reinterpret_cast<const BYTE*>(servers.c_str()),
                 static_cast<DWORD>((servers.length() + 1) * sizeof(wchar_t)));
             RegCloseKey(hKey);
+        }
+    }
+
+    // 4. DNS over HTTPS (DoH) encryption via Windows netsh
+    if (!doh_template.empty()) {
+        std::wstring cmd_doh1 = netsh_path + L" dns add encryption server=" + primary_dns + 
+            L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=yes";
+        log_info(L"Configuring DoH for primary DNS: " + cmd_doh1);
+        execute_hidden_process(cmd_doh1);
+
+        if (!secondary_dns.empty()) {
+            std::wstring cmd_doh2 = netsh_path + L" dns add encryption server=" + secondary_dns + 
+                L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=yes";
+            log_info(L"Configuring DoH for secondary DNS: " + cmd_doh2);
+            execute_hidden_process(cmd_doh2);
         }
     }
 

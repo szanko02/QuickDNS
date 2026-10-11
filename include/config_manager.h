@@ -17,6 +17,7 @@ struct DnsProfile {
     std::string secondary_ipv4;
     std::string primary_ipv6;
     std::string secondary_ipv6;
+    std::string doh_template;
     bool is_builtin = false;
     bool is_dhcp = false;
 

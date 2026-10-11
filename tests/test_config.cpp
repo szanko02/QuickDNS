@@ -21,18 +21,21 @@ int main() {
         // Verify presets exist
         auto comss = cfg.get_profile_by_id("comss");
         assert(comss.has_value());
-        assert(comss->primary_ipv4 == "92.223.109.31");
-        std::cout << "[PASS] Comss preset verified: " << comss->primary_ipv4 << std::endl;
+        assert(comss->primary_ipv4 == "83.220.169.155");
+        assert(comss->doh_template == "https://dns.comss.one/dns-query");
+        std::cout << "[PASS] Comss preset verified: " << comss->primary_ipv4 << " (DoH: " << comss->doh_template << ")" << std::endl;
 
         auto geohide = cfg.get_profile_by_id("geohide");
         assert(geohide.has_value());
-        assert(geohide->primary_ipv4 == "193.187.91.189");
-        std::cout << "[PASS] GeoHide preset verified: " << geohide->primary_ipv4 << std::endl;
+        assert(geohide->primary_ipv4 == "193.233.112.67");
+        assert(geohide->doh_template == "https://dns.geohide.ru/dns-query");
+        std::cout << "[PASS] GeoHide preset verified: " << geohide->primary_ipv4 << " (DoH: " << geohide->doh_template << ")" << std::endl;
 
         auto bezmezhau = cfg.get_profile_by_id("bezmezhau");
         assert(bezmezhau.has_value());
-        assert(bezmezhau->primary_ipv4 == "185.162.9.228");
-        std::cout << "[PASS] Bezmezhau preset verified: " << bezmezhau->primary_ipv4 << std::endl;
+        assert(bezmezhau->primary_ipv4 == "143.20.64.55");
+        assert(bezmezhau->doh_template == "https://dns.bezmezhau.com/dns-query");
+        std::cout << "[PASS] Bezmezhau preset verified: " << bezmezhau->primary_ipv4 << " (DoH: " << bezmezhau->doh_template << ")" << std::endl;
 
         auto dhcp = cfg.get_profile_by_id("dhcp");
         assert(dhcp.has_value());

@@ -9,7 +9,7 @@ using QuickDns::Encoding::wide_to_utf8;
 namespace {
     constexpr const wchar_t* DIALOG_CLASS_NAME = L"QuickDNS_AddProfileDialogClass";
     constexpr int DIALOG_WIDTH = 440;
-    constexpr int DIALOG_HEIGHT = 380;
+    constexpr int DIALOG_HEIGHT = 460;
 
     constexpr COLORREF COLOR_BG_DARK = RGB(32, 32, 32);
     constexpr COLORREF COLOR_TEXT_LIGHT = RGB(240, 240, 240);
@@ -19,8 +19,9 @@ namespace {
     constexpr int ID_EDIT_PRI  = 3002;
     constexpr int ID_EDIT_SEC  = 3003;
     constexpr int ID_EDIT_DESC = 3004;
-    constexpr int ID_BTN_SAVE  = 3005;
-    constexpr int ID_BTN_CANCEL= 3006;
+    constexpr int ID_EDIT_DOH  = 3005;
+    constexpr int ID_BTN_SAVE  = 3006;
+    constexpr int ID_BTN_CANCEL= 3007;
 }
 
 std::optional<DnsProfile> AddProfileDialog::show(HWND hParent, HINSTANCE hInstance) {
@@ -189,9 +190,24 @@ void AddProfileDialog::create_controls() {
         marginX, curY, contentWidth, 24,
         m_hWnd, (HMENU)ID_EDIT_DESC, m_hInstance, nullptr);
     SendMessageW(m_hEditDesc, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+    curY += 32;
+
+    // 5. DNS over HTTPS (DoH) URL
+    HWND hLblDoh = CreateWindowExW(0, L"STATIC", L"DNS over HTTPS (DoH) URL (необязательно):",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        marginX, curY, contentWidth, 18,
+        m_hWnd, nullptr, m_hInstance, nullptr);
+    SendMessageW(hLblDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+    curY += 20;
+
+    m_hEditDoh = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        marginX, curY, contentWidth, 24,
+        m_hWnd, (HMENU)ID_EDIT_DOH, m_hInstance, nullptr);
+    SendMessageW(m_hEditDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     curY += 40;
 
-    // 5. Action Buttons
+    // 6. Action Buttons
     int btnWidth = (contentWidth - 12) / 2;
     m_hBtnSave = CreateWindowExW(0, L"BUTTON", L"💾 Сохранить",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
@@ -211,16 +227,19 @@ void AddProfileDialog::on_save() {
     wchar_t priBuf[128] = {};
     wchar_t secBuf[128] = {};
     wchar_t descBuf[256] = {};
+    wchar_t dohBuf[512] = {};
 
     GetWindowTextW(m_hEditName, nameBuf, _countof(nameBuf));
     GetWindowTextW(m_hEditPri, priBuf, _countof(priBuf));
     GetWindowTextW(m_hEditSec, secBuf, _countof(secBuf));
     GetWindowTextW(m_hEditDesc, descBuf, _countof(descBuf));
+    GetWindowTextW(m_hEditDoh, dohBuf, _countof(dohBuf));
 
     std::wstring nameStr = nameBuf;
     std::wstring priStr = priBuf;
     std::wstring secStr = secBuf;
     std::wstring descStr = descBuf;
+    std::wstring dohStr = dohBuf;
 
     // Trim whitespace
     auto trim = [](std::wstring& s) {
@@ -231,6 +250,7 @@ void AddProfileDialog::on_save() {
     trim(priStr);
     trim(secStr);
     trim(descStr);
+    trim(dohStr);
 
     if (nameStr.empty()) {
         MessageBoxW(m_hWnd, L"Пожалуйста, введите название профиля.", L"Ошибка ввода", MB_OK | MB_ICONWARNING);
@@ -255,6 +275,7 @@ void AddProfileDialog::on_save() {
     profile.name = wide_to_utf8(nameStr);
     profile.primary_ipv4 = wide_to_utf8(priStr);
     profile.secondary_ipv4 = wide_to_utf8(secStr);
+    profile.doh_template = wide_to_utf8(dohStr);
     profile.description = descStr.empty() ? ("Пользовательский DNS: " + profile.primary_ipv4) : wide_to_utf8(descStr);
     profile.is_builtin = false;
     profile.is_dhcp = false;

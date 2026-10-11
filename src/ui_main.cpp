@@ -543,7 +543,12 @@ void MainWindow::on_profile_selected() {
             std::wstring pri = utf8_to_wide(p.primary_ipv4);
             std::wstring sec = utf8_to_wide(p.secondary_ipv4);
             std::wstring desc = utf8_to_wide(p.description);
-            details = L"IP: " + pri + (sec.empty() ? L"" : L", " + sec) + L"\n" + desc;
+            std::wstring doh = utf8_to_wide(p.doh_template);
+            details = L"IP: " + pri + (sec.empty() ? L"" : L", " + sec);
+            if (!doh.empty()) {
+                details += L"\nDoH: " + doh;
+            }
+            details += L"\n" + desc;
         }
         SetWindowTextW(m_hProfileDetails, details.c_str());
 
@@ -577,7 +582,8 @@ void MainWindow::apply_selected_dns() {
         } else {
             std::wstring pri = utf8_to_wide(profile.primary_ipv4);
             std::wstring sec = utf8_to_wide(profile.secondary_ipv4);
-            success = m_dnsManager->set_static_dns(adapter, pri, sec);
+            std::wstring doh = utf8_to_wide(profile.doh_template);
+            success = m_dnsManager->set_static_dns(adapter, pri, sec, doh);
             if (!success) errorDetail = m_dnsManager->get_last_error();
         }
 
