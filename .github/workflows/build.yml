@@ -1,0 +1,36 @@
+name: Build QuickDNS
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Configure CMake
+      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build Application & Tests
+      run: cmake --build build --config Release
+
+    - name: Run Unit Tests
+      working-directory: build
+      run: ctest -C Release --output-on-failure
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: QuickDNS-Release-x64
+        path: |
+          build/Release/QuickDNS.exe
+          build/Release/test_dns.exe
+          build/Release/test_config.exe
