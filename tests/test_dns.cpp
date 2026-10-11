@@ -6,6 +6,9 @@
 #include <vector>
 #include <io.h>
 #include <fcntl.h>
+#include <windns.h>
+
+#pragma comment(lib, "dnsapi.lib")
 
 namespace {
 
@@ -83,6 +86,7 @@ void print_adapter(size_t index, const quickdns::NetworkAdapterInfo& adapter, bo
     std::wcout << L"[" << index << L"] " << adapter.name 
                << (is_primary ? L"  *** (PRIMARY ACTIVE ADAPTER) ***" : L"") << L"\n";
     std::wcout << L"    ID (GUID):    " << adapter.id << L"\n";
+    std::wcout << L"    Index (IfIdx):" << adapter.if_index << L"\n";
     std::wcout << L"    Description:  " << adapter.description << L"\n";
     std::wcout << L"    Status:       " << (adapter.is_connected ? L"CONNECTED (Up)" : L"DISCONNECTED (Down)") << L"\n";
     std::wcout << L"    DNS Mode:     " << (adapter.is_dhcp_dns ? L"DHCP (Dynamic)" : L"Static (Manual)") << L"\n";
@@ -125,6 +129,9 @@ int main() {
 
     quickdns::DnsManager dns_mgr;
 
+    std::wcout << L"Process Elevation (Administrator): " 
+               << (quickdns::DnsManager::is_elevated() ? L"YES (Elevated)" : L"NO (Standard User)") << L"\n\n";
+
     // Test 1: IP Validation
     test_ip_validation();
 
@@ -154,6 +161,7 @@ int main() {
         std::wcout << L"Primary adapter successfully detected:\n";
         std::wcout << L"  Name:        " << primary_opt->name << L"\n";
         std::wcout << L"  Description: " << primary_opt->description << L"\n";
+        std::wcout << L"  Index:       " << primary_opt->if_index << L"\n";
         std::wcout << L"  GUID:        " << primary_opt->id << L"\n";
         std::wcout << L"  Connected:   " << (primary_opt->is_connected ? L"Yes" : L"No") << L"\n";
         std::wcout << L"  DNS Mode:    " << (primary_opt->is_dhcp_dns ? L"DHCP" : L"Static") << L"\n";
@@ -171,13 +179,38 @@ int main() {
     }
     std::wcout << L"\n";
 
-    // Test 4: Flush DNS Resolver Cache
+    // Test 4: Flush DNS Resolver Cache with Verification
     print_double_separator();
-    std::wcout << L"[TEST SUITE 4] Windows DNS Resolver Cache Flush\n";
+    std::wcout << L"[TEST SUITE 4] Windows DNS Resolver Cache Flush Verification\n";
     print_separator();
 
+    // Populate DNS cache with a resolution query
+    PDNS_RECORD pDnsRecord = nullptr;
+    DNS_STATUS dnsStatus = DnsQuery_W(L"example.com", DNS_TYPE_A, DNS_QUERY_STANDARD, nullptr, &pDnsRecord, nullptr);
+    if (dnsStatus == ERROR_SUCCESS && pDnsRecord) {
+        std::wcout << L"1. Queried example.com (cached in Windows DNS resolver): SUCCESS\n";
+        DnsRecordListFree(pDnsRecord, DnsFreeRecordList);
+    } else {
+        std::wcout << L"1. Queried example.com: status code " << dnsStatus << L"\n";
+    }
+
+    // Flush cache
     bool flush_ok = dns_mgr.flush_dns_cache();
-    std::wcout << L"flush_dns_cache() result: " << (flush_ok ? L"SUCCESS" : L"FAILED") << L"\n\n";
+    std::wcout << L"2. Invoked flush_dns_cache() (DnsFlushResolverCache + ipconfig /flushdns): " 
+               << (flush_ok ? L"SUCCESS" : L"FAILED") << L"\n";
+
+    // Verify cache-only query
+    PDNS_RECORD pCachedRecord = nullptr;
+    DNS_STATUS cacheQueryStatus = DnsQuery_W(L"example.com", DNS_TYPE_A, DNS_QUERY_NO_WIRE_QUERY | DNS_QUERY_CACHE_ONLY, nullptr, &pCachedRecord, nullptr);
+    if (cacheQueryStatus != ERROR_SUCCESS) {
+        std::wcout << L"3. Verified DNS Cache-Only query: RECORD CLEARED (STATUS_NOT_FOUND) - FLUSHDNS VERIFIED!\n";
+    } else {
+        std::wcout << L"3. Cache-only query status: " << cacheQueryStatus << L"\n";
+        if (pCachedRecord) {
+            DnsRecordListFree(pCachedRecord, DnsFreeRecordList);
+        }
+    }
+    std::wcout << L"\n";
 
     print_double_separator();
     std::wcout << L"All diagnostic tests completed.\n";

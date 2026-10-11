@@ -10,12 +10,34 @@
 #pragma comment(lib, "dnsapi.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 // Dynamic function pointer signatures for Windows 10 1809+ / Windows 11 DNS settings API
 #ifndef DNS_INTERFACE_SETTINGS_VERSION1
 #define DNS_INTERFACE_SETTINGS_VERSION1 1
-#define DNS_SETTING_NAMESERVER 0x0001
+#endif
 
+#ifndef DNS_SETTING_IPV6
+#define DNS_SETTING_IPV6                 0x0001
+#endif
+#ifndef DNS_SETTING_NAMESERVER
+#define DNS_SETTING_NAMESERVER           0x0002
+#endif
+#ifndef DNS_SETTING_SEARCHLIST
+#define DNS_SETTING_SEARCHLIST           0x0004
+#endif
+#ifndef DNS_SETTING_REGISTRATION_ENABLED
+#define DNS_SETTING_REGISTRATION_ENABLED 0x0008
+#endif
+#ifndef DNS_SETTING_DOMAIN
+#define DNS_SETTING_DOMAIN               0x0020
+#endif
+#ifndef DNS_SETTING_PROFILE_NAMESERVER
+#define DNS_SETTING_PROFILE_NAMESERVER   0x0200
+#endif
+
+#ifndef _DNS_INTERFACE_SETTINGS_DEFINED
+#define _DNS_INTERFACE_SETTINGS_DEFINED
 typedef struct _DNS_INTERFACE_SETTINGS {
     ULONG Version;
     ULONG64 Flags;
@@ -26,7 +48,7 @@ typedef struct _DNS_INTERFACE_SETTINGS {
     ULONG RegisterAdapterName;
     ULONG EnableLLMNR;
     ULONG QueryAdapterName;
-    ULONG ProfileNameServer;
+    PWSTR ProfileNameServer;
 } DNS_INTERFACE_SETTINGS;
 #endif
 
@@ -60,6 +82,28 @@ struct PrioritizedAdapter {
     bool is_virtual{false};
 };
 
+std::vector<std::wstring> split_string_by_delimiters(const std::wstring& str, const std::wstring& delims) {
+    std::vector<std::wstring> tokens;
+    size_t start = 0;
+    while (start < str.size()) {
+        size_t end = str.find_first_of(delims, start);
+        if (end == std::wstring::npos) {
+            end = str.size();
+        }
+        if (end > start) {
+            std::wstring token = str.substr(start, end - start);
+            // Trim whitespace
+            size_t first = token.find_first_not_of(L" \t\r\n");
+            size_t last = token.find_last_not_of(L" \t\r\n");
+            if (first != std::wstring::npos && last != std::wstring::npos) {
+                tokens.push_back(token.substr(first, last - first + 1));
+            }
+        }
+        start = end + 1;
+    }
+    return tokens;
+}
+
 } // anonymous namespace
 
 namespace quickdns {
@@ -85,6 +129,18 @@ void DnsManager::set_last_error(const std::wstring& msg) const {
 
 std::wstring DnsManager::get_last_error() const {
     return last_error_;
+}
+
+bool DnsManager::is_elevated() {
+    BOOL isAdmin = FALSE;
+    PSID adminGroup = nullptr;
+    SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+    if (AllocateAndInitializeSid(&ntAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                                 DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGroup)) {
+        CheckTokenMembership(nullptr, adminGroup, &isAdmin);
+        FreeSid(adminGroup);
+    }
+    return isAdmin != FALSE;
 }
 
 std::wstring DnsManager::format_win32_error(DWORD error_code) {
@@ -215,25 +271,29 @@ bool DnsManager::execute_hidden_process(const std::wstring& command) {
 
 bool DnsManager::query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_str) {
     // Attempt 1: Modern Windows 10/11 GetInterfaceDnsSettings API
-    HMODULE hIpHlp = GetModuleHandleW(L"iphlpapi.dll");
-    if (!hIpHlp) {
-        hIpHlp = LoadLibraryW(L"iphlpapi.dll");
-    }
-
+    HMODULE hIpHlp = LoadLibraryW(L"iphlpapi.dll");
     if (hIpHlp) {
         auto pfnGet = reinterpret_cast<PFN_GetInterfaceDnsSettings>(
             GetProcAddress(hIpHlp, "GetInterfaceDnsSettings"));
         auto pfnFree = reinterpret_cast<PFN_FreeInterfaceDnsSettings>(
             GetProcAddress(hIpHlp, "FreeInterfaceDnsSettings"));
 
-        if (pfnGet) {
+        if (pfnGet && guid != GUID_NULL) {
             DNS_INTERFACE_SETTINGS settings = {};
             settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
             DWORD err = pfnGet(guid, &settings);
             if (err == ERROR_SUCCESS) {
                 bool has_static_nameserver = false;
-                if ((settings.Flags & DNS_SETTING_NAMESERVER) && settings.NameServer) {
+                if (settings.NameServer && settings.NameServer[0] != L'\0') {
                     for (const wchar_t* p = settings.NameServer; *p; ++p) {
+                        if (!iswspace(*p)) {
+                            has_static_nameserver = true;
+                            break;
+                        }
+                    }
+                }
+                if (settings.ProfileNameServer && settings.ProfileNameServer[0] != L'\0') {
+                    for (const wchar_t* p = settings.ProfileNameServer; *p; ++p) {
                         if (!iswspace(*p)) {
                             has_static_nameserver = true;
                             break;
@@ -243,9 +303,13 @@ bool DnsManager::query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_st
                 if (pfnFree) {
                     pfnFree(&settings);
                 }
-                return !has_static_nameserver;
+                FreeLibrary(hIpHlp);
+                if (has_static_nameserver) {
+                    return false; // Static DNS configured
+                }
             }
         }
+        FreeLibrary(hIpHlp);
     }
 
     // Attempt 2: Direct Registry Query fallback
@@ -353,6 +417,7 @@ std::vector<NetworkAdapterInfo> DnsManager::get_network_adapters() {
         }
         item.info.id = adapter_id;
         item.info.luid = pCurr->Luid;
+        item.info.if_index = pCurr->IfIndex;
 
         // Resolve GUID from LUID or AdapterName
         GUID guid = GUID_NULL;
@@ -370,7 +435,7 @@ std::vector<NetworkAdapterInfo> DnsManager::get_network_adapters() {
         item.info.description = pCurr->Description ? pCurr->Description : L"";
         item.info.is_connected = (pCurr->OperStatus == IfOperStatusUp);
 
-        // Extract DNS servers
+        // Extract DNS servers from GetAdaptersAddresses
         for (PIP_ADAPTER_DNS_SERVER_ADDRESS pDns = pCurr->FirstDnsServerAddress; pDns != nullptr; pDns = pDns->Next) {
             if (!pDns->Address.lpSockaddr) continue;
 
@@ -399,6 +464,26 @@ std::vector<NetworkAdapterInfo> DnsManager::get_network_adapters() {
 
         // Determine DHCP vs Static DNS configuration
         item.info.is_dhcp_dns = query_is_dhcp_dns(item.info.guid, item.info.id);
+
+        // If static DNS is detected but dns_ipv4 list is empty, query registry / GetInterfaceDnsSettings to populate it
+        if (!item.info.is_dhcp_dns && item.info.dns_ipv4.empty()) {
+            std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + item.info.id;
+            HKEY hKey = nullptr;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+                wchar_t nameServer[512] = {0};
+                DWORD dataSize = sizeof(nameServer);
+                DWORD type = 0;
+                if (RegQueryValueExW(hKey, L"NameServer", nullptr, &type, reinterpret_cast<LPBYTE>(nameServer), &dataSize) == ERROR_SUCCESS) {
+                    auto tokens = split_string_by_delimiters(nameServer, L", ");
+                    for (const auto& token : tokens) {
+                        if (is_valid_ipv4(token)) {
+                            item.info.dns_ipv4.push_back(token);
+                        }
+                    }
+                }
+                RegCloseKey(hKey);
+            }
+        }
 
         adapter_candidates.push_back(std::move(item));
     }
@@ -503,75 +588,120 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
                                 const std::wstring& primary_dns, 
                                 const std::wstring& secondary_dns) {
     if (primary_dns.empty()) {
-        set_last_error(L"Primary DNS address cannot be empty.");
+        set_last_error(L"Адрес основного DNS не может быть пустым.");
         return false;
     }
 
     if (!is_valid_ip(primary_dns)) {
-        set_last_error(L"Invalid primary DNS address: " + primary_dns);
+        set_last_error(L"Некорректный IP-адрес основного DNS: " + primary_dns);
         return false;
     }
 
     if (!secondary_dns.empty() && !is_valid_ip(secondary_dns)) {
-        set_last_error(L"Invalid secondary DNS address: " + secondary_dns);
+        set_last_error(L"Некорректный IP-адрес дополнительного DNS: " + secondary_dns);
         return false;
+    }
+
+    if (!is_elevated()) {
+        set_last_error(L"Для изменения параметров DNS требуются права Администратора.");
+        return false;
+    }
+
+    std::wstring servers = primary_dns;
+    if (!secondary_dns.empty()) {
+        servers += L"," + secondary_dns;
     }
 
     bool modern_api_ok = false;
 
-    // 1. Try modern SetInterfaceDnsSettings API (Windows 10 1809+ / Windows 11)
+    // 1. Modern SetInterfaceDnsSettings API (Windows 10 1809+ / Windows 11)
     HMODULE hIpHlp = LoadLibraryW(L"iphlpapi.dll");
     if (hIpHlp) {
         auto pfnSet = reinterpret_cast<PFN_SetInterfaceDnsSettings>(
             GetProcAddress(hIpHlp, "SetInterfaceDnsSettings"));
 
         if (pfnSet && adapter.guid != GUID_NULL) {
-            std::wstring servers = primary_dns;
-            if (!secondary_dns.empty()) {
-                servers += L"," + secondary_dns;
-            }
-
             DNS_INTERFACE_SETTINGS settings = {};
             settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
-            settings.Flags = DNS_SETTING_NAMESERVER;
+            settings.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
             settings.NameServer = const_cast<PWSTR>(servers.c_str());
+            settings.ProfileNameServer = const_cast<PWSTR>(servers.c_str());
 
             DWORD status = pfnSet(adapter.guid, &settings);
             if (status == ERROR_SUCCESS) {
                 modern_api_ok = true;
-                log_info(L"Successfully applied static DNS via SetInterfaceDnsSettings on " + adapter.name);
+                log_info(L"SetInterfaceDnsSettings succeeded on adapter: " + adapter.name);
             } else {
-                log_info(L"SetInterfaceDnsSettings returned error: " + format_win32_error(status) + L", falling back to netsh.");
+                log_info(L"SetInterfaceDnsSettings returned code: " + std::to_wstring(status) + L" (" + format_win32_error(status) + L")");
             }
         }
         FreeLibrary(hIpHlp);
     }
 
-    // 2. Fallback to netsh if modern API is unavailable or failed
-    if (!modern_api_ok) {
-        std::wstring ip_family = is_valid_ipv4(primary_dns) ? L"ipv4" : L"ipv6";
+    // 2. Comprehensive netsh application
+    // Applying netsh guarantees immediate synchronization with the kernel TCP/IP stack,
+    // Network Connections Control Panel, and legacy network management APIs.
+    bool netsh_ok = false;
+    std::wstring netsh_path = L"C:\\Windows\\System32\\netsh.exe";
+    std::wstring ip_family = is_valid_ipv4(primary_dns) ? L"ipv4" : L"ipv6";
 
-        std::wstring cmd_primary = L"netsh.exe interface " + ip_family + 
+    // Attempt netsh by numeric if_index (bulletproof against localized/Cyrillic adapter names)
+    if (adapter.if_index > 0) {
+        std::wstring cmd_pri = netsh_path + L" interface " + ip_family + 
+            L" set dnsservers name=" + std::to_wstring(adapter.if_index) + 
+            L" source=static address=" + primary_dns + 
+            L" register=none validate=no";
+
+        log_info(L"Executing netsh by index: " + cmd_pri);
+        if (execute_hidden_process(cmd_pri)) {
+            netsh_ok = true;
+            if (!secondary_dns.empty()) {
+                std::wstring sec_family = is_valid_ipv4(secondary_dns) ? L"ipv4" : L"ipv6";
+                std::wstring cmd_sec = netsh_path + L" interface " + sec_family + 
+                    L" add dnsservers name=" + std::to_wstring(adapter.if_index) + 
+                    L" address=" + secondary_dns + 
+                    L" index=2 validate=no";
+                execute_hidden_process(cmd_sec);
+            }
+        }
+    }
+
+    // Fallback to adapter friendly name if numeric index did not succeed
+    if (!netsh_ok && !adapter.name.empty()) {
+        std::wstring cmd_pri = netsh_path + L" interface " + ip_family + 
             L" set dnsservers name=\"" + adapter.name + 
             L"\" source=static address=" + primary_dns + 
             L" register=none validate=no";
 
-        log_info(L"Executing fallback: " + cmd_primary);
-        if (!execute_hidden_process(cmd_primary)) {
-            set_last_error(L"Netsh failed to set primary DNS on adapter: " + adapter.name);
-            return false;
+        log_info(L"Executing netsh by name: " + cmd_pri);
+        if (execute_hidden_process(cmd_pri)) {
+            netsh_ok = true;
+            if (!secondary_dns.empty()) {
+                std::wstring sec_family = is_valid_ipv4(secondary_dns) ? L"ipv4" : L"ipv6";
+                std::wstring cmd_sec = netsh_path + L" interface " + sec_family + 
+                    L" add dnsservers name=\"" + adapter.name + 
+                    L"\" address=" + secondary_dns + 
+                    L" index=2 validate=no";
+                execute_hidden_process(cmd_sec);
+            }
         }
+    }
 
-        if (!secondary_dns.empty()) {
-            std::wstring sec_family = is_valid_ipv4(secondary_dns) ? L"ipv4" : L"ipv6";
-            std::wstring cmd_secondary = L"netsh.exe interface " + sec_family + 
-                L" add dnsservers name=\"" + adapter.name + 
-                L"\" address=" + secondary_dns + 
-                L" index=2 validate=no";
-
-            log_info(L"Executing fallback: " + cmd_secondary);
-            execute_hidden_process(cmd_secondary);
+    // 3. Direct Registry synchronization as an additional reliability layer
+    if (!adapter.id.empty()) {
+        std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + adapter.id;
+        HKEY hKey = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+            RegSetValueExW(hKey, L"NameServer", 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(servers.c_str()),
+                static_cast<DWORD>((servers.length() + 1) * sizeof(wchar_t)));
+            RegCloseKey(hKey);
         }
+    }
+
+    if (!modern_api_ok && !netsh_ok) {
+        set_last_error(L"Не удалось применить DNS ни через Windows API, ни через netsh. Проверьте права Администратора.");
+        return false;
     }
 
     // Flush DNS resolver cache
@@ -580,6 +710,11 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
 }
 
 bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
+    if (!is_elevated()) {
+        set_last_error(L"Для сброса параметров DNS требуются права Администратора.");
+        return false;
+    }
+
     bool modern_api_ok = false;
 
     // 1. Try modern SetInterfaceDnsSettings API
@@ -591,33 +726,62 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
         if (pfnSet && adapter.guid != GUID_NULL) {
             DNS_INTERFACE_SETTINGS settings = {};
             settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
-            settings.Flags = DNS_SETTING_NAMESERVER;
-            settings.NameServer = nullptr; // Setting NameServer to null clears static DNS and restores DHCP
+            settings.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
+            settings.NameServer = const_cast<PWSTR>(L"");
+            settings.ProfileNameServer = const_cast<PWSTR>(L"");
 
             DWORD status = pfnSet(adapter.guid, &settings);
             if (status == ERROR_SUCCESS) {
                 modern_api_ok = true;
                 log_info(L"Successfully reset DNS to DHCP via SetInterfaceDnsSettings on " + adapter.name);
             } else {
-                log_info(L"SetInterfaceDnsSettings reset returned: " + format_win32_error(status) + L", falling back to netsh.");
+                log_info(L"SetInterfaceDnsSettings reset returned: " + format_win32_error(status));
             }
         }
         FreeLibrary(hIpHlp);
     }
 
-    // 2. Fallback to netsh
-    if (!modern_api_ok) {
-        std::wstring cmd_ipv4 = L"netsh.exe interface ipv4 set dnsservers name=\"" + adapter.name + L"\" source=dhcp";
-        log_info(L"Executing fallback: " + cmd_ipv4);
-        bool ok4 = execute_hidden_process(cmd_ipv4);
+    // 2. Netsh reset
+    bool netsh_ok = false;
+    std::wstring netsh_path = L"C:\\Windows\\System32\\netsh.exe";
 
-        std::wstring cmd_ipv6 = L"netsh.exe interface ipv6 set dnsservers name=\"" + adapter.name + L"\" source=dhcp";
-        execute_hidden_process(cmd_ipv6);
-
-        if (!ok4) {
-            set_last_error(L"Netsh failed to reset DNS to DHCP on adapter: " + adapter.name);
-            return false;
+    if (adapter.if_index > 0) {
+        std::wstring cmd_ipv4 = netsh_path + L" interface ipv4 set dnsservers name=" + 
+            std::to_wstring(adapter.if_index) + L" source=dhcp";
+        if (execute_hidden_process(cmd_ipv4)) {
+            netsh_ok = true;
         }
+        std::wstring cmd_ipv6 = netsh_path + L" interface ipv6 set dnsservers name=" + 
+            std::to_wstring(adapter.if_index) + L" source=dhcp";
+        execute_hidden_process(cmd_ipv6);
+    }
+
+    if (!netsh_ok && !adapter.name.empty()) {
+        std::wstring cmd_ipv4 = netsh_path + L" interface ipv4 set dnsservers name=\"" + 
+            adapter.name + L"\" source=dhcp";
+        if (execute_hidden_process(cmd_ipv4)) {
+            netsh_ok = true;
+        }
+        std::wstring cmd_ipv6 = netsh_path + L" interface ipv6 set dnsservers name=\"" + 
+            adapter.name + L"\" source=dhcp";
+        execute_hidden_process(cmd_ipv6);
+    }
+
+    // 3. Clear Registry static NameServer entry
+    if (!adapter.id.empty()) {
+        std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + adapter.id;
+        HKEY hKey = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+            const wchar_t emptyStr = L'\0';
+            RegSetValueExW(hKey, L"NameServer", 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(&emptyStr), sizeof(wchar_t));
+            RegCloseKey(hKey);
+        }
+    }
+
+    if (!modern_api_ok && !netsh_ok) {
+        set_last_error(L"Не удалось переключить адаптер на DHCP. Проверьте права Администратора.");
+        return false;
     }
 
     // Flush DNS resolver cache
@@ -626,29 +790,29 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
 }
 
 bool DnsManager::flush_dns_cache() {
-    bool flushed = false;
+    bool flushed_api = false;
 
-    // 1. Invoke DnsFlushResolverCache from dnsapi.dll
+    // 1. Direct in-process call to DnsFlushResolverCache in dnsapi.dll
     HMODULE hDnsApi = LoadLibraryW(L"dnsapi.dll");
     if (hDnsApi) {
         auto pfnFlush = reinterpret_cast<PFN_DnsFlushResolverCache>(
             GetProcAddress(hDnsApi, "DnsFlushResolverCache"));
         if (pfnFlush) {
-            flushed = (pfnFlush() != FALSE);
-            if (flushed) {
+            flushed_api = (pfnFlush() != FALSE);
+            if (flushed_api) {
                 log_info(L"DNS resolver cache successfully flushed via dnsapi.dll::DnsFlushResolverCache.");
             }
         }
         FreeLibrary(hDnsApi);
     }
 
-    // 2. Fallback to ipconfig /flushdns if in-process call failed
-    if (!flushed) {
-        log_info(L"DnsFlushResolverCache unavailable or returned false; invoking ipconfig /flushdns.");
-        flushed = execute_hidden_process(L"ipconfig.exe /flushdns");
+    // 2. Also invoke ipconfig.exe /flushdns to clear system-wide DNS client cache
+    bool flushed_ipconfig = execute_hidden_process(L"C:\\Windows\\System32\\ipconfig.exe /flushdns");
+    if (flushed_ipconfig) {
+        log_info(L"ipconfig.exe /flushdns completed successfully.");
     }
 
-    return flushed;
+    return flushed_api || flushed_ipconfig;
 }
 
 } // namespace quickdns

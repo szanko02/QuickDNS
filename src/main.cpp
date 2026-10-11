@@ -1,7 +1,9 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <objbase.h>
+#include <shellapi.h>
 #include "ui_main.h"
+#include "dns_manager.h"
 
 int WINAPI wWinMain(
     _In_ HINSTANCE hInstance,
@@ -10,6 +12,30 @@ int WINAPI wWinMain(
     _In_ int nCmdShow)
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
+
+    // Determine initial show state
+    int showCmd = nCmdShow;
+    if (lpCmdLine != nullptr && wcsstr(lpCmdLine, L"--minimized") != nullptr) {
+        showCmd = SW_HIDE;
+    }
+
+    // Ensure the application runs with elevated Administrator privileges.
+    // Changing Windows network adapter IP/DNS settings requires elevation.
+    if (!quickdns::DnsManager::is_elevated()) {
+        wchar_t szExePath[MAX_PATH];
+        if (GetModuleFileNameW(nullptr, szExePath, MAX_PATH)) {
+            SHELLEXECUTEINFOW sei = {};
+            sei.cbSize = sizeof(sei);
+            sei.lpVerb = L"runas";
+            sei.lpFile = szExePath;
+            sei.lpParameters = lpCmdLine;
+            sei.hwnd = nullptr;
+            sei.nShow = showCmd;
+            if (ShellExecuteExW(&sei)) {
+                return 0; // Elevated instance launched successfully; exit this process.
+            }
+        }
+    }
 
     // Initialize COM library for shell / network APIs
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -22,12 +48,6 @@ int WINAPI wWinMain(
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icex);
-
-    // Determine initial show state
-    int showCmd = nCmdShow;
-    if (lpCmdLine != nullptr && wcsstr(lpCmdLine, L"--minimized") != nullptr) {
-        showCmd = SW_HIDE;
-    }
 
     // Run Application
     MainWindow app;

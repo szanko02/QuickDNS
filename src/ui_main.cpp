@@ -428,6 +428,11 @@ void MainWindow::show_tray_notification(const std::wstring& title, const std::ws
 }
 
 void MainWindow::refresh_network_adapters() {
+    std::wstring prevSelectedId;
+    if (m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
+        prevSelectedId = m_adapters[m_selectedAdapterIndex].id;
+    }
+
     m_adapters = m_dnsManager->get_network_adapters();
     ComboBox_ResetContent(m_hComboAdapter);
 
@@ -438,8 +443,17 @@ void MainWindow::refresh_network_adapters() {
         std::wstring itemText = m_adapters[i].name + L" (" + m_adapters[i].description + L")";
         ComboBox_AddString(m_hComboAdapter, itemText.c_str());
 
-        if (primaryAdapter.has_value() && m_adapters[i].id == primaryAdapter->id) {
+        if (!prevSelectedId.empty() && m_adapters[i].id == prevSelectedId) {
             m_selectedAdapterIndex = static_cast<int>(i);
+        }
+    }
+
+    if (m_selectedAdapterIndex == -1 && primaryAdapter.has_value()) {
+        for (size_t i = 0; i < m_adapters.size(); ++i) {
+            if (m_adapters[i].id == primaryAdapter->id) {
+                m_selectedAdapterIndex = static_cast<int>(i);
+                break;
+            }
         }
     }
 
@@ -555,15 +569,22 @@ void MainWindow::apply_selected_dns() {
 
     std::thread([this, adapter, profile]() {
         bool success = false;
+        std::wstring errorDetail;
+
         if (profile.is_dhcp) {
             success = m_dnsManager->reset_to_dhcp(adapter);
+            if (!success) errorDetail = m_dnsManager->get_last_error();
         } else {
             std::wstring pri = utf8_to_wide(profile.primary_ipv4);
             std::wstring sec = utf8_to_wide(profile.secondary_ipv4);
             success = m_dnsManager->set_static_dns(adapter, pri, sec);
+            if (!success) errorDetail = m_dnsManager->get_last_error();
         }
 
         m_dnsManager->flush_dns_cache();
+
+        // Brief delay to allow Windows kernel TCP/IP stack to commit adapter state
+        Sleep(250);
 
         if (success) {
             m_configManager->set_active_profile_id(profile.id);
@@ -572,10 +593,17 @@ void MainWindow::apply_selected_dns() {
             std::wstring pName = utf8_to_wide(profile.name);
             show_tray_notification(L"DNS успешно обновлен!", L"Установлен профиль: " + pName);
         } else {
-            show_tray_notification(L"Ошибка установки DNS", L"Не удалось применить настройки. Убедитесь в наличии прав Администратора.");
+            std::wstring msg = L"Не удалось применить настройки DNS.";
+            if (!errorDetail.empty()) {
+                msg += L"\n\nПричина: " + errorDetail;
+            } else {
+                msg += L"\n\nУбедитесь, что приложение запущено от имени Администратора.";
+            }
+            show_tray_notification(L"Ошибка установки DNS", msg);
+            MessageBoxW(m_hWnd, msg.c_str(), L"Ошибка смены DNS", MB_OK | MB_ICONWARNING);
         }
 
-        PostMessageW(m_hWnd, WM_APP_DNS_APPLIED, 0, 0);
+        PostMessageW(m_hWnd, WM_APP_DNS_APPLIED, success ? 1 : 0, 0);
     }).detach();
 }
 
@@ -592,17 +620,29 @@ void MainWindow::reset_to_dhcp() {
 
     std::thread([this, adapter]() {
         bool success = m_dnsManager->reset_to_dhcp(adapter);
+        std::wstring errorDetail;
+        if (!success) {
+            errorDetail = m_dnsManager->get_last_error();
+        }
+
         m_dnsManager->flush_dns_cache();
+
+        Sleep(250);
 
         if (success) {
             m_configManager->set_active_profile_id("dhcp");
             m_configManager->save_to_file();
             show_tray_notification(L"DNS сброшен", L"Установлено автоматическое получение DNS (DHCP).");
         } else {
-            show_tray_notification(L"Ошибка сброса DNS", L"Не удалось вернуть DHCP. Требуются права Администратора.");
+            std::wstring msg = L"Не удалось сбросить DNS на DHCP.";
+            if (!errorDetail.empty()) {
+                msg += L"\n\nПричина: " + errorDetail;
+            }
+            show_tray_notification(L"Ошибка сброса DNS", msg);
+            MessageBoxW(m_hWnd, msg.c_str(), L"Ошибка сброса DNS", MB_OK | MB_ICONWARNING);
         }
 
-        PostMessageW(m_hWnd, WM_APP_DNS_APPLIED, 0, 0);
+        PostMessageW(m_hWnd, WM_APP_DNS_APPLIED, success ? 1 : 0, 0);
     }).detach();
 }
 
@@ -610,8 +650,12 @@ void MainWindow::flush_dns_cache() {
     bool ok = m_dnsManager->flush_dns_cache();
     if (ok) {
         show_tray_notification(L"DNS-кэш очищен", L"Системный кэш сопоставителя DNS успешно сброшен.");
+        MessageBoxW(m_hWnd, 
+            L"Системный кэш сопоставителя DNS успешно очищен!\n\nВыполнен сброс через DnsFlushResolverCache и ipconfig /flushdns.", 
+            L"Очистка DNS-кэша", 
+            MB_OK | MB_ICONINFORMATION);
     } else {
-        show_tray_notification(L"DNS-кэш", L"Кэш очищен.");
+        show_tray_notification(L"DNS-кэш", L"Попытка сброса кэша завершена.");
     }
 }
 

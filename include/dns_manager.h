@@ -31,6 +31,7 @@ struct NetworkAdapterInfo {
     std::wstring id;                     // Adapter GUID/Interface Luid string or friendly ID
     NET_LUID luid{};                     // Network Interface LUID
     GUID guid{};                         // Adapter Interface GUID
+    DWORD if_index{0};                   // Numeric interface index (e.g. 7)
     std::wstring name;                   // Friendly name (e.g. L"Ethernet", L"Wi-Fi")
     std::wstring description;            // Hardware description (e.g. L"Intel(R) Wi-Fi 6 AX200")
     bool is_connected{false};            // Operational status (true if connected/up)
@@ -128,6 +129,11 @@ public:
      * @brief Parses a GUID string representation into a GUID structure.
      */
     static GUID string_to_guid(const std::wstring& str);
+
+    /**
+     * @brief Checks whether the current process has elevated Administrator privileges.
+     */
+    static bool is_elevated();
 
     /**
      * @brief Returns the last recorded error message or Win32 translation.
