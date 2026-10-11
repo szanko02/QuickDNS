@@ -18,23 +18,40 @@ include_directories(
 )
 
 # Common Windows System Libraries
-set(WIN32_LIBS
-    iphlpapi.lib
-    dnsapi.lib
-    ws2_32.lib
-    comctl32.lib
-    uxtheme.lib
-    dwmapi.lib
-    shell32.lib
-    user32.lib
-    gdi32.lib
-    advapi32.lib
-    ole32.lib
-)
+if(MSVC)
+    set(WIN32_LIBS
+        iphlpapi.lib
+        dnsapi.lib
+        ws2_32.lib
+        comctl32.lib
+        uxtheme.lib
+        dwmapi.lib
+        shell32.lib
+        user32.lib
+        gdi32.lib
+        advapi32.lib
+        ole32.lib
+    )
+else()
+    set(WIN32_LIBS
+        iphlpapi
+        dnsapi
+        ws2_32
+        comctl32
+        uxtheme
+        dwmapi
+        shell32
+        user32
+        gdi32
+        advapi32
+        ole32
+    )
+endif()
 
 # Static library for core logic (reusable in tests)
 add_library(quickdns_core STATIC
     src/dns_manager.cpp
+    src/dns_benchmark.cpp
     src/config_manager.cpp
 )
 target_link_libraries(quickdns_core PUBLIC ${WIN32_LIBS})
@@ -44,6 +61,7 @@ set(APP_SOURCES
     src/main.cpp
     src/ui_main.cpp
     src/dialog_add_profile.cpp
+    src/dialog_benchmark.cpp
     res/resource.rc
 )
 
@@ -66,4 +84,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_config.cpp")
     add_executable(test_config tests/test_config.cpp ${DIAG_RC})
     target_link_libraries(test_config PRIVATE quickdns_core ${WIN32_LIBS})
     add_test(NAME TestConfig COMMAND test_config)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_benchmark.cpp")
+    add_executable(test_benchmark tests/test_benchmark.cpp ${DIAG_RC})
+    target_link_libraries(test_benchmark PRIVATE quickdns_core ${WIN32_LIBS})
+    add_test(NAME TestBenchmark COMMAND test_benchmark)
 endif()

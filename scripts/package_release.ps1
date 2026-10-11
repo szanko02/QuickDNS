@@ -1,8 +1,9 @@
-$distDir = "C:\Users\SWEETY\QuickDNS\dist\QuickDNS"
+$rootDir = (Resolve-Path "$PSScriptRoot\..").Path
+$distDir = Join-Path $rootDir "dist\QuickDNS"
 if (Test-Path $distDir) { Remove-Item -Recurse -Force $distDir }
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 
-Copy-Item -Path "C:\Users\SWEETY\QuickDNS\QuickDNS.exe" -Destination (Join-Path $distDir "QuickDNS.exe") -Force
+Copy-Item -Path (Join-Path $rootDir "QuickDNS.exe") -Destination (Join-Path $distDir "QuickDNS.exe") -Force
 
 $readmeText = @"
 ==================================================
@@ -29,7 +30,7 @@ https://github.com/szanko02/QuickDNS
 
 [System.IO.File]::WriteAllText((Join-Path $distDir "README.txt"), $readmeText, [System.Text.Encoding]::UTF8)
 
-$zipPath = "C:\Users\SWEETY\QuickDNS\dist\QuickDNS-v1.0.0-Portable.zip"
+$zipPath = Join-Path $rootDir "dist\QuickDNS-v1.0.0-Portable.zip"
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 Compress-Archive -Path "$distDir\*" -DestinationPath $zipPath -Force
 

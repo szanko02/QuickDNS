@@ -104,6 +104,19 @@ std::vector<std::wstring> split_string_by_delimiters(const std::wstring& str, co
     return tokens;
 }
 
+std::wstring get_system32_path() {
+    wchar_t sys_dir[MAX_PATH] = {};
+    UINT len = GetSystemDirectoryW(sys_dir, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        return std::wstring(sys_dir);
+    }
+    wchar_t win_dir[MAX_PATH] = {};
+    if (GetWindowsDirectoryW(win_dir, MAX_PATH) > 0) {
+        return std::wstring(win_dir) + L"\\System32";
+    }
+    return L"C:\\Windows\\System32";
+}
+
 } // anonymous namespace
 
 namespace quickdns {
@@ -643,7 +656,7 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
     // Applying netsh guarantees immediate synchronization with the kernel TCP/IP stack,
     // Network Connections Control Panel, and legacy network management APIs.
     bool netsh_ok = false;
-    std::wstring netsh_path = L"C:\\Windows\\System32\\netsh.exe";
+    std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
     std::wstring ip_family = is_valid_ipv4(primary_dns) ? L"ipv4" : L"ipv6";
 
     // Attempt netsh by numeric if_index (bulletproof against localized/Cyrillic adapter names)
@@ -759,7 +772,7 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
 
     // 2. Netsh reset
     bool netsh_ok = false;
-    std::wstring netsh_path = L"C:\\Windows\\System32\\netsh.exe";
+    std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
 
     if (adapter.if_index > 0) {
         std::wstring cmd_ipv4 = netsh_path + L" interface ipv4 set dnsservers name=" + 
@@ -823,7 +836,7 @@ bool DnsManager::flush_dns_cache() {
     }
 
     // 2. Also invoke ipconfig.exe /flushdns to clear system-wide DNS client cache
-    bool flushed_ipconfig = execute_hidden_process(L"C:\\Windows\\System32\\ipconfig.exe /flushdns");
+    bool flushed_ipconfig = execute_hidden_process(get_system32_path() + L"\\ipconfig.exe /flushdns");
     if (flushed_ipconfig) {
         log_info(L"ipconfig.exe /flushdns completed successfully.");
     }

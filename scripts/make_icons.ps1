@@ -72,8 +72,12 @@ function Convert-ToIco {
     Write-Host "Successfully generated: $destIcoPath"
 }
 
-$appIcon = "C:\Users\SWEETY\.gemini\antigravity-cli\brain\b586bf1c-c888-4572-903c-9f6fd6bafed3\quickdns_app_icon_1791729717789.jpg"
-$diagIcon = "C:\Users\SWEETY\.gemini\antigravity-cli\brain\b586bf1c-c888-4572-903c-9f6fd6bafed3\dns_diagnostic_icon_1791729716035.jpg"
+$rootDir = (Resolve-Path "$PSScriptRoot\..").Path
+$appIcon = Join-Path $rootDir "res\app_logo.jpg"
+$diagIcon = Join-Path $rootDir "res\diag_logo.jpg"
+if (-not (Test-Path $diagIcon)) {
+    $diagIcon = $appIcon
+}
 
-Convert-ToIco -srcPath $appIcon -destIcoPath "C:\Users\SWEETY\QuickDNS\res\app_icon.ico"
-Convert-ToIco -srcPath $diagIcon -destIcoPath "C:\Users\SWEETY\QuickDNS\res\diag_icon.ico"
+Convert-ToIco -srcPath $appIcon -destIcoPath (Join-Path $rootDir "res\app_icon.ico")
+Convert-ToIco -srcPath $diagIcon -destIcoPath (Join-Path $rootDir "res\diag_icon.ico")

@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-$repo = "C:\Users\SWEETY\QuickDNS"
-$bak  = "C:\Users\SWEETY\QuickDNS_backup"
+$repo = (Resolve-Path "$PSScriptRoot\..").Path
+$bak  = Join-Path (Split-Path -Parent $repo) "QuickDNS_backup"
 
 Write-Host ">>> Step 1: Backing up source files..."
 if (Test-Path $bak) { Remove-Item -Recurse -Force $bak }

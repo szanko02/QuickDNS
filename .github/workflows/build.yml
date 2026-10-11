@@ -34,3 +34,4 @@ jobs:
           build/Release/QuickDNS.exe
           build/Release/test_dns.exe
           build/Release/test_config.exe
+          build/Release/test_benchmark.exe
