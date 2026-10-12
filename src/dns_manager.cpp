@@ -710,18 +710,11 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
         }
     }
 
-    // 4. DNS over HTTPS (DoH) encryption via Windows netsh
+    // 4. DNS over HTTPS (DoH) encryption
     if (!doh_template.empty()) {
-        std::wstring cmd_doh1 = netsh_path + L" dns add encryption server=" + primary_dns + 
-            L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=yes";
-        log_info(L"Configuring DoH for primary DNS: " + cmd_doh1);
-        execute_hidden_process(cmd_doh1);
-
+        configure_doh_server(primary_dns, doh_template);
         if (!secondary_dns.empty()) {
-            std::wstring cmd_doh2 = netsh_path + L" dns add encryption server=" + secondary_dns + 
-                L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=yes";
-            log_info(L"Configuring DoH for secondary DNS: " + cmd_doh2);
-            execute_hidden_process(cmd_doh2);
+            configure_doh_server(secondary_dns, doh_template);
         }
     }
 
@@ -733,6 +726,53 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
     // Flush DNS resolver cache
     flush_dns_cache();
     return true;
+}
+
+void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::wstring& doh_template) {
+    if (server_ip.empty() || doh_template.empty()) {
+        return;
+    }
+
+    log_info(L"Configuring DoH encryption for server: " + server_ip + L" -> " + doh_template);
+
+    // 1. Direct Windows Registry configuration
+    // HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DohWellKnownServers\<server_ip>
+    std::wstring reg_key_path = L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters\\DohWellKnownServers\\" + server_ip;
+    HKEY hKey = nullptr;
+    DWORD disposition = 0;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, reg_key_path.c_str(), 0, nullptr,
+                        REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hKey, &disposition) == ERROR_SUCCESS) {
+        RegSetValueExW(hKey, L"Template", 0, REG_SZ,
+            reinterpret_cast<const BYTE*>(doh_template.c_str()),
+            static_cast<DWORD>((doh_template.length() + 1) * sizeof(wchar_t)));
+
+        ULONGLONG flags64 = 0x0c;
+        RegSetValueExW(hKey, L"Flags", 0, REG_QWORD, reinterpret_cast<const BYTE*>(&flags64), sizeof(flags64));
+
+        RegCloseKey(hKey);
+        log_info(L"Registered DoH server in Dnscache\\Parameters\\DohWellKnownServers");
+    }
+
+    // 2. Windows netsh encryption (tries 'set encryption' first; if not found, tries 'add encryption')
+    std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
+    std::wstring cmd_set = netsh_path + L" dns set encryption server=" + server_ip +
+        L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=yes";
+    log_info(L"Executing netsh set encryption: " + cmd_set);
+    if (!execute_hidden_process(cmd_set)) {
+        std::wstring cmd_add = netsh_path + L" dns add encryption server=" + server_ip +
+            L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=yes";
+        log_info(L"Executing netsh add encryption fallback: " + cmd_add);
+        execute_hidden_process(cmd_add);
+    }
+
+    // 3. PowerShell Add/Set-DnsClientDohServerAddress fallback for Windows 11
+    std::wstring ps_path = get_system32_path() + L"\\WindowsPowerShell\\v1.0\\powershell.exe";
+    std::wstring ps_cmd = ps_path + L" -NoProfile -ExecutionPolicy Bypass -Command \""
+        L"if (Get-Command Add-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { "
+        L"  Add-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; "
+        L"  Set-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue "
+        L"}\"";
+    execute_hidden_process(ps_cmd);
 }
 
 bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {

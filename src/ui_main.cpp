@@ -36,7 +36,7 @@ namespace {
     constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.2.1 — Быстрая смена DNS в 1 клик";
 
     constexpr int WINDOW_WIDTH  = 540;
-    constexpr int WINDOW_HEIGHT = 650;
+    constexpr int WINDOW_HEIGHT = 720;
 
     struct ColorPalette {
         COLORREF bg;
@@ -75,71 +75,71 @@ namespace {
     static ColorPalette GetPalette(bool isDark) {
         if (isDark) {
             return ColorPalette{
-                RGB(18, 20, 26),     // bg
-                RGB(27, 31, 41),     // cardBg
-                RGB(45, 53, 70),     // cardBorder
-                RGB(248, 250, 252),  // textPrimary
-                RGB(148, 163, 184),  // textSecondary
-                RGB(100, 116, 139),  // textMuted
-                RGB(56, 189, 248),   // accentBlue
-                RGB(52, 211, 153),   // accentGreen
-                RGB(251, 191, 36),   // accentAmber
-                RGB(248, 113, 113),  // accentRed
-                RGB(45, 53, 70),     // separator
-                RGB(37, 99, 235),    // btnPrimaryBg
-                RGB(59, 130, 246),   // btnPrimaryHover
-                RGB(29, 78, 216),    // btnPrimaryPress
-                RGB(96, 165, 250),   // btnPrimaryBorder
+                RGB(22, 25, 31),     // bg (refined dark charcoal)
+                RGB(30, 34, 43),     // cardBg
+                RGB(48, 55, 68),     // cardBorder
+                RGB(241, 245, 249),  // textPrimary
+                RGB(156, 163, 175),  // textSecondary
+                RGB(110, 118, 132),  // textMuted
+                RGB(92, 130, 165),   // accentBlue (muted steel)
+                RGB(72, 150, 112),   // accentGreen (calm sage)
+                RGB(185, 142, 60),   // accentAmber (muted warm amber)
+                RGB(192, 82, 82),    // accentRed (muted brick)
+                RGB(48, 55, 68),     // separator
+                RGB(44, 76, 112),    // btnPrimaryBg (calm slate navy)
+                RGB(54, 92, 134),    // btnPrimaryHover
+                RGB(36, 62, 92),     // btnPrimaryPress
+                RGB(62, 102, 146),   // btnPrimaryBorder
                 RGB(255, 255, 255),  // btnPrimaryText
-                RGB(79, 70, 229),    // btnBenchBg
-                RGB(99, 102, 241),   // btnBenchHover
-                RGB(67, 56, 202),    // btnBenchPress
-                RGB(129, 140, 248),  // btnBenchBorder
+                RGB(50, 64, 94),     // btnBenchBg (subdued steel indigo)
+                RGB(62, 79, 115),    // btnBenchHover
+                RGB(40, 52, 78),     // btnBenchPress
+                RGB(72, 92, 132),    // btnBenchBorder
                 RGB(255, 255, 255),  // btnBenchText
-                RGB(32, 36, 48),     // btnUtilBg
-                RGB(45, 52, 70),     // btnUtilHover
-                RGB(24, 27, 36),     // btnUtilPress
-                RGB(55, 65, 85),     // btnUtilBorder
-                RGB(241, 245, 249),  // btnUtilText
-                RGB(22, 25, 34),     // graphBg
-                RGB(45, 53, 70),     // graphBorder
-                RGB(35, 42, 56),     // graphGrid
-                RGB(56, 189, 248),   // graphLine
-                RGB(148, 163, 184)   // graphText
+                RGB(34, 38, 48),     // btnUtilBg (neutral dark slate)
+                RGB(46, 52, 65),     // btnUtilHover
+                RGB(28, 31, 40),     // btnUtilPress
+                RGB(58, 66, 82),     // btnUtilBorder
+                RGB(226, 232, 240),  // btnUtilText
+                RGB(25, 29, 37),     // graphBg
+                RGB(48, 55, 68),     // graphBorder
+                RGB(38, 44, 56),     // graphGrid
+                RGB(88, 132, 174),   // graphLine (neutral steel blue)
+                RGB(140, 148, 162)   // graphText
             };
         } else {
             return ColorPalette{
-                RGB(244, 246, 249),  // bg
+                RGB(246, 248, 251),  // bg (soft clean neutral)
                 RGB(255, 255, 255),  // cardBg
-                RGB(222, 226, 230),  // cardBorder
-                RGB(15, 23, 42),     // textPrimary
-                RGB(71, 85, 105),    // textSecondary
-                RGB(100, 116, 139),  // textMuted
-                RGB(2, 132, 199),    // accentBlue
-                RGB(16, 185, 129),   // accentGreen
-                RGB(217, 119, 6),    // accentAmber
-                RGB(220, 38, 38),    // accentRed
-                RGB(226, 232, 240),  // separator
-                RGB(37, 99, 235),    // btnPrimaryBg
-                RGB(29, 78, 216),    // btnPrimaryHover
-                RGB(30, 64, 175),    // btnPrimaryPress
-                RGB(29, 78, 216),    // btnPrimaryBorder
+                RGB(218, 224, 233),  // cardBorder
+                RGB(30, 41, 59),     // textPrimary
+                RGB(85, 95, 110),    // textSecondary
+                RGB(120, 130, 145),  // textMuted
+                RGB(52, 98, 150),    // accentBlue
+                RGB(46, 128, 78),    // accentGreen
+                RGB(165, 108, 24),   // accentAmber
+                RGB(180, 52, 52),    // accentRed
+                RGB(222, 226, 233),  // separator
+                RGB(48, 88, 132),    // btnPrimaryBg (neutral slate navy)
+                RGB(40, 74, 112),    // btnPrimaryHover
+                RGB(32, 60, 92),     // btnPrimaryPress
+                RGB(40, 74, 112),    // btnPrimaryBorder
                 RGB(255, 255, 255),  // btnPrimaryText
-                RGB(79, 70, 229),    // btnBenchBg
-                RGB(67, 56, 202),    // btnBenchHover
-                RGB(55, 48, 163),    // btnBenchPress
-                RGB(67, 56, 202),    // btnBenchBorder
+                RGB(62, 80, 114),    // btnBenchBg (neutral steel)
+                RGB(52, 67, 96),     // btnBenchHover
+                RGB(42, 54, 78),     // btnBenchPress
+                RGB(52, 67, 96),     // btnBenchBorder
                 RGB(255, 255, 255),  // btnBenchText
-                RGB(248, 250, 252),  // btnUtilBg
-                RGB(238, 242, 246),  // btnUtilHover
-                RGB(226, 232, 240),  // btnUtilPress
-                RGB(203, 213, 225),  // btnUtilBorder
-                RGB(30, 41, 59),     // btnUtilText
-                RGB(248, 250, 252),  // graphBg
-                RGB(226, 232, 240),  // graphBorder
-                RGB(235, 240, 245),  // graphGrid
-                RGB(2, 132, 199),    // graphLine
-                RGB(100, 116, 139)   // graphText
+                RGB(243, 245, 249),  // btnUtilBg (light neutral)
+                RGB(232, 236, 242),  // btnUtilHover
+                RGB(220, 225, 233),  // btnUtilPress
+                RGB(206, 213, 224),  // btnUtilBorder
+                RGB(44, 52, 65),     // btnUtilText
+                RGB(250, 251, 253),  // graphBg
+                RGB(218, 224, 233),  // graphBorder
+                RGB(235, 239, 245),  // graphGrid
+                RGB(62, 108, 158),   // graphLine
+                RGB(110, 120, 135)   // graphText
             };
         }
     }
@@ -446,6 +446,26 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             }
             return 0;
         }
+        if (wmId == IDC_BTN_COPY_IP) {
+            wchar_t buf[256] = {0};
+            if (m_hEditProfileIp) {
+                GetWindowTextW(m_hEditProfileIp, buf, 256);
+                copy_text_to_clipboard(buf);
+            }
+            return 0;
+        }
+        if (wmId == IDC_BTN_COPY_DOH) {
+            wchar_t buf[512] = {0};
+            if (m_hEditProfileDoh) {
+                GetWindowTextW(m_hEditProfileDoh, buf, 512);
+                copy_text_to_clipboard(buf);
+            }
+            return 0;
+        }
+        if (wmId == IDC_BTN_WIN_NETWORK) {
+            open_windows_network_settings();
+            return 0;
+        }
         if (wmId == IDC_BTN_THEME_TOGGLE) {
             toggle_theme();
             return 0;
@@ -490,6 +510,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         EnableWindow(m_hBtnBenchmark, TRUE);
         EnableWindow(m_hBtnResetDhcp, TRUE);
         EnableWindow(m_hBtnFlushDns, TRUE);
+        if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, TRUE);
 
         refresh_network_adapters();
         update_status_card();
@@ -564,6 +585,11 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             SetTextColor(hdcStatic, pal.textSecondary);
         } else if (hwndStatic == m_hStatusAdapterName) {
             SetTextColor(hdcStatic, pal.textPrimary);
+        } else if (hwndStatic == m_hEditProfileIp) {
+            SetBkMode(hdcStatic, OPAQUE);
+            SetTextColor(hdcStatic, pal.textPrimary);
+            SetBkColor(hdcStatic, pal.cardBg);
+            return (INT_PTR)m_hbrCard;
         } else {
             SetTextColor(hdcStatic, pal.textSecondary);
         }
@@ -574,6 +600,15 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         }
 
         return (INT_PTR)m_hbrBg;
+    }
+
+    case WM_CTLCOLOREDIT: {
+        HDC hdcEdit = (HDC)wParam;
+        auto pal = GetPalette(m_isDarkMode);
+        SetBkMode(hdcEdit, OPAQUE);
+        SetTextColor(hdcEdit, pal.textPrimary);
+        SetBkColor(hdcEdit, pal.cardBg);
+        return (INT_PTR)m_hbrCard;
     }
 
     case WM_PAINT: {
@@ -818,28 +853,72 @@ void MainWindow::create_controls() {
         marginX, startY, contentWidth, 200,
         m_hWnd, (HMENU)IDC_COMBO_PROFILE, m_hInstance, nullptr);
     SendMessageW(m_hComboProfile, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 36;
+    startY += 32;
 
-    // Profile Details Card
+    int editW = contentWidth - 116;
+    int btnCopyW = 106;
+    int copyX = marginX + editW + 10;
+
+    // IP Address (Copyable)
+    HWND hLblIp = CreateWindowExW(0, L"STATIC", L"IP-адреса DNS серверов:",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        marginX, startY, contentWidth, 16,
+        m_hWnd, nullptr, m_hInstance, nullptr);
+    SendMessageW(hLblIp, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
+    startY += 18;
+
+    m_hEditProfileIp = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
+        marginX, startY, editW, 26,
+        m_hWnd, (HMENU)IDC_EDIT_PROFILE_IP, m_hInstance, nullptr);
+    SendMessageW(m_hEditProfileIp, WM_SETFONT, (WPARAM)m_hFontMonospace, TRUE);
+
+    m_hBtnCopyIp = CreateWindowExW(0, WC_BUTTONW, L"Копировать IP",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        copyX, startY, btnCopyW, 26,
+        m_hWnd, (HMENU)IDC_BTN_COPY_IP, m_hInstance, nullptr);
+    startY += 30;
+
+    // DoH Template (Editable manual template & Copyable)
+    HWND hLblDoh = CreateWindowExW(0, L"STATIC", L"Шаблон DNS over HTTPS (DoH):",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        marginX, startY, contentWidth, 16,
+        m_hWnd, nullptr, m_hInstance, nullptr);
+    SendMessageW(hLblDoh, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
+    startY += 18;
+
+    m_hEditProfileDoh = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        marginX, startY, editW, 26,
+        m_hWnd, (HMENU)IDC_EDIT_PROFILE_DOH, m_hInstance, nullptr);
+    SendMessageW(m_hEditProfileDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+
+    m_hBtnCopyDoh = CreateWindowExW(0, WC_BUTTONW, L"Копировать DoH",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        copyX, startY, btnCopyW, 26,
+        m_hWnd, (HMENU)IDC_BTN_COPY_DOH, m_hInstance, nullptr);
+    startY += 30;
+
+    // Profile Description
     m_hProfileDetails = CreateWindowExW(0, L"STATIC", L"Описание выбранного профиля...",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth, 58,
+        marginX, startY, contentWidth, 26,
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hProfileDetails, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 64;
+    SendMessageW(m_hProfileDetails, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
+    startY += 30;
 
-    // 4. Action Buttons (All Owner-Drawn for colorful, modern, rounded appearance)
+    // 4. Action Buttons with comfortable neutral spacing
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить DNS в 1 клик",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, contentWidth, 42,
+        marginX, startY, contentWidth, 38,
         m_hWnd, (HMENU)IDC_BTN_APPLY, m_hInstance, nullptr);
-    startY += 48;
+    startY += 38 + 10;
 
     m_hBtnBenchmark = CreateWindowExW(0, WC_BUTTONW, L"Проверить скорость всех DNS (пинг)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, contentWidth, 36,
+        marginX, startY, contentWidth, 34,
         m_hWnd, (HMENU)IDC_BTN_BENCHMARK, m_hInstance, nullptr);
-    startY += 42;
+    startY += 34 + 10;
 
     int halfWidth = (contentWidth - 12) / 2;
     m_hBtnResetDhcp = CreateWindowExW(0, WC_BUTTONW, L"Сброс на DHCP (Авто)",
@@ -847,25 +926,31 @@ void MainWindow::create_controls() {
         marginX, startY, halfWidth, 34,
         m_hWnd, (HMENU)IDC_BTN_RESET_DHCP, m_hInstance, nullptr);
 
-    m_hBtnFlushDns = CreateWindowExW(0, WC_BUTTONW, L"Сбросить DNS-кэш",
+    m_hBtnWinNetwork = CreateWindowExW(0, WC_BUTTONW, L"Параметры сети Windows",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + halfWidth + 12, startY, halfWidth, 34,
+        m_hWnd, (HMENU)IDC_BTN_WIN_NETWORK, m_hInstance, nullptr);
+    startY += 34 + 10;
+
+    m_hBtnFlushDns = CreateWindowExW(0, WC_BUTTONW, L"Сбросить DNS-кэш",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX, startY, halfWidth, 34,
         m_hWnd, (HMENU)IDC_BTN_FLUSH_DNS, m_hInstance, nullptr);
-    startY += 40;
 
     m_hBtnAddProfile = CreateWindowExW(0, WC_BUTTONW, L"Добавить свой DNS...",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, halfWidth, 34,
+        marginX + halfWidth + 12, startY, halfWidth, 34,
         m_hWnd, (HMENU)IDC_BTN_ADD_PROFILE, m_hInstance, nullptr);
+    startY += 34 + 10;
 
     m_hBtnDeleteProfile = CreateWindowExW(0, WC_BUTTONW, L"Удалить профиль",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + halfWidth + 12, startY, halfWidth, 34,
+        marginX, startY, contentWidth, 30,
         m_hWnd, (HMENU)IDC_BTN_DELETE_PROFILE, m_hInstance, nullptr);
     EnableWindow(m_hBtnDeleteProfile, FALSE);
+    startY += 30 + 12;
 
     // 5. Footer Version Badge
-    startY += 42;
     m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.2.1 • Portable",
         WS_CHILD | WS_VISIBLE | SS_CENTER,
         marginX, startY, contentWidth, 18,
@@ -876,10 +961,13 @@ void MainWindow::create_controls() {
     attach_button_effects(m_hBtnApply, 1);
     attach_button_effects(m_hBtnBenchmark, 2);
     attach_button_effects(m_hBtnResetDhcp, 3);
-    attach_button_effects(m_hBtnFlushDns, 4);
-    attach_button_effects(m_hBtnAddProfile, 5);
-    attach_button_effects(m_hBtnDeleteProfile, 6);
-    attach_button_effects(m_hBtnThemeToggle, 7);
+    attach_button_effects(m_hBtnWinNetwork, 4);
+    attach_button_effects(m_hBtnFlushDns, 5);
+    attach_button_effects(m_hBtnAddProfile, 6);
+    attach_button_effects(m_hBtnDeleteProfile, 7);
+    attach_button_effects(m_hBtnCopyIp, 8);
+    attach_button_effects(m_hBtnCopyDoh, 9);
+    attach_button_effects(m_hBtnThemeToggle, 10);
 }
 
 void MainWindow::draw_theme_toggle_button(DRAWITEMSTRUCT* pDis) {
@@ -997,37 +1085,37 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     COLORREF baseBg, hoverBg, pressBg, baseBorder, hoverBorder, textCol;
 
     if (pDis->CtlID == IDC_BTN_APPLY) {
-        // Primary Blue Action Button
+        // Primary Slate Navy Action Button
         if (isDisabled) {
-            baseBg = m_isDarkMode ? RGB(30, 45, 75) : RGB(191, 219, 254);
-            baseBorder = m_isDarkMode ? RGB(45, 60, 95) : RGB(147, 197, 253);
-            textCol = m_isDarkMode ? RGB(120, 140, 175) : RGB(96, 165, 250);
+            baseBg = m_isDarkMode ? RGB(30, 42, 60) : RGB(210, 222, 238);
+            baseBorder = m_isDarkMode ? RGB(45, 58, 80) : RGB(180, 198, 222);
+            textCol = m_isDarkMode ? RGB(110, 128, 155) : RGB(130, 150, 180);
             hoverBg = baseBg; pressBg = baseBg; hoverBorder = baseBorder;
         } else {
             baseBg = pal.btnPrimaryBg;
             hoverBg = pal.btnPrimaryHover;
             pressBg = pal.btnPrimaryPress;
             baseBorder = pal.btnPrimaryBorder;
-            hoverBorder = RGB(147, 197, 253);
+            hoverBorder = m_isDarkMode ? RGB(85, 125, 175) : RGB(55, 95, 140);
             textCol = pal.btnPrimaryText;
         }
     } else if (pDis->CtlID == IDC_BTN_BENCHMARK) {
-        // Indigo Speed Test Button
+        // Subdued Steel Speed Test Button
         if (isDisabled) {
-            baseBg = m_isDarkMode ? RGB(45, 35, 75) : RGB(224, 231, 255);
-            baseBorder = m_isDarkMode ? RGB(65, 50, 105) : RGB(199, 210, 254);
-            textCol = m_isDarkMode ? RGB(130, 120, 160) : RGB(129, 140, 248);
+            baseBg = m_isDarkMode ? RGB(32, 40, 58) : RGB(218, 224, 238);
+            baseBorder = m_isDarkMode ? RGB(46, 56, 78) : RGB(188, 196, 218);
+            textCol = m_isDarkMode ? RGB(112, 125, 150) : RGB(135, 148, 175);
             hoverBg = baseBg; pressBg = baseBg; hoverBorder = baseBorder;
         } else {
             baseBg = pal.btnBenchBg;
             hoverBg = pal.btnBenchHover;
             pressBg = pal.btnBenchPress;
             baseBorder = pal.btnBenchBorder;
-            hoverBorder = RGB(165, 180, 252);
+            hoverBorder = m_isDarkMode ? RGB(95, 115, 160) : RGB(70, 90, 130);
             textCol = pal.btnBenchText;
         }
     } else {
-        // Utility Secondary Buttons
+        // Utility Secondary Buttons (All Neutral)
         if (isDisabled) {
             baseBg = m_isDarkMode ? RGB(24, 27, 36) : RGB(241, 245, 249);
             baseBorder = m_isDarkMode ? RGB(38, 43, 56) : RGB(226, 232, 240);
@@ -1037,22 +1125,11 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
             baseBg = pal.btnUtilBg;
             hoverBg = pal.btnUtilHover;
             pressBg = pal.btnUtilPress;
+            baseBorder = pal.btnUtilBorder;
+            hoverBorder = m_isDarkMode ? RGB(82, 94, 114) : RGB(160, 172, 190);
 
-            if (pDis->CtlID == IDC_BTN_RESET_DHCP) {
-                baseBorder = pal.accentAmber;
-                hoverBorder = RGB(245, 158, 11);
-            } else if (pDis->CtlID == IDC_BTN_FLUSH_DNS) {
-                baseBorder = pal.accentBlue;
-                hoverBorder = RGB(14, 165, 233);
-            } else if (pDis->CtlID == IDC_BTN_ADD_PROFILE) {
-                baseBorder = pal.accentGreen;
-                hoverBorder = RGB(16, 185, 129);
-            } else if (pDis->CtlID == IDC_BTN_DELETE_PROFILE) {
-                baseBorder = pal.accentRed;
-                hoverBorder = RGB(239, 68, 68);
-            } else {
-                baseBorder = pal.btnUtilBorder;
-                hoverBorder = m_isDarkMode ? RGB(100, 116, 139) : RGB(148, 163, 184);
+            if (pDis->CtlID == IDC_BTN_DELETE_PROFILE) {
+                hoverBorder = m_isDarkMode ? RGB(160, 75, 75) : RGB(190, 70, 70);
             }
             textCol = pal.btnUtilText;
         }
@@ -1082,7 +1159,8 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
         Gdiplus::GraphicsPath btnPath;
-        AddRoundedRect(btnPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), 8.0f);
+        float radius = (pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH) ? 6.0f : 8.0f;
+        AddRoundedRect(btnPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), radius);
 
         Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, GetRValue(bgCol), GetGValue(bgCol), GetBValue(bgCol)));
         float penWidth = 1.2f + 0.4f * hoverVal;
@@ -1098,7 +1176,9 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
 
     SetBkMode(hdcMem, TRANSPARENT);
     SetTextColor(hdcMem, textCol);
-    HGDIOBJ oldFont = SelectObject(hdcMem, (pDis->CtlID == IDC_BTN_APPLY || pDis->CtlID == IDC_BTN_BENCHMARK) ? m_hFontBold : m_hFontRegular);
+    HFONT textFont = (pDis->CtlID == IDC_BTN_APPLY || pDis->CtlID == IDC_BTN_BENCHMARK) ? m_hFontBold : 
+                     ((pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH) ? m_hFontSmall : m_hFontRegular);
+    HGDIOBJ oldFont = SelectObject(hdcMem, textFont);
 
     // Press animation: offset text slightly down & right when pressed!
     RECT rcText = rcMem;
@@ -1462,21 +1542,31 @@ void MainWindow::on_profile_selected() {
     m_selectedProfileIndex = ComboBox_GetCurSel(m_hComboProfile);
     if (m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profiles.size())) {
         const auto& p = m_profiles[m_selectedProfileIndex];
-        std::wstring details;
+        std::wstring ipText;
+        std::wstring dohText;
+        std::wstring descText;
+
         if (p.is_dhcp) {
-            details = L"Автоматическое получение DNS серверов от DHCP роутера/провайдера.";
+            ipText = L"Автоматически (DHCP)";
+            dohText = L"";
+            descText = L"Автоматическое получение DNS серверов от DHCP роутера/провайдера.";
         } else {
             std::wstring pri  = utf8_to_wide(p.primary_ipv4);
             std::wstring sec  = utf8_to_wide(p.secondary_ipv4);
-            std::wstring desc = utf8_to_wide(p.description);
-            std::wstring doh  = utf8_to_wide(p.doh_template);
-            details = L"IP: " + pri + (sec.empty() ? L"" : L", " + sec);
-            if (!doh.empty()) {
-                details += L"\nDoH: " + doh;
-            }
-            details += L"\n" + desc;
+            descText = utf8_to_wide(p.description);
+            dohText  = utf8_to_wide(p.doh_template);
+            ipText = pri + (sec.empty() ? L"" : L", " + sec);
         }
-        SetWindowTextW(m_hProfileDetails, details.c_str());
+
+        if (m_hEditProfileIp) {
+            SetWindowTextW(m_hEditProfileIp, ipText.c_str());
+        }
+        if (m_hEditProfileDoh) {
+            SetWindowTextW(m_hEditProfileDoh, dohText.c_str());
+        }
+        if (m_hProfileDetails) {
+            SetWindowTextW(m_hProfileDetails, descText.c_str());
+        }
 
         if (m_hBtnDeleteProfile) {
             EnableWindow(m_hBtnDeleteProfile, !p.is_builtin);
@@ -1500,12 +1590,27 @@ void MainWindow::apply_selected_dns() {
     EnableWindow(m_hBtnBenchmark, FALSE);
     EnableWindow(m_hBtnResetDhcp, FALSE);
     EnableWindow(m_hBtnFlushDns, FALSE);
+    if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, FALSE);
 
     NetworkAdapterInfo adapter = m_adapters[m_selectedAdapterIndex];
     DnsProfile profile = m_profiles[m_selectedProfileIndex];
     HWND hWnd = m_hWnd;
 
-    std::thread([this, adapter, profile, hWnd]() {
+    // Read manual / custom DoH template from edit control if specified
+    std::wstring manualDoh;
+    if (m_hEditProfileDoh) {
+        wchar_t buf[512] = {0};
+        GetWindowTextW(m_hEditProfileDoh, buf, 512);
+        manualDoh = buf;
+        while (!manualDoh.empty() && (manualDoh.back() == L' ' || manualDoh.back() == L'\r' || manualDoh.back() == L'\n' || manualDoh.back() == L'\t')) {
+            manualDoh.pop_back();
+        }
+        while (!manualDoh.empty() && (manualDoh.front() == L' ' || manualDoh.front() == L'\t')) {
+            manualDoh.erase(0, 1);
+        }
+    }
+
+    std::thread([this, adapter, profile, manualDoh, hWnd]() {
         bool success = false;
         std::wstring msg;
 
@@ -1516,7 +1621,8 @@ void MainWindow::apply_selected_dns() {
         } else {
             std::wstring pri = utf8_to_wide(profile.primary_ipv4);
             std::wstring sec = utf8_to_wide(profile.secondary_ipv4);
-            success = m_dnsManager->set_static_dns(adapter, pri, sec);
+            std::wstring doh = manualDoh.empty() ? utf8_to_wide(profile.doh_template) : manualDoh;
+            success = m_dnsManager->set_static_dns(adapter, pri, sec, doh);
             msg = success ? L"DNS серверы успешно установлены!" 
                           : L"Не удалось применить DNS: " + m_dnsManager->get_last_error();
         }
@@ -1545,6 +1651,7 @@ void MainWindow::reset_to_dhcp() {
     EnableWindow(m_hBtnBenchmark, FALSE);
     EnableWindow(m_hBtnResetDhcp, FALSE);
     EnableWindow(m_hBtnFlushDns, FALSE);
+    if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, FALSE);
 
     NetworkAdapterInfo adapter = m_adapters[m_selectedAdapterIndex];
     HWND hWnd = m_hWnd;
@@ -1600,6 +1707,32 @@ void MainWindow::open_benchmark_dialog() {
             }
         }
     }
+}
+
+void MainWindow::open_windows_network_settings() {
+    // Open Windows Modern Settings Network page, fallback to classic Control Panel ncpa.cpl
+    HINSTANCE res = ShellExecuteW(m_hWnd, L"open", L"ms-settings:network", nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(res) <= 32) {
+        ShellExecuteW(m_hWnd, L"open", L"control.exe", L"ncpa.cpl", nullptr, SW_SHOWNORMAL);
+    }
+}
+
+void MainWindow::copy_text_to_clipboard(const std::wstring& text) {
+    if (text.empty()) return;
+    if (!OpenClipboard(m_hWnd)) return;
+    EmptyClipboard();
+
+    size_t bytes = (text.length() + 1) * sizeof(wchar_t);
+    HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (hGlob) {
+        void* pMem = GlobalLock(hGlob);
+        if (pMem) {
+            memcpy(pMem, text.c_str(), bytes);
+            GlobalUnlock(hGlob);
+            SetClipboardData(CF_UNICODETEXT, hGlob);
+        }
+    }
+    CloseClipboard();
 }
 
 void MainWindow::show_tray_context_menu() {

@@ -21,6 +21,11 @@
 #define IDC_GRAPH_VIEW              1016
 #define IDC_STATUS_PING             1017
 #define IDC_BTN_THEME_TOGGLE        1020
+#define IDC_EDIT_PROFILE_IP         1021
+#define IDC_EDIT_PROFILE_DOH        1022
+#define IDC_BTN_COPY_IP             1023
+#define IDC_BTN_COPY_DOH            1024
+#define IDC_BTN_WIN_NETWORK         1025
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101

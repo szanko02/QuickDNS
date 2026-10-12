@@ -70,6 +70,8 @@ private:
     void flush_dns_cache();
     void open_add_profile_dialog();
     void open_benchmark_dialog();
+    void open_windows_network_settings();
+    void copy_text_to_clipboard(const std::wstring& text);
 
     // Tray Menu
     void show_tray_context_menu();
@@ -95,10 +97,17 @@ private:
     HWND m_hComboProfile = nullptr;
     HWND m_hBtnThemeToggle = nullptr;
     HWND m_hToolTip = nullptr;
+
+    HWND m_hEditProfileIp = nullptr;
+    HWND m_hBtnCopyIp = nullptr;
+    HWND m_hEditProfileDoh = nullptr;
+    HWND m_hBtnCopyDoh = nullptr;
+
     HWND m_hBtnApply = nullptr;
     HWND m_hBtnBenchmark = nullptr;
     HWND m_hBtnResetDhcp = nullptr;
     HWND m_hBtnFlushDns = nullptr;
+    HWND m_hBtnWinNetwork = nullptr;
     HWND m_hBtnAddProfile = nullptr;
     HWND m_hBtnDeleteProfile = nullptr;
 
