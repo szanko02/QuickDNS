@@ -59,6 +59,16 @@ public:
     void set_active_profile_id(const std::string& id);
 
     /**
+     * @brief Gets the UI theme mode ("dark" or "light"). Defaults to "dark".
+     */
+    std::string get_theme_mode() const;
+
+    /**
+     * @brief Sets the UI theme mode ("dark" or "light").
+     */
+    void set_theme_mode(const std::string& theme);
+
+    /**
      * @brief Adds a new DNS profile. Cannot add if ID is empty or already exists.
      * @param profile The profile to add.
      * @return True if added and saved successfully, false otherwise.
@@ -107,6 +117,7 @@ private:
 
     std::filesystem::path m_config_path;
     std::string m_active_profile_id = "dhcp";
+    std::string m_theme_mode = "dark";
     std::vector<DnsProfile> m_profiles;
     mutable std::mutex m_mutex;
 };

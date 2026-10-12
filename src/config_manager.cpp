@@ -179,6 +179,16 @@ void ConfigManager::set_active_profile_id(const std::string& id) {
     m_active_profile_id = id;
 }
 
+std::string ConfigManager::get_theme_mode() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_theme_mode;
+}
+
+void ConfigManager::set_theme_mode(const std::string& theme) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_theme_mode = (theme == "light") ? "light" : "dark";
+}
+
 bool ConfigManager::add_profile(const DnsProfile& profile) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (profile.id.empty()) return false;
@@ -353,6 +363,7 @@ bool ConfigManager::save_to_file() {
         std::ostringstream ss;
         ss << "{\n";
         ss << "  \"active_profile_id\": \"" << escape_json_string(m_active_profile_id) << "\",\n";
+        ss << "  \"theme\": \"" << escape_json_string(m_theme_mode) << "\",\n";
         ss << "  \"profiles\": [\n";
 
         for (size_t i = 0; i < m_profiles.size(); ++i) {
@@ -398,6 +409,11 @@ bool ConfigManager::load_from_file() {
         std::string activeId = extract_json_value(content, "active_profile_id");
         if (!activeId.empty()) {
             m_active_profile_id = activeId;
+        }
+
+        std::string themeVal = extract_json_value(content, "theme");
+        if (!themeVal.empty()) {
+            m_theme_mode = (themeVal == "light") ? "light" : "dark";
         }
 
         // Parse profile objects

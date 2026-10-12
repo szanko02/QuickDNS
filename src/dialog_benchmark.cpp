@@ -327,6 +327,19 @@ LRESULT CALLBACK BenchmarkDialog::dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARAM
 
 LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+    case WM_SETCURSOR: {
+        HWND hTarget = (HWND)wParam;
+        if (hTarget && IsWindow(hTarget)) {
+            wchar_t cls[32] = {};
+            GetClassNameW(hTarget, cls, 32);
+            if (wcscmp(cls, WC_BUTTONW) == 0 && IsWindowEnabled(hTarget)) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+        }
+        break;
+    }
+
     case WM_APP_BENCHMARK_DONE: {
         update_list_with_results();
         return 0;

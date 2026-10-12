@@ -38,27 +38,204 @@ namespace {
     constexpr int WINDOW_WIDTH  = 540;
     constexpr int WINDOW_HEIGHT = 650;
 
-    // Modern Deep Slate & Accent Color Palette
-    constexpr COLORREF COLOR_BG          = RGB(18, 20, 26);   // Deep Midnight Slate
-    constexpr COLORREF COLOR_CARD_BG     = RGB(27, 31, 41);   // Elevated Slate-Blue Card
-    constexpr COLORREF COLOR_CARD_BORDER = RGB(45, 53, 70);   // Subtle Card Border
+    struct ColorPalette {
+        COLORREF bg;
+        COLORREF cardBg;
+        COLORREF cardBorder;
+        COLORREF textPrimary;
+        COLORREF textSecondary;
+        COLORREF textMuted;
+        COLORREF accentBlue;
+        COLORREF accentGreen;
+        COLORREF accentAmber;
+        COLORREF accentRed;
+        COLORREF separator;
+        COLORREF btnPrimaryBg;
+        COLORREF btnPrimaryHover;
+        COLORREF btnPrimaryPress;
+        COLORREF btnPrimaryBorder;
+        COLORREF btnPrimaryText;
+        COLORREF btnBenchBg;
+        COLORREF btnBenchHover;
+        COLORREF btnBenchPress;
+        COLORREF btnBenchBorder;
+        COLORREF btnBenchText;
+        COLORREF btnUtilBg;
+        COLORREF btnUtilHover;
+        COLORREF btnUtilPress;
+        COLORREF btnUtilBorder;
+        COLORREF btnUtilText;
+        COLORREF graphBg;
+        COLORREF graphBorder;
+        COLORREF graphGrid;
+        COLORREF graphLine;
+        COLORREF graphText;
+    };
 
-    constexpr COLORREF COLOR_TEXT_PRIMARY   = RGB(248, 250, 252);
-    constexpr COLORREF COLOR_TEXT_SECONDARY = RGB(148, 163, 184);
-    constexpr COLORREF COLOR_TEXT_MUTED     = RGB(100, 116, 139);
+    static ColorPalette GetPalette(bool isDark) {
+        if (isDark) {
+            return ColorPalette{
+                RGB(18, 20, 26),     // bg
+                RGB(27, 31, 41),     // cardBg
+                RGB(45, 53, 70),     // cardBorder
+                RGB(248, 250, 252),  // textPrimary
+                RGB(148, 163, 184),  // textSecondary
+                RGB(100, 116, 139),  // textMuted
+                RGB(56, 189, 248),   // accentBlue
+                RGB(52, 211, 153),   // accentGreen
+                RGB(251, 191, 36),   // accentAmber
+                RGB(248, 113, 113),  // accentRed
+                RGB(45, 53, 70),     // separator
+                RGB(37, 99, 235),    // btnPrimaryBg
+                RGB(59, 130, 246),   // btnPrimaryHover
+                RGB(29, 78, 216),    // btnPrimaryPress
+                RGB(96, 165, 250),   // btnPrimaryBorder
+                RGB(255, 255, 255),  // btnPrimaryText
+                RGB(79, 70, 229),    // btnBenchBg
+                RGB(99, 102, 241),   // btnBenchHover
+                RGB(67, 56, 202),    // btnBenchPress
+                RGB(129, 140, 248),  // btnBenchBorder
+                RGB(255, 255, 255),  // btnBenchText
+                RGB(32, 36, 48),     // btnUtilBg
+                RGB(45, 52, 70),     // btnUtilHover
+                RGB(24, 27, 36),     // btnUtilPress
+                RGB(55, 65, 85),     // btnUtilBorder
+                RGB(241, 245, 249),  // btnUtilText
+                RGB(22, 25, 34),     // graphBg
+                RGB(45, 53, 70),     // graphBorder
+                RGB(35, 42, 56),     // graphGrid
+                RGB(56, 189, 248),   // graphLine
+                RGB(148, 163, 184)   // graphText
+            };
+        } else {
+            return ColorPalette{
+                RGB(244, 246, 249),  // bg
+                RGB(255, 255, 255),  // cardBg
+                RGB(222, 226, 230),  // cardBorder
+                RGB(15, 23, 42),     // textPrimary
+                RGB(71, 85, 105),    // textSecondary
+                RGB(100, 116, 139),  // textMuted
+                RGB(2, 132, 199),    // accentBlue
+                RGB(16, 185, 129),   // accentGreen
+                RGB(217, 119, 6),    // accentAmber
+                RGB(220, 38, 38),    // accentRed
+                RGB(226, 232, 240),  // separator
+                RGB(37, 99, 235),    // btnPrimaryBg
+                RGB(29, 78, 216),    // btnPrimaryHover
+                RGB(30, 64, 175),    // btnPrimaryPress
+                RGB(29, 78, 216),    // btnPrimaryBorder
+                RGB(255, 255, 255),  // btnPrimaryText
+                RGB(79, 70, 229),    // btnBenchBg
+                RGB(67, 56, 202),    // btnBenchHover
+                RGB(55, 48, 163),    // btnBenchPress
+                RGB(67, 56, 202),    // btnBenchBorder
+                RGB(255, 255, 255),  // btnBenchText
+                RGB(248, 250, 252),  // btnUtilBg
+                RGB(238, 242, 246),  // btnUtilHover
+                RGB(226, 232, 240),  // btnUtilPress
+                RGB(203, 213, 225),  // btnUtilBorder
+                RGB(30, 41, 59),     // btnUtilText
+                RGB(248, 250, 252),  // graphBg
+                RGB(226, 232, 240),  // graphBorder
+                RGB(235, 240, 245),  // graphGrid
+                RGB(2, 132, 199),    // graphLine
+                RGB(100, 116, 139)   // graphText
+            };
+        }
+    }
 
-    constexpr COLORREF COLOR_ACCENT_BLUE    = RGB(56, 189, 248);  // Vibrant Sky Cyan
-    constexpr COLORREF COLOR_ACCENT_GREEN   = RGB(52, 211, 153);  // Emerald Mint
-    constexpr COLORREF COLOR_ACCENT_AMBER   = RGB(251, 191, 36);  // Warm Amber
-    constexpr COLORREF COLOR_ACCENT_RED     = RGB(248, 113, 113); // Coral Red
+    static COLORREF LerpColor(COLORREF c1, COLORREF c2, float t) {
+        if (t <= 0.0f) return c1;
+        if (t >= 1.0f) return c2;
+        int r = static_cast<int>(GetRValue(c1) + (GetRValue(c2) - GetRValue(c1)) * t);
+        int g = static_cast<int>(GetGValue(c1) + (GetGValue(c2) - GetGValue(c1)) * t);
+        int b = static_cast<int>(GetBValue(c1) + (GetBValue(c2) - GetBValue(c1)) * t);
+        return RGB(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255));
+    }
+
+    struct ButtonAnimationState {
+        float hover = 0.0f;
+        float targetHover = 0.0f;
+        bool isTracking = false;
+        bool isPressed = false;
+    };
+
+    static LRESULT CALLBACK AnimatedButtonSubclassProc(
+        HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+        UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+    {
+        auto* anim = reinterpret_cast<ButtonAnimationState*>(dwRefData);
+        if (!anim) return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+
+        switch (uMsg) {
+        case WM_SETCURSOR: {
+            if (LOWORD(lParam) == HTCLIENT && IsWindowEnabled(hWnd)) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            break;
+        }
+        case WM_MOUSEMOVE: {
+            if (!anim->isTracking) {
+                anim->isTracking = true;
+                anim->targetHover = 1.0f;
+                TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+                TrackMouseEvent(&tme);
+                SetTimer(hWnd, 2001, 16, nullptr);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            anim->isTracking = false;
+            anim->targetHover = 0.0f;
+            SetTimer(hWnd, 2001, 16, nullptr);
+            break;
+        }
+        case WM_LBUTTONDOWN: {
+            anim->isPressed = true;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        }
+        case WM_LBUTTONUP: {
+            anim->isPressed = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        }
+        case WM_TIMER: {
+            if (wParam == 2001) {
+                float diff = anim->targetHover - anim->hover;
+                if (std::abs(diff) < 0.02f) {
+                    anim->hover = anim->targetHover;
+                    KillTimer(hWnd, 2001);
+                } else {
+                    anim->hover += diff * 0.28f;
+                }
+                InvalidateRect(hWnd, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        }
+        case WM_NCDESTROY: {
+            KillTimer(hWnd, 2001);
+            RemovePropW(hWnd, L"QuickDnsAnim");
+            delete anim;
+            RemoveWindowSubclass(hWnd, AnimatedButtonSubclassProc, uIdSubclass);
+            return 0;
+        }
+        }
+
+        return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    }
 }
 
 MainWindow::MainWindow()
     : m_dnsManager(std::make_unique<DnsManager>())
     , m_configManager(std::make_unique<ConfigManager>())
 {
-    m_hbrBg = CreateSolidBrush(COLOR_BG);
-    m_hbrCard = CreateSolidBrush(COLOR_CARD_BG);
+    m_isDarkMode = (m_configManager->get_theme_mode() != "light");
+    auto pal = GetPalette(m_isDarkMode);
+    m_hbrBg = CreateSolidBrush(pal.bg);
+    m_hbrCard = CreateSolidBrush(pal.cardBg);
 }
 
 MainWindow::~MainWindow() {
@@ -74,6 +251,7 @@ MainWindow::~MainWindow() {
 
     if (m_hbrBg) DeleteObject(m_hbrBg);
     if (m_hbrCard) DeleteObject(m_hbrCard);
+    if (m_hToolTip) DestroyWindow(m_hToolTip);
 }
 
 bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
@@ -268,6 +446,10 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             }
             return 0;
         }
+        if (wmId == IDC_BTN_THEME_TOGGLE) {
+            toggle_theme();
+            return 0;
+        }
         if (wmId == IDM_TRAY_SHOW) {
             ShowWindow(m_hWnd, SW_RESTORE);
             SetForegroundWindow(m_hWnd);
@@ -346,7 +528,11 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     case WM_DRAWITEM: {
         auto* pDis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
         if (pDis && pDis->CtlType == ODT_BUTTON) {
-            draw_custom_button(pDis);
+            if (pDis->CtlID == IDC_BTN_THEME_TOGGLE) {
+                draw_theme_toggle_button(pDis);
+            } else {
+                draw_custom_button(pDis);
+            }
             return TRUE;
         }
         break;
@@ -356,29 +542,30 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         HDC hdcStatic = (HDC)wParam;
         HWND hwndStatic = (HWND)lParam;
         SetBkMode(hdcStatic, TRANSPARENT);
+        auto pal = GetPalette(m_isDarkMode);
 
         if (hwndStatic == m_hFooterVersion) {
-            SetTextColor(hdcStatic, COLOR_TEXT_MUTED);
+            SetTextColor(hdcStatic, pal.textMuted);
         } else if (hwndStatic == m_hStatusDnsList) {
-            SetTextColor(hdcStatic, COLOR_ACCENT_BLUE);
+            SetTextColor(hdcStatic, pal.accentBlue);
         } else if (hwndStatic == m_hStatusBadge) {
-            SetTextColor(hdcStatic, COLOR_ACCENT_GREEN);
+            SetTextColor(hdcStatic, pal.accentGreen);
         } else if (hwndStatic == m_hStatusPing) {
             if (m_currentPingMs > 0 && m_currentPingMs < 60) {
-                SetTextColor(hdcStatic, RGB(74, 222, 128)); // Bright Green
+                SetTextColor(hdcStatic, pal.accentGreen);
             } else if (m_currentPingMs >= 60 && m_currentPingMs <= 150) {
-                SetTextColor(hdcStatic, COLOR_ACCENT_AMBER);
+                SetTextColor(hdcStatic, pal.accentAmber);
             } else if (m_currentPingMs > 150 || m_currentPingMs < 0) {
-                SetTextColor(hdcStatic, COLOR_ACCENT_RED);
+                SetTextColor(hdcStatic, pal.accentRed);
             } else {
-                SetTextColor(hdcStatic, COLOR_TEXT_SECONDARY);
+                SetTextColor(hdcStatic, pal.textSecondary);
             }
         } else if (hwndStatic == m_hProfileDetails) {
-            SetTextColor(hdcStatic, RGB(203, 213, 225));
+            SetTextColor(hdcStatic, pal.textSecondary);
         } else if (hwndStatic == m_hStatusAdapterName) {
-            SetTextColor(hdcStatic, COLOR_TEXT_PRIMARY);
+            SetTextColor(hdcStatic, pal.textPrimary);
         } else {
-            SetTextColor(hdcStatic, COLOR_TEXT_SECONDARY);
+            SetTextColor(hdcStatic, pal.textSecondary);
         }
 
         if (hwndStatic == m_hStatusAdapterName || hwndStatic == m_hStatusDnsList || 
@@ -392,6 +579,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hWnd, &ps);
+        auto pal = GetPalette(m_isDarkMode);
 
         // Draw background elevated card for Status area with anti-aliasing
         {
@@ -402,8 +590,8 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             Gdiplus::GraphicsPath cardPath;
             AddRoundedRect(cardPath, Gdiplus::RectF(20.5f, 44.5f, static_cast<float>(WINDOW_WIDTH - 40) - 1.0f, 114.0f - 1.0f), 12.0f);
 
-            Gdiplus::SolidBrush cardBrush(Gdiplus::Color(255, 27, 31, 41));
-            Gdiplus::Pen cardPen(Gdiplus::Color(255, 45, 53, 70), 1.0f);
+            Gdiplus::SolidBrush cardBrush(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
+            Gdiplus::Pen cardPen(Gdiplus::Color(255, GetRValue(pal.cardBorder), GetGValue(pal.cardBorder), GetBValue(pal.cardBorder)), 1.0f);
 
             g.FillPath(&cardBrush, &cardPath);
             g.DrawPath(&cardPen, &cardPath);
@@ -435,12 +623,56 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
 void MainWindow::apply_modern_theme() {
     // Windows 10/11 Immersive Dark Mode
-    BOOL useDarkMode = TRUE;
+    BOOL useDarkMode = m_isDarkMode ? TRUE : FALSE;
     DwmSetWindowAttribute(m_hWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkMode, sizeof(useDarkMode));
 
     // Windows 11 Rounded Corners
     DWORD cornerPref = 2; // DWMWCP_ROUND
     DwmSetWindowAttribute(m_hWnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &cornerPref, sizeof(cornerPref));
+}
+
+void MainWindow::apply_theme(bool isDark) {
+    m_isDarkMode = isDark;
+    auto pal = GetPalette(m_isDarkMode);
+
+    if (m_hbrBg) DeleteObject(m_hbrBg);
+    m_hbrBg = CreateSolidBrush(pal.bg);
+
+    if (m_hbrCard) DeleteObject(m_hbrCard);
+    m_hbrCard = CreateSolidBrush(pal.cardBg);
+
+    // Update Windows 10/11 Immersive Dark Mode for Title Bar
+    BOOL useDarkMode = m_isDarkMode ? TRUE : FALSE;
+    DwmSetWindowAttribute(m_hWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkMode, sizeof(useDarkMode));
+
+    SetClassLongPtrW(m_hWnd, GCLP_HBRBACKGROUND, (LONG_PTR)m_hbrBg);
+
+    // Update Tooltip text for theme toggle button
+    if (m_hToolTip && m_hBtnThemeToggle) {
+        TOOLINFOW ti = { sizeof(TOOLINFOW) };
+        ti.hwnd = m_hWnd;
+        ti.uId = (UINT_PTR)m_hBtnThemeToggle;
+        std::wstring tip = m_isDarkMode ? L"Переключить на светлую тему" : L"Переключить на темную тему";
+        ti.lpszText = const_cast<LPWSTR>(tip.c_str());
+        SendMessageW(m_hToolTip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+    }
+
+    // Force full repaint of window and all child controls
+    InvalidateRect(m_hWnd, nullptr, TRUE);
+    RedrawWindow(m_hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+}
+
+void MainWindow::toggle_theme() {
+    apply_theme(!m_isDarkMode);
+    m_configManager->set_theme_mode(m_isDarkMode ? "dark" : "light");
+    m_configManager->save_to_file();
+}
+
+void MainWindow::attach_button_effects(HWND hBtn, UINT_PTR subclassId) {
+    if (!hBtn) return;
+    auto* anim = new ButtonAnimationState();
+    SetPropW(hBtn, L"QuickDnsAnim", reinterpret_cast<HANDLE>(anim));
+    SetWindowSubclass(hBtn, AnimatedButtonSubclassProc, subclassId, reinterpret_cast<DWORD_PTR>(anim));
 }
 
 void MainWindow::setup_fonts() {
@@ -477,9 +709,31 @@ void MainWindow::create_controls() {
     // 1. Status Card Header
     HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.2.1 — Менеджер DNS",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth, 24,
+        marginX, startY, contentWidth - 44, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)m_hFontHeader, TRUE);
+
+    // Theme Switcher button in top-right corner
+    m_hBtnThemeToggle = CreateWindowExW(0, WC_BUTTONW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX + contentWidth - 36, startY - 3, 36, 28,
+        m_hWnd, (HMENU)IDC_BTN_THEME_TOGGLE, m_hInstance, nullptr);
+
+    // Tooltip for Theme Switcher
+    m_hToolTip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        m_hWnd, nullptr, m_hInstance, nullptr);
+    SetWindowPos(m_hToolTip, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+    TOOLINFOW ti = { sizeof(TOOLINFOW) };
+    ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+    ti.hwnd = m_hWnd;
+    ti.uId = (UINT_PTR)m_hBtnThemeToggle;
+    std::wstring tip = m_isDarkMode ? L"Переключить на светлую тему" : L"Переключить на темную тему";
+    ti.lpszText = const_cast<LPWSTR>(tip.c_str());
+    SendMessageW(m_hToolTip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+
     startY += 30; // 44
 
     // Inside Status Card:
@@ -617,6 +871,114 @@ void MainWindow::create_controls() {
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(m_hFooterVersion, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+
+    // Attach smooth animations, hover effects and hand cursor (IDC_HAND) to all buttons
+    attach_button_effects(m_hBtnApply, 1);
+    attach_button_effects(m_hBtnBenchmark, 2);
+    attach_button_effects(m_hBtnResetDhcp, 3);
+    attach_button_effects(m_hBtnFlushDns, 4);
+    attach_button_effects(m_hBtnAddProfile, 5);
+    attach_button_effects(m_hBtnDeleteProfile, 6);
+    attach_button_effects(m_hBtnThemeToggle, 7);
+}
+
+void MainWindow::draw_theme_toggle_button(DRAWITEMSTRUCT* pDis) {
+    if (!pDis) return;
+
+    HDC hdc = pDis->hDC;
+    RECT rc = pDis->rcItem;
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+
+    auto pal = GetPalette(m_isDarkMode);
+
+    auto* anim = reinterpret_cast<ButtonAnimationState*>(GetPropW(pDis->hwndItem, L"QuickDnsAnim"));
+    float hoverVal = anim ? anim->hover : 0.0f;
+    bool isPressed = (pDis->itemState & ODS_SELECTED) || (anim && anim->isPressed);
+
+    // Double buffer
+    HDC hdcMem = CreateCompatibleDC(hdc);
+    HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+    HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
+
+    RECT rcMem = { 0, 0, w, h };
+
+    // Fill background for smooth corner blend
+    HBRUSH hbrWin = CreateSolidBrush(pal.bg);
+    FillRect(hdcMem, &rcMem, hbrWin);
+    DeleteObject(hbrWin);
+
+    COLORREF baseBg = m_isDarkMode ? RGB(27, 31, 41) : RGB(255, 255, 255);
+    COLORREF hoverBg = m_isDarkMode ? RGB(45, 53, 70) : RGB(241, 245, 249);
+    COLORREF pressBg = m_isDarkMode ? RGB(20, 24, 32) : RGB(226, 232, 240);
+
+    COLORREF baseBorder = m_isDarkMode ? RGB(45, 53, 70) : RGB(226, 232, 240);
+    COLORREF hoverBorder = m_isDarkMode ? RGB(251, 191, 36) : RGB(79, 70, 229);
+
+    COLORREF curBg = isPressed ? pressBg : LerpColor(baseBg, hoverBg, hoverVal);
+    COLORREF curBorder = LerpColor(baseBorder, hoverBorder, hoverVal);
+
+    {
+        Gdiplus::Graphics g(hdcMem);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+
+        Gdiplus::GraphicsPath path;
+        AddRoundedRect(path, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), 7.0f);
+
+        Gdiplus::SolidBrush br(Gdiplus::Color(255, GetRValue(curBg), GetGValue(curBg), GetBValue(curBg)));
+        float penWidth = 1.2f + 0.4f * hoverVal;
+        Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(curBorder), GetGValue(curBorder), GetBValue(curBorder)), penWidth);
+
+        g.FillPath(&br, &path);
+        g.DrawPath(&pen, &path);
+
+        // Center coordinates of the vector icon (with 1px depression on press)
+        float cx = w * 0.5f + (isPressed ? 1.0f : 0.0f);
+        float cy = h * 0.5f + (isPressed ? 1.0f : 0.0f);
+
+        if (m_isDarkMode) {
+            // Radiant Sun Icon (Warm Amber / Gold #FBBF24)
+            Gdiplus::Color sunColor(255, 251, 191, 36);
+            Gdiplus::SolidBrush sunBrush(sunColor);
+            Gdiplus::Pen sunPen(sunColor, 1.5f);
+            sunPen.SetLineCap(Gdiplus::LineCapRound, Gdiplus::LineCapRound, Gdiplus::DashCapRound);
+
+            // Core sun disc
+            float sunRadius = 4.2f;
+            g.FillEllipse(&sunBrush, cx - sunRadius, cy - sunRadius, sunRadius * 2.0f, sunRadius * 2.0f);
+
+            // 8 Radial rays
+            float rInner = 6.2f;
+            float rOuter = 9.2f;
+            for (int i = 0; i < 8; ++i) {
+                float angle = i * (3.14159265f / 4.0f);
+                float x1 = cx + std::cos(angle) * rInner;
+                float y1 = cy + std::sin(angle) * rInner;
+                float x2 = cx + std::cos(angle) * rOuter;
+                float y2 = cy + std::sin(angle) * rOuter;
+                g.DrawLine(&sunPen, x1, y1, x2, y2);
+            }
+        } else {
+            // Crescent Moon Icon (Indigo #4F46E5)
+            Gdiplus::Color moonColor(255, 79, 70, 229);
+            Gdiplus::SolidBrush moonBrush(moonColor);
+
+            Gdiplus::GraphicsPath moonPath;
+            float moonR = 6.5f;
+            moonPath.AddArc(cx - moonR, cy - moonR, moonR * 2.0f, moonR * 2.0f, -80.0f, 260.0f);
+            moonPath.AddArc(cx - moonR * 0.6f, cy - moonR * 0.8f, moonR * 1.5f, moonR * 1.5f, 150.0f, -200.0f);
+            moonPath.CloseFigure();
+
+            g.FillPath(&moonBrush, &moonPath);
+        }
+    }
+
+    BitBlt(hdc, rc.left, rc.top, w, h, hdcMem, 0, 0, SRCCOPY);
+
+    SelectObject(hdcMem, oldBmp);
+    DeleteObject(hbmMem);
+    DeleteDC(hdcMem);
 }
 
 void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
@@ -624,77 +986,92 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
 
     HDC hdc = pDis->hDC;
     RECT rc = pDis->rcItem;
-    bool isPressed  = (pDis->itemState & ODS_SELECTED) != 0;
+
+    auto pal = GetPalette(m_isDarkMode);
+
+    auto* anim = reinterpret_cast<ButtonAnimationState*>(GetPropW(pDis->hwndItem, L"QuickDnsAnim"));
+    float hoverVal = anim ? anim->hover : 0.0f;
+    bool isPressed  = (pDis->itemState & ODS_SELECTED) || (anim && anim->isPressed);
     bool isDisabled = (pDis->itemState & ODS_DISABLED) != 0;
 
-    COLORREF bgCol, borderCol, textCol;
+    COLORREF baseBg, hoverBg, pressBg, baseBorder, hoverBorder, textCol;
 
     if (pDis->CtlID == IDC_BTN_APPLY) {
         // Primary Blue Action Button
         if (isDisabled) {
-            bgCol = RGB(30, 45, 75);
-            borderCol = RGB(45, 60, 95);
-            textCol = RGB(120, 140, 175);
-        } else if (isPressed) {
-            bgCol = RGB(29, 78, 216);    // Blue 700
-            borderCol = RGB(37, 99, 235);
-            textCol = RGB(255, 255, 255);
+            baseBg = m_isDarkMode ? RGB(30, 45, 75) : RGB(191, 219, 254);
+            baseBorder = m_isDarkMode ? RGB(45, 60, 95) : RGB(147, 197, 253);
+            textCol = m_isDarkMode ? RGB(120, 140, 175) : RGB(96, 165, 250);
+            hoverBg = baseBg; pressBg = baseBg; hoverBorder = baseBorder;
         } else {
-            bgCol = RGB(37, 99, 235);    // Blue 600
-            borderCol = RGB(96, 165, 250); // Blue 400
-            textCol = RGB(255, 255, 255);
+            baseBg = pal.btnPrimaryBg;
+            hoverBg = pal.btnPrimaryHover;
+            pressBg = pal.btnPrimaryPress;
+            baseBorder = pal.btnPrimaryBorder;
+            hoverBorder = RGB(147, 197, 253);
+            textCol = pal.btnPrimaryText;
         }
     } else if (pDis->CtlID == IDC_BTN_BENCHMARK) {
-        // Indigo / Violet Speed Test Button
+        // Indigo Speed Test Button
         if (isDisabled) {
-            bgCol = RGB(45, 35, 75);
-            borderCol = RGB(65, 50, 105);
-            textCol = RGB(130, 120, 160);
-        } else if (isPressed) {
-            bgCol = RGB(67, 56, 202);    // Indigo 700
-            borderCol = RGB(79, 70, 229);
-            textCol = RGB(255, 255, 255);
+            baseBg = m_isDarkMode ? RGB(45, 35, 75) : RGB(224, 231, 255);
+            baseBorder = m_isDarkMode ? RGB(65, 50, 105) : RGB(199, 210, 254);
+            textCol = m_isDarkMode ? RGB(130, 120, 160) : RGB(129, 140, 248);
+            hoverBg = baseBg; pressBg = baseBg; hoverBorder = baseBorder;
         } else {
-            bgCol = RGB(79, 70, 229);    // Indigo 600
-            borderCol = RGB(129, 140, 248); // Indigo 400
-            textCol = RGB(255, 255, 255);
+            baseBg = pal.btnBenchBg;
+            hoverBg = pal.btnBenchHover;
+            pressBg = pal.btnBenchPress;
+            baseBorder = pal.btnBenchBorder;
+            hoverBorder = RGB(165, 180, 252);
+            textCol = pal.btnBenchText;
         }
     } else {
         // Utility Secondary Buttons
         if (isDisabled) {
-            bgCol = RGB(24, 27, 36);
-            borderCol = RGB(38, 43, 56);
-            textCol = RGB(85, 95, 115);
-        } else if (isPressed) {
-            bgCol = RGB(42, 48, 64);
-            borderCol = RGB(70, 80, 105);
-            textCol = RGB(255, 255, 255);
+            baseBg = m_isDarkMode ? RGB(24, 27, 36) : RGB(241, 245, 249);
+            baseBorder = m_isDarkMode ? RGB(38, 43, 56) : RGB(226, 232, 240);
+            textCol = m_isDarkMode ? RGB(85, 95, 115) : RGB(148, 163, 184);
+            hoverBg = baseBg; pressBg = baseBg; hoverBorder = baseBorder;
         } else {
-            bgCol = RGB(32, 36, 48);
+            baseBg = pal.btnUtilBg;
+            hoverBg = pal.btnUtilHover;
+            pressBg = pal.btnUtilPress;
+
             if (pDis->CtlID == IDC_BTN_RESET_DHCP) {
-                borderCol = RGB(217, 119, 6);   // Amber accent
+                baseBorder = pal.accentAmber;
+                hoverBorder = RGB(245, 158, 11);
             } else if (pDis->CtlID == IDC_BTN_FLUSH_DNS) {
-                borderCol = RGB(14, 165, 233);  // Sky Blue accent
+                baseBorder = pal.accentBlue;
+                hoverBorder = RGB(14, 165, 233);
             } else if (pDis->CtlID == IDC_BTN_ADD_PROFILE) {
-                borderCol = RGB(16, 185, 129);  // Emerald Green accent
+                baseBorder = pal.accentGreen;
+                hoverBorder = RGB(16, 185, 129);
             } else if (pDis->CtlID == IDC_BTN_DELETE_PROFILE) {
-                borderCol = RGB(239, 68, 68);   // Rose Red accent
+                baseBorder = pal.accentRed;
+                hoverBorder = RGB(239, 68, 68);
             } else {
-                borderCol = RGB(55, 65, 85);
+                baseBorder = pal.btnUtilBorder;
+                hoverBorder = m_isDarkMode ? RGB(100, 116, 139) : RGB(148, 163, 184);
             }
-            textCol = RGB(241, 245, 249);
+            textCol = pal.btnUtilText;
         }
     }
 
+    COLORREF bgCol = isDisabled ? baseBg : (isPressed ? pressBg : LerpColor(baseBg, hoverBg, hoverVal));
+    COLORREF borderCol = isDisabled ? baseBorder : (isPressed ? hoverBorder : LerpColor(baseBorder, hoverBorder, hoverVal));
+
     // Double buffer for clean flicker-free button paint
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
     HDC hdcMem = CreateCompatibleDC(hdc);
-    HBITMAP hbmMem = CreateCompatibleBitmap(hdc, rc.right - rc.left, rc.bottom - rc.top);
+    HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
     HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
-    RECT rcMem = { 0, 0, rc.right - rc.left, rc.bottom - rc.top };
+    RECT rcMem = { 0, 0, w, h };
 
     // Fill background for smooth corner blend
-    HBRUSH hbrWin = CreateSolidBrush(COLOR_BG);
+    HBRUSH hbrWin = CreateSolidBrush(pal.bg);
     FillRect(hdcMem, &rcMem, hbrWin);
     DeleteObject(hbrWin);
 
@@ -705,12 +1082,11 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
         Gdiplus::GraphicsPath btnPath;
-        float w = static_cast<float>(rcMem.right - rcMem.left);
-        float h = static_cast<float>(rcMem.bottom - rcMem.top);
-        AddRoundedRect(btnPath, Gdiplus::RectF(0.5f, 0.5f, w - 1.0f, h - 1.0f), 8.0f);
+        AddRoundedRect(btnPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), 8.0f);
 
         Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, GetRValue(bgCol), GetGValue(bgCol), GetBValue(bgCol)));
-        Gdiplus::Pen borderPen(Gdiplus::Color(255, GetRValue(borderCol), GetGValue(borderCol), GetBValue(borderCol)), 1.2f);
+        float penWidth = 1.2f + 0.4f * hoverVal;
+        Gdiplus::Pen borderPen(Gdiplus::Color(255, GetRValue(borderCol), GetGValue(borderCol), GetBValue(borderCol)), penWidth);
 
         g.FillPath(&bgBrush, &btnPath);
         g.DrawPath(&borderPen, &btnPath);
@@ -724,11 +1100,20 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     SetTextColor(hdcMem, textCol);
     HGDIOBJ oldFont = SelectObject(hdcMem, (pDis->CtlID == IDC_BTN_APPLY || pDis->CtlID == IDC_BTN_BENCHMARK) ? m_hFontBold : m_hFontRegular);
 
-    DrawTextW(hdcMem, btnText, -1, &rcMem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    // Press animation: offset text slightly down & right when pressed!
+    RECT rcText = rcMem;
+    if (isPressed) {
+        rcText.left += 1;
+        rcText.top += 1;
+        rcText.right += 1;
+        rcText.bottom += 1;
+    }
+
+    DrawTextW(hdcMem, btnText, -1, &rcText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     SelectObject(hdcMem, oldFont);
 
-    BitBlt(hdc, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, hdcMem, 0, 0, SRCCOPY);
+    BitBlt(hdc, rc.left, rc.top, w, h, hdcMem, 0, 0, SRCCOPY);
 
     SelectObject(hdcMem, oldBmp);
     DeleteObject(hbmMem);
@@ -771,6 +1156,7 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
     }
 
     // Determine curve color based on latest valid latency
+    auto pal = GetPalette(m_isDarkMode);
     Gdiplus::Color lineColor;
     if (currentPing > 0 && currentPing < 60) {
         lineColor = Gdiplus::Color(255, 34, 197, 94);  // Emerald Green
@@ -779,7 +1165,7 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
     } else if (currentPing > 150) {
         lineColor = Gdiplus::Color(255, 239, 68, 68);  // Red
     } else {
-        lineColor = Gdiplus::Color(255, 56, 189, 248); // Sky Cyan
+        lineColor = Gdiplus::Color(255, GetRValue(pal.graphLine), GetGValue(pal.graphLine), GetBValue(pal.graphLine));
     }
 
     // GDI+ Anti-Aliased Rendering
@@ -791,13 +1177,13 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
         // 1. Draw smooth container background
         Gdiplus::GraphicsPath contPath;
         AddRoundedRect(contPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f), 8.0f);
-        Gdiplus::SolidBrush contBrush(Gdiplus::Color(255, 20, 24, 32));
-        Gdiplus::Pen contPen(Gdiplus::Color(255, 45, 54, 72), 1.0f);
+        Gdiplus::SolidBrush contBrush(Gdiplus::Color(255, GetRValue(pal.graphBg), GetGValue(pal.graphBg), GetBValue(pal.graphBg)));
+        Gdiplus::Pen contPen(Gdiplus::Color(255, GetRValue(pal.graphBorder), GetGValue(pal.graphBorder), GetBValue(pal.graphBorder)), 1.0f);
         g.FillPath(&contBrush, &contPath);
         g.DrawPath(&contPen, &contPath);
 
         // 2. Faint grid guide lines at 50ms and 100ms
-        Gdiplus::Pen gridPen(Gdiplus::Color(70, 100, 116, 139), 1.0f);
+        Gdiplus::Pen gridPen(Gdiplus::Color(100, GetRValue(pal.graphGrid), GetGValue(pal.graphGrid), GetBValue(pal.graphGrid)), 1.0f);
         gridPen.SetDashStyle(Gdiplus::DashStyleDash);
 
         if (maxMs >= 50) {
@@ -851,7 +1237,7 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
 
     // Top-left header: "Пинг (60 с)"
     SetBkMode(hdcMem, TRANSPARENT);
-    SetTextColor(hdcMem, RGB(148, 163, 184));
+    SetTextColor(hdcMem, pal.textMuted);
     HGDIOBJ oldFont = SelectObject(hdcMem, m_hFontSmall);
 
     RECT rcTitle = { 10, 6, width - 10, 20 };
@@ -870,7 +1256,7 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
         valCol = RGB(74, 222, 128);
     } else {
         valStr = L"—";
-        valCol = RGB(148, 163, 184);
+        valCol = pal.textMuted;
     }
 
     SetTextColor(hdcMem, valCol);

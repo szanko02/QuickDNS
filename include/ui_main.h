@@ -56,7 +56,13 @@ private:
 
     // Custom Graphical Rendering
     void draw_custom_button(DRAWITEMSTRUCT* pDis);
+    void draw_theme_toggle_button(DRAWITEMSTRUCT* pDis);
     void draw_sparkline(HWND hWnd, HDC hdc);
+    void attach_button_effects(HWND hBtn, UINT_PTR subclassId);
+
+    // Theme Management
+    void apply_theme(bool isDark);
+    void toggle_theme();
 
     // DNS Actions
     void apply_selected_dns();
@@ -82,10 +88,13 @@ private:
     // Custom Theme Brushes
     HBRUSH m_hbrBg = nullptr;
     HBRUSH m_hbrCard = nullptr;
+    bool m_isDarkMode = true;
 
     // Controls
     HWND m_hComboAdapter = nullptr;
     HWND m_hComboProfile = nullptr;
+    HWND m_hBtnThemeToggle = nullptr;
+    HWND m_hToolTip = nullptr;
     HWND m_hBtnApply = nullptr;
     HWND m_hBtnBenchmark = nullptr;
     HWND m_hBtnResetDhcp = nullptr;

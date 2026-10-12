@@ -20,6 +20,7 @@
 #define IDC_BTN_BENCHMARK           1015
 #define IDC_GRAPH_VIEW              1016
 #define IDC_STATUS_PING             1017
+#define IDC_BTN_THEME_TOGGLE        1020
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101
