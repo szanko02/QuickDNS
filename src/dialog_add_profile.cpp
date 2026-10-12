@@ -209,7 +209,7 @@ void AddProfileDialog::create_controls() {
 
     // 6. Action Buttons
     int btnWidth = (contentWidth - 12) / 2;
-    m_hBtnSave = CreateWindowExW(0, L"BUTTON", L"💾 Сохранить",
+    m_hBtnSave = CreateWindowExW(0, L"BUTTON", L"Сохранить",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
         marginX, curY, btnWidth, 34,
         m_hWnd, (HMENU)ID_BTN_SAVE, m_hInstance, nullptr);

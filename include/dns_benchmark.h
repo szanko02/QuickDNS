@@ -9,9 +9,9 @@
 namespace quickdns {
 
 enum class DnsQuality {
-    Fast,        // 🟢 Зеленый: < 150 ms
-    Moderate,    // 🟡 Оранжевый: 150 - 350 ms
-    SlowOrDown   // 🔴 Красный: > 350 ms или ошибка/тайм-аут
+    Fast,        // Зеленый: < 150 ms
+    Moderate,    // Оранжевый: 150 - 350 ms
+    SlowOrDown   // Красный: > 350 ms или ошибка/тайм-аут
 };
 
 struct DnsBenchmarkResult {
@@ -34,7 +34,7 @@ public:
      * @param timeout_ms Per-query timeout in milliseconds (default 1200ms).
      * @return Latency in milliseconds, or -1 if unreachable/timed out.
      */
-    static int ping_dns_server(const std::string& ip_str, int timeout_ms = 1200);
+    static int ping_dns_server(const std::string& ip_str, int timeout_ms = 1200, bool single_domain = false);
 
     /**
      * @brief Benchmarks a list of DNS profiles concurrently using multi-threading.

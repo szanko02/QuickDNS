@@ -14,14 +14,17 @@ int WINAPI wWinMain(
     UNREFERENCED_PARAMETER(hPrevInstance);
 
     // Determine initial show state
+    LPWSTR fullCmdLine = GetCommandLineW();
     int showCmd = nCmdShow;
-    if (lpCmdLine != nullptr && wcsstr(lpCmdLine, L"--minimized") != nullptr) {
+    if (fullCmdLine != nullptr && wcsstr(fullCmdLine, L"--minimized") != nullptr) {
         showCmd = SW_HIDE;
     }
 
+    bool noElevate = (fullCmdLine != nullptr && wcsstr(fullCmdLine, L"--no-elevate") != nullptr);
+
     // Ensure the application runs with elevated Administrator privileges.
     // Changing Windows network adapter IP/DNS settings requires elevation.
-    if (!quickdns::DnsManager::is_elevated()) {
+    if (!noElevate && !quickdns::DnsManager::is_elevated()) {
         wchar_t szExePath[MAX_PATH];
         if (GetModuleFileNameW(nullptr, szExePath, MAX_PATH)) {
             SHELLEXECUTEINFOW sei = {};

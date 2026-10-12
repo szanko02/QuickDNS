@@ -34,7 +34,7 @@ const std::vector<std::string> BENCHMARK_DOMAINS = {
 
 namespace quickdns {
 
-int DnsBenchmark::ping_dns_server(const std::string& ip_str, int timeout_ms) {
+int DnsBenchmark::ping_dns_server(const std::string& ip_str, int timeout_ms, bool single_domain) {
     if (ip_str.empty()) return -1;
     ensure_winsock();
 
@@ -122,9 +122,11 @@ int DnsBenchmark::ping_dns_server(const std::string& ip_str, int timeout_ms) {
                     auto t1 = std::chrono::steady_clock::now();
                     int ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
                     measured_latencies.push_back(ms);
+                    if (single_domain) break;
                 }
             }
         }
+        if (single_domain && !measured_latencies.empty()) break;
     }
 
     closesocket(sock);
@@ -165,7 +167,7 @@ std::vector<DnsBenchmarkResult> DnsBenchmark::run_benchmark(
             if (p.is_dhcp) {
                 r.latency_ms = 0;
                 r.quality = DnsQuality::Fast;
-                r.status_text = L"🟢 DHCP провайдера";
+                r.status_text = L"DHCP провайдера";
                 r.quality_label = L"Автоматический";
             } else {
                 int lat = ping_dns_server(p.primary_ipv4);
@@ -177,19 +179,19 @@ std::vector<DnsBenchmarkResult> DnsBenchmark::run_benchmark(
                 r.latency_ms = lat;
                 if (lat < 0) {
                     r.quality = DnsQuality::SlowOrDown;
-                    r.status_text = L"🔴 Тайм-аут";
+                    r.status_text = L"Тайм-аут";
                     r.quality_label = L"Недоступен";
                 } else if (lat < 150) {
                     r.quality = DnsQuality::Fast;
-                    r.status_text = L"🟢 " + std::to_wstring(lat) + L" мс";
+                    r.status_text = std::to_wstring(lat) + L" мс";
                     r.quality_label = L"Отличный";
                 } else if (lat <= 350) {
                     r.quality = DnsQuality::Moderate;
-                    r.status_text = L"🟡 " + std::to_wstring(lat) + L" мс";
+                    r.status_text = std::to_wstring(lat) + L" мс";
                     r.quality_label = L"Средний";
                 } else {
                     r.quality = DnsQuality::SlowOrDown;
-                    r.status_text = L"🔴 " + std::to_wstring(lat) + L" мс";
+                    r.status_text = std::to_wstring(lat) + L" мс";
                     r.quality_label = L"Медленный";
                 }
             }

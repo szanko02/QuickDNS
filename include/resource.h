@@ -17,8 +17,9 @@
 #define IDC_STATUS_TITLE            1011
 #define IDC_STATUS_DNS_VAL          1012
 #define IDC_CHECK_AUTORUN           1013
-#define IDC_CHECK_START_MINIMIZED   1014
 #define IDC_BTN_BENCHMARK           1015
+#define IDC_GRAPH_VIEW              1016
+#define IDC_STATUS_PING             1017
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101

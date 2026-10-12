@@ -8,7 +8,7 @@ Copy-Item -Path (Join-Path $rootDir "QuickDNS.exe") -Destination (Join-Path $dis
 $readmeText = @"
 ==================================================
 QuickDNS — Быстрая смена DNS в 1 клик для Windows
-Версия: 1.2.0
+Версия: 1.2.1
 ==================================================
 
 КАК ЗАПУСТИТЬ:
@@ -19,7 +19,8 @@ QuickDNS — Быстрая смена DNS в 1 клик для Windows
 
 ОСОБЕННОСТИ:
 - Приложение не требует установки (Portable).
-- Встроенный тест скорости (пинг) всех DNS-серверов в реальном времени с цветовой градацией.
+- Минималистичный график стабильности пинга в реальном времени (sparkline) рядом со статусом DNS.
+- Встроенный тест скорости (пинг) всех DNS-серверов с цветовой градацией.
 - Поддержка DoH адресов (DNS-over-HTTPS) для всех популярных обходных DNS.
 - Сворачивается в системный трей (панель задач) возле часов.
 - Правый клик по иконке в трее позволяет переключать DNS в 1 клик без открытия главного окна.
@@ -32,7 +33,7 @@ https://github.com/szanko02/QuickDNS
 
 [System.IO.File]::WriteAllText((Join-Path $distDir "README.txt"), $readmeText, [System.Text.Encoding]::UTF8)
 
-$zipPath = Join-Path $rootDir "dist\QuickDNS-v1.2.0-Portable.zip"
+$zipPath = Join-Path $rootDir "dist\QuickDNS-v1.2.1-Portable.zip"
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 Compress-Archive -Path "$distDir\*" -DestinationPath $zipPath -Force
 

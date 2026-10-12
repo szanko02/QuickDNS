@@ -147,7 +147,7 @@ void BenchmarkDialog::create_controls() {
     int contentWidth = DIALOG_WIDTH - 56;
     int curY = 16;
 
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"⚡ Тест скорости и отклика DNS",
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"Тест скорости и отклика DNS",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, curY, contentWidth, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -186,7 +186,7 @@ void BenchmarkDialog::create_controls() {
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
 
     col.pszText = const_cast<LPWSTR>(L"Статус");
-    col.cx = 40;
+    col.cx = 48;
     ListView_InsertColumn(m_hListView, 0, &col);
 
     col.pszText = const_cast<LPWSTR>(L"Профиль DNS");
@@ -209,14 +209,14 @@ void BenchmarkDialog::create_controls() {
 
     // Buttons
     int btnWidth = 180;
-    m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"⚡ Применить этот DNS",
+    m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить этот DNS",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
         marginX, curY, btnWidth, 34,
         m_hWnd, (HMENU)IDC_BTN_BENCHMARK_APPLY, m_hInstance, nullptr);
     SendMessageW(m_hBtnApply, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
     EnableWindow(m_hBtnApply, FALSE);
 
-    m_hBtnRetest = CreateWindowExW(0, WC_BUTTONW, L"🔄 Повторить тест",
+    m_hBtnRetest = CreateWindowExW(0, WC_BUTTONW, L"Повторить тест",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         marginX + btnWidth + 10, curY, 140, 34,
         m_hWnd, (HMENU)IDC_BTN_BENCHMARK_RETEST, m_hInstance, nullptr);
@@ -235,7 +235,7 @@ void BenchmarkDialog::start_benchmark() {
 
     EnableWindow(m_hBtnRetest, FALSE);
     EnableWindow(m_hBtnApply, FALSE);
-    SetWindowTextW(m_hStatusText, L"⏳ Тестирование серверов... Подождите 1-2 секунды.");
+    SetWindowTextW(m_hStatusText, L"Тестирование серверов... Подождите 1-2 секунды.");
 
     ListView_DeleteAllItems(m_hListView);
 
@@ -265,12 +265,12 @@ void BenchmarkDialog::update_list_with_results() {
 
         std::wstring dot;
         if (r.quality == DnsQuality::Fast) {
-            dot = L"🟢";
+            dot = L"[OK]";
             if (fastestIdx == -1 && r.latency_ms > 0) fastestIdx = static_cast<int>(i);
         } else if (r.quality == DnsQuality::Moderate) {
-            dot = L"🟡";
+            dot = L"[MID]";
         } else {
-            dot = L"🔴";
+            dot = L"[ERR]";
         }
 
         item.pszText = const_cast<LPWSTR>(dot.c_str());
@@ -292,7 +292,7 @@ void BenchmarkDialog::update_list_with_results() {
         EnableWindow(m_hBtnApply, TRUE);
     }
 
-    SetWindowTextW(m_hStatusText, L"✅ Тестирование завершено! Серверы отсортированы по скорости.");
+    SetWindowTextW(m_hStatusText, L"Тестирование завершено! Серверы отсортированы по скорости.");
     EnableWindow(m_hBtnRetest, TRUE);
 }
 
