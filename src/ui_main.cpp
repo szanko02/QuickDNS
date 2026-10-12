@@ -38,7 +38,7 @@ namespace {
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
     constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.2.1 — Быстрая смена DNS в 1 клик";
 
-    constexpr int WINDOW_WIDTH  = 540;
+    constexpr int WINDOW_WIDTH  = 560;
     constexpr int WINDOW_HEIGHT = 720;
 
     struct ColorPalette {
@@ -775,26 +775,29 @@ void MainWindow::create_controls() {
     startY += 30; // 44
 
     // Inside Status Card:
-    // Left: connection info, DNS IP, status, live ping (width = 300)
-    int leftInfoW = 295;
+    // Right side of Card: Minimalist Sparkline Graph Control!
+    int graphW = 145;
+    int graphH = 94;
+    int graphX = marginX + contentWidth - graphW - 10;
+    int leftInfoW = graphX - (marginX + 14) - 8;
     int insideCardY = startY + 10;
 
     m_hStatusAdapterName = CreateWindowExW(0, L"STATIC", L"Подключение: Определение сети...",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_ENDELLIPSIS,
         marginX + 14, insideCardY, leftInfoW, 20,
         m_hWnd, (HMENU)IDC_STATUS_TITLE, m_hInstance, nullptr);
     SendMessageW(m_hStatusAdapterName, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
     insideCardY += 24;
 
     m_hStatusDnsList = CreateWindowExW(0, L"STATIC", L"Текущий DNS: Загрузка...",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP,
         marginX + 14, insideCardY, leftInfoW, 20,
         m_hWnd, (HMENU)IDC_STATUS_DNS_VAL, m_hInstance, nullptr);
-    SendMessageW(m_hStatusDnsList, WM_SETFONT, (WPARAM)m_hFontMonospace, TRUE);
+    SendMessageW(m_hStatusDnsList, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     insideCardY += 24;
 
     m_hStatusBadge = CreateWindowExW(0, L"STATIC", L"Статус: Проверка...",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_ENDELLIPSIS,
         marginX + 14, insideCardY, leftInfoW, 20,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(m_hStatusBadge, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
@@ -806,10 +809,6 @@ void MainWindow::create_controls() {
         m_hWnd, (HMENU)IDC_STATUS_PING, m_hInstance, nullptr);
     SendMessageW(m_hStatusPing, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
 
-    // Right side of Card: Minimalist Sparkline Graph Control!
-    int graphW = 175;
-    int graphH = 94;
-    int graphX = marginX + contentWidth - graphW - 10;
     int graphY = startY + 10;
 
     m_hGraphWnd = CreateWindowExW(
