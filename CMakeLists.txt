@@ -32,6 +32,7 @@ if(MSVC)
         gdi32.lib
         advapi32.lib
         ole32.lib
+        oleaut32.lib
         uuid.lib
         gdiplus.lib
     )
@@ -48,6 +49,7 @@ else()
         gdi32
         advapi32
         ole32
+        oleaut32
         uuid
         gdiplus
     )

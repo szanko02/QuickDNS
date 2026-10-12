@@ -11,11 +11,14 @@
 #include <objbase.h>
 #include <propidl.h>
 #include <gdiplus.h>
+#include <initguid.h>
+#include <uiautomation.h>
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "oleaut32.lib")
 
 using QuickDns::Encoding::utf8_to_wide;
 using QuickDns::Encoding::wide_to_utf8;
@@ -1747,7 +1750,7 @@ void MainWindow::open_windows_network_settings() {
         }
     }
 
-    // Open Windows 11 Modern Settings directly to Ethernet or Wi-Fi settings
+    // 1. Open Windows 11 Modern Settings directly to Ethernet or Wi-Fi settings
     HINSTANCE res = ShellExecuteW(m_hWnd, L"open", targetUri.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(res) <= 32) {
         // Fallback 1: general network settings page
@@ -1755,8 +1758,126 @@ void MainWindow::open_windows_network_settings() {
         if (reinterpret_cast<INT_PTR>(resNet) <= 32) {
             // Fallback 2: classic Network Connections control panel
             ShellExecuteW(m_hWnd, L"open", L"control.exe", L"ncpa.cpl", nullptr, SW_SHOWNORMAL);
+            return;
         }
     }
+
+    // 2. Automatically click the "Изменить" (Edit) DNS button in Settings via UI Automation
+    std::thread([]() {
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (FAILED(hr)) return;
+
+        IUIAutomation* pAutomation = nullptr;
+        hr = CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_IUIAutomation, reinterpret_cast<void**>(&pAutomation));
+        if (SUCCEEDED(hr) && pAutomation) {
+            IUIAutomationElement* pRoot = nullptr;
+            if (SUCCEEDED(pAutomation->GetRootElement(&pRoot)) && pRoot) {
+                // Poll every 250ms for up to ~4 seconds for the XAML page to finish loading
+                for (int attempt = 0; attempt < 16; ++attempt) {
+                    Sleep(250);
+
+                    IUIAutomationCondition* pTrueCond = nullptr;
+                    pAutomation->CreateTrueCondition(&pTrueCond);
+                    IUIAutomationElementArray* pWindows = nullptr;
+
+                    if (SUCCEEDED(pRoot->FindAll(TreeScope_Children, pTrueCond, &pWindows)) && pWindows) {
+                        int winCount = 0;
+                        pWindows->get_Length(&winCount);
+
+                        bool clicked = false;
+                        for (int w = 0; w < winCount && !clicked; ++w) {
+                            IUIAutomationElement* pWin = nullptr;
+                            pWindows->GetElement(w, &pWin);
+                            if (!pWin) continue;
+
+                            BSTR bCls = nullptr;
+                            BSTR bTitle = nullptr;
+                            pWin->get_CurrentClassName(&bCls);
+                            pWin->get_CurrentName(&bTitle);
+                            std::wstring cls = bCls ? bCls : L"";
+                            std::wstring title = bTitle ? bTitle : L"";
+                            if (bCls) SysFreeString(bCls);
+                            if (bTitle) SysFreeString(bTitle);
+
+                            if (cls == L"ApplicationFrameWindow" || title.find(L"Настройки") != std::wstring::npos || title.find(L"Settings") != std::wstring::npos) {
+                                VARIANT varBtn;
+                                varBtn.vt = VT_I4;
+                                varBtn.lVal = UIA_ButtonControlTypeId;
+                                IUIAutomationCondition* pBtnCond = nullptr;
+                                if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtn, &pBtnCond)) && pBtnCond) {
+                                    IUIAutomationElementArray* pButtons = nullptr;
+                                    if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pBtnCond, &pButtons)) && pButtons) {
+                                        int btnCount = 0;
+                                        pButtons->get_Length(&btnCount);
+
+                                        for (int b = 0; b < btnCount; ++b) {
+                                            IUIAutomationElement* pButton = nullptr;
+                                            pButtons->GetElement(b, &pButton);
+                                            if (!pButton) continue;
+
+                                            BSTR bBtnName = nullptr;
+                                            BSTR bAutoId = nullptr;
+                                            pButton->get_CurrentName(&bBtnName);
+                                            pButton->get_CurrentAutomationId(&bAutoId);
+                                            std::wstring btnName = bBtnName ? bBtnName : L"";
+                                            std::wstring btnAutoId = bAutoId ? bAutoId : L"";
+                                            if (bBtnName) SysFreeString(bBtnName);
+                                            if (bAutoId) SysFreeString(bAutoId);
+
+                                            bool isIp = (btnAutoId.find(L"Ip") != std::wstring::npos || btnAutoId.find(L"IP") != std::wstring::npos || btnName.find(L"IP") != std::wstring::npos || btnName == L"Редактировать");
+                                            bool isTarget = false;
+                                            if (!isIp) {
+                                                if (btnAutoId.find(L"Dns") != std::wstring::npos || btnAutoId.find(L"dns") != std::wstring::npos) {
+                                                    isTarget = true;
+                                                } else if (btnName == L"Изменить") {
+                                                    // Russian Windows 11 specifically names the DNS edit button "Изменить" (and IP "Редактировать")
+                                                    isTarget = true;
+                                                } else if (btnName.find(L"DNS") != std::wstring::npos || btnName.find(L"dns") != std::wstring::npos) {
+                                                    isTarget = true;
+                                                } else if (btnName == L"Edit") {
+                                                    BSTR bHelp = nullptr;
+                                                    pButton->get_CurrentHelpText(&bHelp);
+                                                    std::wstring help = bHelp ? bHelp : L"";
+                                                    if (bHelp) SysFreeString(bHelp);
+                                                    if (help.find(L"DNS") != std::wstring::npos || help.find(L"dns") != std::wstring::npos) {
+                                                        isTarget = true;
+                                                    }
+                                                }
+                                            }
+
+                                            if (isTarget) {
+                                                IUIAutomationInvokePattern* pInvoke = nullptr;
+                                                if (SUCCEEDED(pButton->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pInvoke))) && pInvoke) {
+                                                    pInvoke->Invoke();
+                                                    pInvoke->Release();
+                                                    clicked = true;
+                                                    pButton->Release();
+                                                    break;
+                                                }
+                                            }
+                                            pButton->Release();
+                                        }
+                                        pButtons->Release();
+                                    }
+                                    pBtnCond->Release();
+                                }
+                            }
+                            pWin->Release();
+                        }
+                        pWindows->Release();
+                        if (clicked) {
+                            if (pTrueCond) pTrueCond->Release();
+                            break;
+                        }
+                    }
+                    if (pTrueCond) pTrueCond->Release();
+                }
+                pRoot->Release();
+            }
+            pAutomation->Release();
+        }
+        CoUninitialize();
+    }).detach();
 }
 
 void MainWindow::copy_text_to_clipboard(const std::wstring& text) {
