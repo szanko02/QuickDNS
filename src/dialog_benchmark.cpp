@@ -143,8 +143,11 @@ void BenchmarkDialog::apply_theme() {
 }
 
 void BenchmarkDialog::create_controls() {
+    RECT rcClient = {};
+    GetClientRect(m_hWnd, &rcClient);
+    int clientWidth = rcClient.right - rcClient.left;
     int marginX = 20;
-    int contentWidth = DIALOG_WIDTH - 56;
+    int contentWidth = clientWidth - (marginX * 2);
     int curY = 16;
 
     HWND hTitle = CreateWindowExW(0, L"STATIC", L"Тест скорости и отклика DNS",

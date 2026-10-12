@@ -38,8 +38,8 @@ namespace {
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
     constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.2.1 — Быстрая смена DNS в 1 клик";
 
-    constexpr int WINDOW_WIDTH  = 560;
-    constexpr int WINDOW_HEIGHT = 790;
+    constexpr int WINDOW_CLIENT_WIDTH  = 560;
+    constexpr int WINDOW_CLIENT_HEIGHT = 754;
 
     struct ColorPalette {
         COLORREF bg;
@@ -401,19 +401,25 @@ bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
     m_hInstance = hInstance;
     register_window_class();
 
+    DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    RECT wr = { 0, 0, WINDOW_CLIENT_WIDTH, WINDOW_CLIENT_HEIGHT };
+    AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
+    int winWidth = wr.right - wr.left;
+    int winHeight = wr.bottom - wr.top;
+
     // Center window on screen
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-    int posX = (screenWidth - WINDOW_WIDTH) / 2;
-    int posY = (screenHeight - WINDOW_HEIGHT) / 2;
+    int posX = (screenWidth - winWidth) / 2;
+    int posY = (screenHeight - winHeight) / 2;
 
     m_hWnd = CreateWindowExW(
         0,
         WINDOW_CLASS_NAME,
         WINDOW_TITLE,
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        dwStyle,
         posX, posY,
-        WINDOW_WIDTH, WINDOW_HEIGHT,
+        winWidth, winHeight,
         nullptr,
         nullptr,
         m_hInstance,
@@ -782,6 +788,12 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         HDC hdc = BeginPaint(hWnd, &ps);
         auto pal = GetPalette(m_isDarkMode);
 
+        RECT rcClient = {};
+        GetClientRect(hWnd, &rcClient);
+        int clientWidth = rcClient.right - rcClient.left;
+        float marginX = 20.0f;
+        float cardWidth = static_cast<float>(clientWidth) - (2.0f * marginX);
+
         // Draw background elevated card for Status area with anti-aliasing
         {
             Gdiplus::Graphics g(hdc);
@@ -789,7 +801,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
             Gdiplus::GraphicsPath cardPath;
-            AddRoundedRect(cardPath, Gdiplus::RectF(20.5f, 44.5f, static_cast<float>(WINDOW_WIDTH - 40) - 1.0f, 114.0f - 1.0f), 12.0f);
+            AddRoundedRect(cardPath, Gdiplus::RectF(marginX + 0.5f, 44.5f, cardWidth - 1.0f, 114.0f - 1.0f), 12.0f);
 
             Gdiplus::SolidBrush cardBrush(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
             Gdiplus::Pen cardPen(Gdiplus::Color(255, GetRValue(pal.cardBorder), GetGValue(pal.cardBorder), GetBValue(pal.cardBorder)), 1.0f);
@@ -915,9 +927,12 @@ void MainWindow::setup_fonts() {
 }
 
 void MainWindow::create_controls() {
-    int startY = 14;
+    RECT rcClient = {};
+    GetClientRect(m_hWnd, &rcClient);
+    int clientWidth = rcClient.right - rcClient.left;
     int marginX = 20;
-    int contentWidth = WINDOW_WIDTH - 40;
+    int contentWidth = clientWidth - (marginX * 2);
+    int startY = 14;
 
     // 1. Status Card Header
     HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.2.1 — Менеджер DNS",

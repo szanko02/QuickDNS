@@ -121,8 +121,11 @@ void AddProfileDialog::apply_theme() {
 }
 
 void AddProfileDialog::create_controls() {
+    RECT rcClient = {};
+    GetClientRect(m_hWnd, &rcClient);
+    int clientWidth = rcClient.right - rcClient.left;
     int marginX = 20;
-    int contentWidth = DIALOG_WIDTH - 56;
+    int contentWidth = clientWidth - (2 * marginX);
     int curY = 16;
 
     HWND hTitle = CreateWindowExW(0, L"STATIC", L"Новый профиль DNS",
