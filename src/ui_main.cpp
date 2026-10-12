@@ -1762,8 +1762,21 @@ void MainWindow::open_windows_network_settings() {
         }
     }
 
-    // 2. Automatically click the "Изменить" (Edit) DNS button in Settings via UI Automation
-    std::thread([]() {
+    // 2. Automatically click the "Изменить" (Edit) DNS button in Settings via UI Automation,
+    //    and if a DoH template is present, configure manual DoH template and save.
+    std::wstring dohTemplate;
+    if (m_hEditProfileDoh) {
+        wchar_t buf[512] = {0};
+        GetWindowTextW(m_hEditProfileDoh, buf, 512);
+        dohTemplate = buf;
+        while (!dohTemplate.empty() && (dohTemplate.back() == L' ' || dohTemplate.back() == L'\r' || dohTemplate.back() == L'\n' || dohTemplate.back() == L'\t')) dohTemplate.pop_back();
+        while (!dohTemplate.empty() && (dohTemplate.front() == L' ' || dohTemplate.front() == L'\t')) dohTemplate.erase(0, 1);
+    }
+    if (dohTemplate.empty() && m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profiles.size())) {
+        dohTemplate = utf8_to_wide(m_profiles[m_selectedProfileIndex].doh_template);
+    }
+
+    std::thread([dohTemplate]() {
         HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         if (FAILED(hr)) return;
 
@@ -2000,8 +2013,163 @@ void MainWindow::open_windows_network_settings() {
                                 }
 
                                 if (pWalker) pWalker->Release();
+
+                                // If the DNS Edit button was clicked, automate the ContentDialog "Изменить настройки DNS"
+                                if (clicked && !dohTemplate.empty()) {
+                                    bool dialogHandled = false;
+                                    for (int dAttempt = 0; dAttempt < 15 && !dialogHandled; ++dAttempt) {
+                                        Sleep(250);
+
+                                        VARIANT varCombo;
+                                        varCombo.vt = VT_I4;
+                                        varCombo.lVal = UIA_ComboBoxControlTypeId;
+                                        IUIAutomationCondition* pComboCond = nullptr;
+                                        if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varCombo, &pComboCond)) && pComboCond) {
+                                            IUIAutomationElementArray* pCombos = nullptr;
+                                            if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pComboCond, &pCombos)) && pCombos) {
+                                                int cCount = 0;
+                                                pCombos->get_Length(&cCount);
+
+                                                if (cCount > 0) {
+                                                    for (int c = 0; c < cCount; ++c) {
+                                                        IUIAutomationElement* pCombo = nullptr;
+                                                        pCombos->GetElement(c, &pCombo);
+                                                        if (!pCombo) continue;
+
+                                                        IUIAutomationExpandCollapsePattern* pExp = nullptr;
+                                                        if (SUCCEEDED(pCombo->GetCurrentPatternAs(UIA_ExpandCollapsePatternId, IID_IUIAutomationExpandCollapsePattern, reinterpret_cast<void**>(&pExp))) && pExp) {
+                                                            pExp->Expand();
+                                                            Sleep(100);
+
+                                                            IUIAutomationCondition* pTrue = nullptr;
+                                                            pAutomation->CreateTrueCondition(&pTrue);
+                                                            IUIAutomationElementArray* pItems = nullptr;
+                                                            if (SUCCEEDED(pCombo->FindAll(TreeScope_Descendants, pTrue, &pItems)) && pItems) {
+                                                                int itCount = 0;
+                                                                pItems->get_Length(&itCount);
+                                                                for (int it = 0; it < itCount; ++it) {
+                                                                    IUIAutomationElement* pItem = nullptr;
+                                                                    pItems->GetElement(it, &pItem);
+                                                                    if (pItem) {
+                                                                        BSTR bItemName = nullptr;
+                                                                        pItem->get_CurrentName(&bItemName);
+                                                                        std::wstring iName = bItemName ? to_lower_str(bItemName) : L"";
+                                                                        if (bItemName) SysFreeString(bItemName);
+
+                                                                        if (iName.find(L"ручной") != std::wstring::npos || iName.find(L"manual") != std::wstring::npos) {
+                                                                            IUIAutomationSelectionItemPattern* pSel = nullptr;
+                                                                            if (SUCCEEDED(pItem->GetCurrentPatternAs(UIA_SelectionItemPatternId, IID_IUIAutomationSelectionItemPattern, reinterpret_cast<void**>(&pSel))) && pSel) {
+                                                                                pSel->Select();
+                                                                                pSel->Release();
+                                                                            }
+                                                                            pItem->Release();
+                                                                            break;
+                                                                        }
+                                                                        pItem->Release();
+                                                                    }
+                                                                }
+                                                                pItems->Release();
+                                                            }
+                                                            if (pTrue) pTrue->Release();
+                                                            pExp->Collapse();
+                                                            pExp->Release();
+                                                        }
+                                                        pCombo->Release();
+                                                    }
+
+                                                    Sleep(200);
+
+                                                    VARIANT varEdit;
+                                                    varEdit.vt = VT_I4;
+                                                    varEdit.lVal = UIA_EditControlTypeId;
+                                                    IUIAutomationCondition* pEditCond = nullptr;
+                                                    if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varEdit, &pEditCond)) && pEditCond) {
+                                                        IUIAutomationElementArray* pEdits = nullptr;
+                                                        if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pEditCond, &pEdits)) && pEdits) {
+                                                            int eCount = 0;
+                                                            pEdits->get_Length(&eCount);
+                                                            for (int e = 0; e < eCount; ++e) {
+                                                                IUIAutomationElement* pEdit = nullptr;
+                                                                pEdits->GetElement(e, &pEdit);
+                                                                if (!pEdit) continue;
+
+                                                                BSTR bEdName = nullptr;
+                                                                BSTR bEdId = nullptr;
+                                                                pEdit->get_CurrentName(&bEdName);
+                                                                pEdit->get_CurrentAutomationId(&bEdId);
+                                                                std::wstring edName = bEdName ? to_lower_str(bEdName) : L"";
+                                                                std::wstring edId = bEdId ? to_lower_str(bEdId) : L"";
+                                                                if (bEdName) SysFreeString(bEdName);
+                                                                if (bEdId) SysFreeString(bEdId);
+
+                                                                if (edName.find(L"шаблон") != std::wstring::npos || 
+                                                                    edName.find(L"template") != std::wstring::npos ||
+                                                                    edId.find(L"template") != std::wstring::npos ||
+                                                                    edId.find(L"doh") != std::wstring::npos) {
+                                                                    IUIAutomationValuePattern* pVal = nullptr;
+                                                                    if (SUCCEEDED(pEdit->GetCurrentPatternAs(UIA_ValuePatternId, IID_IUIAutomationValuePattern, reinterpret_cast<void**>(&pVal))) && pVal) {
+                                                                        BSTR bDohVal = SysAllocString(dohTemplate.c_str());
+                                                                        if (bDohVal) {
+                                                                            pVal->SetValue(bDohVal);
+                                                                            SysFreeString(bDohVal);
+                                                                        }
+                                                                        pVal->Release();
+                                                                    }
+                                                                }
+                                                                pEdit->Release();
+                                                            }
+                                                            pEdits->Release();
+                                                        }
+                                                        pEditCond->Release();
+                                                    }
+
+                                                    Sleep(200);
+
+                                                    VARIANT varBtnSave;
+                                                    varBtnSave.vt = VT_I4;
+                                                    varBtnSave.lVal = UIA_ButtonControlTypeId;
+                                                    IUIAutomationCondition* pSaveCond = nullptr;
+                                                    if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtnSave, &pSaveCond)) && pSaveCond) {
+                                                        IUIAutomationElementArray* pSaveBtns = nullptr;
+                                                        if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pSaveCond, &pSaveBtns)) && pSaveBtns) {
+                                                            int sCount = 0;
+                                                            pSaveBtns->get_Length(&sCount);
+                                                            for (int s = 0; s < sCount; ++s) {
+                                                                IUIAutomationElement* pSaveBtn = nullptr;
+                                                                pSaveBtns->GetElement(s, &pSaveBtn);
+                                                                if (!pSaveBtn) continue;
+
+                                                                BSTR bSName = nullptr;
+                                                                pSaveBtn->get_CurrentName(&bSName);
+                                                                std::wstring sName = bSName ? to_lower_str(bSName) : L"";
+                                                                if (bSName) SysFreeString(bSName);
+
+                                                                if (sName == L"сохранить" || sName == L"save") {
+                                                                    IUIAutomationInvokePattern* pSaveInv = nullptr;
+                                                                    if (SUCCEEDED(pSaveBtn->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pSaveInv))) && pSaveInv) {
+                                                                        pSaveInv->Invoke();
+                                                                        pSaveInv->Release();
+                                                                        dialogHandled = true;
+                                                                        pSaveBtn->Release();
+                                                                        break;
+                                                                    }
+                                                                }
+                                                                pSaveBtn->Release();
+                                                            }
+                                                            pSaveBtns->Release();
+                                                        }
+                                                        pSaveCond->Release();
+                                                    }
+                                                }
+                                                pCombos->Release();
+                                            }
+                                            pComboCond->Release();
+                                        }
+                                    }
+                                }
                             }
                             pWin->Release();
+                            if (clicked) break;
                         }
                         pWindows->Release();
                         if (clicked) {

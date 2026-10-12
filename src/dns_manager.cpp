@@ -753,6 +753,15 @@ void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::
         log_info(L"Registered DoH server in Dnscache\\Parameters\\DohWellKnownServers");
     }
 
+    // Set EnableAutoDoh = 2 (Enforce DoH encryption system-wide for known servers)
+    HKEY hDnsParam = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters", 0, KEY_SET_VALUE, &hDnsParam) == ERROR_SUCCESS) {
+        DWORD enableAutoDoh = 2;
+        RegSetValueExW(hDnsParam, L"EnableAutoDoh", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&enableAutoDoh), sizeof(DWORD));
+        RegCloseKey(hDnsParam);
+        log_info(L"Set EnableAutoDoh=2 in Dnscache\\Parameters");
+    }
+
     // 2. Windows netsh encryption (tries 'set encryption' first; if not found, tries 'add encryption')
     std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
     std::wstring cmd_set = netsh_path + L" dns set encryption server=" + server_ip +
