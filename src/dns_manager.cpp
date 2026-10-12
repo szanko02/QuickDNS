@@ -718,6 +718,18 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
         }
     }
 
+    std::vector<std::wstring> server_list;
+    if (!primary_dns.empty()) server_list.push_back(primary_dns);
+    if (!secondary_dns.empty()) server_list.push_back(secondary_dns);
+
+    std::wstring guid_str = adapter.id;
+    if (guid_str.empty() && adapter.guid != GUID_NULL) {
+        guid_str = guid_to_string(adapter.guid);
+    }
+    if (!guid_str.empty()) {
+        configure_interface_doh(guid_str, server_list, doh_template);
+    }
+
     if (!modern_api_ok && !netsh_ok) {
         set_last_error(L"Не удалось применить DNS ни через Windows API, ни через netsh. Проверьте права Администратора.");
         return false;
@@ -782,6 +794,53 @@ void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::
         L"  Set-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue "
         L"}\"";
     execute_hidden_process(ps_cmd);
+}
+
+void DnsManager::configure_interface_doh(const std::wstring& adapter_id, 
+                                         const std::vector<std::wstring>& servers, 
+                                         const std::wstring& doh_template) {
+    if (adapter_id.empty()) {
+        return;
+    }
+
+    std::wstring guid_str = adapter_id;
+    if (guid_str.front() != L'{') guid_str = L"{" + guid_str;
+    if (guid_str.back() != L'}') guid_str += L"}";
+
+    std::wstring base_v4 = L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\InterfaceSpecificParameters\\" + guid_str + L"\\DohInterfaceSettings\\Doh";
+    std::wstring base_v6 = L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\InterfaceSpecificParameters\\" + guid_str + L"\\DohInterfaceSettings\\Doh6";
+
+    // Clean up existing adapter DoH keys to prevent stale server templates
+    RegDeleteTreeW(HKEY_LOCAL_MACHINE, base_v4.c_str());
+    RegDeleteTreeW(HKEY_LOCAL_MACHINE, base_v6.c_str());
+
+    if (doh_template.empty() || servers.empty()) {
+        log_info(L"Cleared interface-specific DoH settings for " + guid_str);
+        return;
+    }
+
+    for (const auto& ip : servers) {
+        if (ip.empty()) continue;
+
+        bool is_v6 = is_valid_ipv6(ip);
+        std::wstring target_key = (is_v6 ? base_v6 : base_v4) + L"\\" + ip;
+
+        HKEY hKey = nullptr;
+        DWORD disp = 0;
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, target_key.c_str(), 0, nullptr,
+                            REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hKey, &disp) == ERROR_SUCCESS) {
+            RegSetValueExW(hKey, L"DohTemplate", 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(doh_template.c_str()),
+                static_cast<DWORD>((doh_template.length() + 1) * sizeof(wchar_t)));
+
+            ULONGLONG dohFlags = 0x2; // 0x2 = Encrypted only (DoH enforced)
+            RegSetValueExW(hKey, L"DohFlags", 0, REG_QWORD,
+                reinterpret_cast<const BYTE*>(&dohFlags), sizeof(dohFlags));
+
+            RegCloseKey(hKey);
+            log_info(L"Registered interface DoH for adapter " + guid_str + L" server " + ip + L" -> " + doh_template);
+        }
+    }
 }
 
 bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
@@ -852,6 +911,15 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
                 reinterpret_cast<const BYTE*>(&emptyStr), sizeof(wchar_t));
             RegCloseKey(hKey);
         }
+    }
+
+    // 4. Clear interface-specific DoH configuration
+    std::wstring guid_str = adapter.id;
+    if (guid_str.empty() && adapter.guid != GUID_NULL) {
+        guid_str = guid_to_string(adapter.guid);
+    }
+    if (!guid_str.empty()) {
+        configure_interface_doh(guid_str, {}, L"");
     }
 
     if (!modern_api_ok && !netsh_ok) {

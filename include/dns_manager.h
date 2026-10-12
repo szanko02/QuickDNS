@@ -151,6 +151,7 @@ private:
     static std::wstring format_win32_error(DWORD error_code);
     static bool query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_str);
     void configure_doh_server(const std::wstring& server_ip, const std::wstring& doh_template);
+    void configure_interface_doh(const std::wstring& adapter_id, const std::vector<std::wstring>& servers, const std::wstring& doh_template);
 
     mutable std::wstring last_error_;
 };
