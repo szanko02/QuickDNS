@@ -138,14 +138,14 @@ void AddProfileDialog::create_controls() {
         marginX, curY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblName, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 20;
+    curY += 22;
 
     m_hEditName = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX, curY, contentWidth, 24,
         m_hWnd, (HMENU)ID_EDIT_NAME, m_hInstance, nullptr);
     SendMessageW(m_hEditName, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 32;
+    curY += 34;
 
     // 2. Primary IPv4
     HWND hLblPri = CreateWindowExW(0, L"STATIC", L"Основной DNS IPv4 (обязательно):",
@@ -153,14 +153,14 @@ void AddProfileDialog::create_controls() {
         marginX, curY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblPri, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 20;
+    curY += 22;
 
     m_hEditPri = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX, curY, contentWidth, 24,
         m_hWnd, (HMENU)ID_EDIT_PRI, m_hInstance, nullptr);
     SendMessageW(m_hEditPri, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 32;
+    curY += 34;
 
     // 3. Secondary IPv4
     HWND hLblSec = CreateWindowExW(0, L"STATIC", L"Дополнительный DNS IPv4 (необязательно):",
@@ -168,14 +168,14 @@ void AddProfileDialog::create_controls() {
         marginX, curY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblSec, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 20;
+    curY += 22;
 
     m_hEditSec = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX, curY, contentWidth, 24,
         m_hWnd, (HMENU)ID_EDIT_SEC, m_hInstance, nullptr);
     SendMessageW(m_hEditSec, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 32;
+    curY += 34;
 
     // 4. Description
     HWND hLblDesc = CreateWindowExW(0, L"STATIC", L"Описание / заметка (необязательно):",
@@ -183,14 +183,14 @@ void AddProfileDialog::create_controls() {
         marginX, curY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblDesc, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 20;
+    curY += 22;
 
     m_hEditDesc = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX, curY, contentWidth, 24,
         m_hWnd, (HMENU)ID_EDIT_DESC, m_hInstance, nullptr);
     SendMessageW(m_hEditDesc, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 32;
+    curY += 34;
 
     // 5. DNS over HTTPS (DoH) URL
     HWND hLblDoh = CreateWindowExW(0, L"STATIC", L"DNS over HTTPS (DoH) URL (необязательно):",
@@ -198,7 +198,7 @@ void AddProfileDialog::create_controls() {
         marginX, curY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 20;
+    curY += 22;
 
     m_hEditDoh = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,

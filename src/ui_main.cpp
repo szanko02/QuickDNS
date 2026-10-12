@@ -39,7 +39,7 @@ namespace {
     constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.2.1 — Быстрая смена DNS в 1 клик";
 
     constexpr int WINDOW_WIDTH  = 560;
-    constexpr int WINDOW_HEIGHT = 720;
+    constexpr int WINDOW_HEIGHT = 790;
 
     struct ColorPalette {
         COLORREF bg;
@@ -1000,7 +1000,7 @@ void MainWindow::create_controls() {
         WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
         marginX, startY, contentWidth, 2,
         m_hWnd, nullptr, m_hInstance, nullptr);
-    startY += 12;
+    startY += 14;
 
     // 2. Network Adapter Selector
     HWND hLblAdapter = CreateWindowExW(0, L"STATIC", L"Сетевой адаптер:",
@@ -1008,7 +1008,7 @@ void MainWindow::create_controls() {
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblAdapter, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 20;
+    startY += 24;
 
     m_hComboAdapter = CreateWindowExW(0, WC_COMBOBOXW, L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
@@ -1018,7 +1018,7 @@ void MainWindow::create_controls() {
     SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, (WPARAM)-1, 30);
     SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, (WPARAM)0, 24);
     attach_combobox_effects(m_hComboAdapter, 201);
-    startY += 38;
+    startY += 46;
 
     // 3. DNS Profile Selector
     HWND hLblProfile = CreateWindowExW(0, L"STATIC", L"Выберите DNS профиль (Comss, GeoHide, Без межаў и др.):",
@@ -1026,7 +1026,7 @@ void MainWindow::create_controls() {
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblProfile, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 20;
+    startY += 24;
 
     m_hComboProfile = CreateWindowExW(0, WC_COMBOBOXW, L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
@@ -1036,7 +1036,7 @@ void MainWindow::create_controls() {
     SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, (WPARAM)-1, 30);
     SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, (WPARAM)0, 24);
     attach_combobox_effects(m_hComboProfile, 202);
-    startY += 36;
+    startY += 48;
 
     int editW = contentWidth - 116;
     int btnCopyW = 106;
@@ -1048,7 +1048,7 @@ void MainWindow::create_controls() {
         marginX, startY, contentWidth, 16,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblIp, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
-    startY += 18;
+    startY += 22;
 
     m_hEditProfileIp = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
@@ -1060,7 +1060,7 @@ void MainWindow::create_controls() {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         copyX, startY, btnCopyW, 26,
         m_hWnd, (HMENU)IDC_BTN_COPY_IP, m_hInstance, nullptr);
-    startY += 30;
+    startY += 40;
 
     // DoH Template (Copyable, Read-Only)
     HWND hLblDoh = CreateWindowExW(0, L"STATIC", L"Шаблон DNS over HTTPS (DoH):",
@@ -1068,7 +1068,7 @@ void MainWindow::create_controls() {
         marginX, startY, contentWidth, 16,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(hLblDoh, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
-    startY += 18;
+    startY += 22;
 
     m_hEditProfileDoh = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
@@ -1080,15 +1080,15 @@ void MainWindow::create_controls() {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         copyX, startY, btnCopyW, 26,
         m_hWnd, (HMENU)IDC_BTN_COPY_DOH, m_hInstance, nullptr);
-    startY += 30;
+    startY += 38;
 
     // Profile Description
     m_hProfileDetails = CreateWindowExW(0, L"STATIC", L"Описание выбранного профиля...",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth, 26,
+        marginX, startY, contentWidth, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(m_hProfileDetails, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
-    startY += 30;
+    startY += 40;
 
     // 4. Action Buttons with comfortable neutral spacing
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить DNS в 1 клик",
@@ -1131,7 +1131,7 @@ void MainWindow::create_controls() {
         marginX, startY, contentWidth, 30,
         m_hWnd, (HMENU)IDC_BTN_DELETE_PROFILE, m_hInstance, nullptr);
     EnableWindow(m_hBtnDeleteProfile, FALSE);
-    startY += 30 + 12;
+    startY += 30 + 14;
 
     // 5. Footer Version Badge
     m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.2.1 • Portable",
