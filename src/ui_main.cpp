@@ -1800,67 +1800,206 @@ void MainWindow::open_windows_network_settings() {
                             if (bTitle) SysFreeString(bTitle);
 
                             if (cls == L"ApplicationFrameWindow" || title.find(L"Настройки") != std::wstring::npos || title.find(L"Settings") != std::wstring::npos) {
-                                VARIANT varBtn;
-                                varBtn.vt = VT_I4;
-                                varBtn.lVal = UIA_ButtonControlTypeId;
-                                IUIAutomationCondition* pBtnCond = nullptr;
-                                if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtn, &pBtnCond)) && pBtnCond) {
-                                    IUIAutomationElementArray* pButtons = nullptr;
-                                    if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pBtnCond, &pButtons)) && pButtons) {
-                                        int btnCount = 0;
-                                        pButtons->get_Length(&btnCount);
+                                IUIAutomationTreeWalker* pWalker = nullptr;
+                                pAutomation->get_ControlViewWalker(&pWalker);
 
-                                        for (int b = 0; b < btnCount; ++b) {
-                                            IUIAutomationElement* pButton = nullptr;
-                                            pButtons->GetElement(b, &pButton);
-                                            if (!pButton) continue;
+                                auto to_lower_str = [](const std::wstring& str) {
+                                    std::wstring res = str;
+                                    for (auto& c : res) {
+                                        if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
+                                        if (c >= L'А' && c <= L'Я') c = c + (L'а' - L'А');
+                                        if (c == L'Ё') c = L'ё';
+                                    }
+                                    return res;
+                                };
 
-                                            BSTR bBtnName = nullptr;
-                                            BSTR bAutoId = nullptr;
-                                            pButton->get_CurrentName(&bBtnName);
-                                            pButton->get_CurrentAutomationId(&bAutoId);
-                                            std::wstring btnName = bBtnName ? bBtnName : L"";
-                                            std::wstring btnAutoId = bAutoId ? bAutoId : L"";
-                                            if (bBtnName) SysFreeString(bBtnName);
-                                            if (bAutoId) SysFreeString(bAutoId);
+                                // Strategy 1: Find the specific DNS setting card / header text ("Назначение DNS-сервера" / "DNS server assignment")
+                                VARIANT varText;
+                                varText.vt = VT_I4;
+                                varText.lVal = UIA_TextControlTypeId;
+                                IUIAutomationCondition* pTextCond = nullptr;
+                                if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varText, &pTextCond)) && pTextCond) {
+                                    IUIAutomationElementArray* pTexts = nullptr;
+                                    if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pTextCond, &pTexts)) && pTexts) {
+                                        int tCount = 0;
+                                        pTexts->get_Length(&tCount);
+                                        for (int t = 0; t < tCount && !clicked; ++t) {
+                                            IUIAutomationElement* pText = nullptr;
+                                            pTexts->GetElement(t, &pText);
+                                            if (!pText) continue;
 
-                                            bool isIp = (btnAutoId.find(L"Ip") != std::wstring::npos || btnAutoId.find(L"IP") != std::wstring::npos || btnName.find(L"IP") != std::wstring::npos || btnName == L"Редактировать");
-                                            bool isTarget = false;
-                                            if (!isIp) {
-                                                if (btnAutoId.find(L"Dns") != std::wstring::npos || btnAutoId.find(L"dns") != std::wstring::npos) {
-                                                    isTarget = true;
-                                                } else if (btnName == L"Изменить") {
-                                                    // Russian Windows 11 specifically names the DNS edit button "Изменить" (and IP "Редактировать")
-                                                    isTarget = true;
-                                                } else if (btnName.find(L"DNS") != std::wstring::npos || btnName.find(L"dns") != std::wstring::npos) {
-                                                    isTarget = true;
-                                                } else if (btnName == L"Edit") {
-                                                    BSTR bHelp = nullptr;
-                                                    pButton->get_CurrentHelpText(&bHelp);
-                                                    std::wstring help = bHelp ? bHelp : L"";
-                                                    if (bHelp) SysFreeString(bHelp);
-                                                    if (help.find(L"DNS") != std::wstring::npos || help.find(L"dns") != std::wstring::npos) {
-                                                        isTarget = true;
+                                            BSTR bTxt = nullptr;
+                                            pText->get_CurrentName(&bTxt);
+                                            std::wstring txt = bTxt ? to_lower_str(bTxt) : L"";
+                                            if (bTxt) SysFreeString(bTxt);
+
+                                            if (txt.find(L"dns") != std::wstring::npos && 
+                                                txt.find(L"auth") == std::wstring::npos && 
+                                                txt.find(L"подлинност") == std::wstring::npos) {
+                                                
+                                                // Walk up to find the enclosing SettingCard / container
+                                                if (pWalker) {
+                                                    IUIAutomationElement* pCard = pText;
+                                                    pCard->AddRef();
+                                                    for (int depth = 0; depth < 3 && !clicked; ++depth) {
+                                                        IUIAutomationElement* pParent = nullptr;
+                                                        if (SUCCEEDED(pWalker->GetParentElement(pCard, &pParent)) && pParent) {
+                                                            // Search for button inside this card
+                                                            VARIANT varBtn;
+                                                            varBtn.vt = VT_I4;
+                                                            varBtn.lVal = UIA_ButtonControlTypeId;
+                                                            IUIAutomationCondition* pBtnCond = nullptr;
+                                                            if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtn, &pBtnCond)) && pBtnCond) {
+                                                                IUIAutomationElementArray* pCardButtons = nullptr;
+                                                                if (SUCCEEDED(pParent->FindAll(TreeScope_Descendants, pBtnCond, &pCardButtons)) && pCardButtons) {
+                                                                    int bLen = 0;
+                                                                    pCardButtons->get_Length(&bLen);
+                                                                    for (int b = 0; b < bLen; ++b) {
+                                                                        IUIAutomationElement* pBtn = nullptr;
+                                                                        pCardButtons->GetElement(b, &pBtn);
+                                                                        if (!pBtn) continue;
+
+                                                                        BSTR bName = nullptr;
+                                                                        BSTR bId = nullptr;
+                                                                        pBtn->get_CurrentName(&bName);
+                                                                        pBtn->get_CurrentAutomationId(&bId);
+                                                                        std::wstring bname = bName ? to_lower_str(bName) : L"";
+                                                                        std::wstring bid = bId ? to_lower_str(bId) : L"";
+                                                                        if (bName) SysFreeString(bName);
+                                                                        if (bId) SysFreeString(bId);
+
+                                                                        if (bname.find(L"auth") == std::wstring::npos && 
+                                                                            bname.find(L"подлинност") == std::wstring::npos &&
+                                                                            bname != L"редактировать" &&
+                                                                            bid.find(L"ip") == std::wstring::npos) {
+                                                                            IUIAutomationInvokePattern* pInvoke = nullptr;
+                                                                            if (SUCCEEDED(pBtn->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pInvoke))) && pInvoke) {
+                                                                                pInvoke->Invoke();
+                                                                                pInvoke->Release();
+                                                                                clicked = true;
+                                                                                pBtn->Release();
+                                                                                break;
+                                                                            }
+                                                                        }
+                                                                        pBtn->Release();
+                                                                    }
+                                                                    pCardButtons->Release();
+                                                                }
+                                                                pBtnCond->Release();
+                                                            }
+                                                            pCard->Release();
+                                                            pCard = pParent;
+                                                        } else {
+                                                            pCard->Release();
+                                                            break;
+                                                        }
                                                     }
                                                 }
                                             }
-
-                                            if (isTarget) {
-                                                IUIAutomationInvokePattern* pInvoke = nullptr;
-                                                if (SUCCEEDED(pButton->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pInvoke))) && pInvoke) {
-                                                    pInvoke->Invoke();
-                                                    pInvoke->Release();
-                                                    clicked = true;
-                                                    pButton->Release();
-                                                    break;
-                                                }
-                                            }
-                                            pButton->Release();
+                                            pText->Release();
                                         }
-                                        pButtons->Release();
+                                        pTexts->Release();
                                     }
-                                    pBtnCond->Release();
+                                    pTextCond->Release();
                                 }
+
+                                // Strategy 2: If Strategy 1 didn't trigger, inspect all buttons with strict DNS validation
+                                if (!clicked) {
+                                    VARIANT varBtn;
+                                    varBtn.vt = VT_I4;
+                                    varBtn.lVal = UIA_ButtonControlTypeId;
+                                    IUIAutomationCondition* pBtnCond = nullptr;
+                                    if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtn, &pBtnCond)) && pBtnCond) {
+                                        IUIAutomationElementArray* pButtons = nullptr;
+                                        if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pBtnCond, &pButtons)) && pButtons) {
+                                            int btnCount = 0;
+                                            pButtons->get_Length(&btnCount);
+
+                                            for (int b = 0; b < btnCount && !clicked; ++b) {
+                                                IUIAutomationElement* pButton = nullptr;
+                                                pButtons->GetElement(b, &pButton);
+                                                if (!pButton) continue;
+
+                                                BSTR bBtnName = nullptr;
+                                                BSTR bAutoId = nullptr;
+                                                BSTR bHelp = nullptr;
+                                                pButton->get_CurrentName(&bBtnName);
+                                                pButton->get_CurrentAutomationId(&bAutoId);
+                                                pButton->get_CurrentHelpText(&bHelp);
+                                                std::wstring btnName = bBtnName ? to_lower_str(bBtnName) : L"";
+                                                std::wstring btnAutoId = bAutoId ? to_lower_str(bAutoId) : L"";
+                                                std::wstring btnHelp = bHelp ? to_lower_str(bHelp) : L"";
+                                                if (bBtnName) SysFreeString(bBtnName);
+                                                if (bAutoId) SysFreeString(bAutoId);
+                                                if (bHelp) SysFreeString(bHelp);
+
+                                                bool isReject = (btnName.find(L"подлинност") != std::wstring::npos ||
+                                                                 btnName.find(L"auth") != std::wstring::npos ||
+                                                                 btnAutoId.find(L"auth") != std::wstring::npos ||
+                                                                 btnAutoId.find(L"802") != std::wstring::npos ||
+                                                                 btnAutoId.find(L"eap") != std::wstring::npos ||
+                                                                 btnName == L"редактировать" ||
+                                                                 btnName.find(L"ip") != std::wstring::npos ||
+                                                                 btnAutoId.find(L"ip") != std::wstring::npos);
+
+                                                if (!isReject) {
+                                                    bool isDns = false;
+                                                    if (btnAutoId.find(L"dns") != std::wstring::npos ||
+                                                        btnName.find(L"dns") != std::wstring::npos ||
+                                                        btnHelp.find(L"dns") != std::wstring::npos) {
+                                                        isDns = true;
+                                                    } else if (pWalker && (btnName == L"изменить" || btnName == L"edit")) {
+                                                        // Check ancestors to confirm it's DNS and NOT Authentication or IP
+                                                        IUIAutomationElement* pCurr = pButton;
+                                                        pCurr->AddRef();
+                                                        for (int depth = 0; depth < 5 && !isDns && !isReject; ++depth) {
+                                                            IUIAutomationElement* pParent = nullptr;
+                                                            if (SUCCEEDED(pWalker->GetParentElement(pCurr, &pParent)) && pParent) {
+                                                                BSTR pName = nullptr;
+                                                                BSTR pId = nullptr;
+                                                                pParent->get_CurrentName(&pName);
+                                                                pParent->get_CurrentAutomationId(&pId);
+                                                                std::wstring pn = pName ? to_lower_str(pName) : L"";
+                                                                std::wstring pi = pId ? to_lower_str(pId) : L"";
+                                                                if (pName) SysFreeString(pName);
+                                                                if (pId) SysFreeString(pId);
+
+                                                                if (pn.find(L"подлинност") != std::wstring::npos ||
+                                                                    pn.find(L"auth") != std::wstring::npos ||
+                                                                    pi.find(L"auth") != std::wstring::npos) {
+                                                                    isReject = true;
+                                                                } else if (pn.find(L"dns") != std::wstring::npos || pi.find(L"dns") != std::wstring::npos) {
+                                                                    isDns = true;
+                                                                }
+                                                                pCurr->Release();
+                                                                pCurr = pParent;
+                                                            } else {
+                                                                pCurr->Release();
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+
+                                                    if (!isReject && isDns) {
+                                                        IUIAutomationInvokePattern* pInvoke = nullptr;
+                                                        if (SUCCEEDED(pButton->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pInvoke))) && pInvoke) {
+                                                            pInvoke->Invoke();
+                                                            pInvoke->Release();
+                                                            clicked = true;
+                                                            pButton->Release();
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                pButton->Release();
+                                            }
+                                            pButtons->Release();
+                                        }
+                                        pBtnCond->Release();
+                                    }
+                                }
+
+                                if (pWalker) pWalker->Release();
                             }
                             pWin->Release();
                         }
