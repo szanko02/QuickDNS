@@ -8,16 +8,29 @@
 #include <sstream>
 #include <algorithm>
 #include <chrono>
+#include <objbase.h>
+#include <propidl.h>
+#include <gdiplus.h>
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "gdiplus.lib")
 
 using QuickDns::Encoding::utf8_to_wide;
 using QuickDns::Encoding::wide_to_utf8;
 using namespace quickdns;
 
 namespace {
+    static void AddRoundedRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius) {
+        float diameter = radius * 2.0f;
+        path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0f, 90.0f);
+        path.AddArc(rect.GetRight() - diameter, rect.Y, diameter, diameter, 270.0f, 90.0f);
+        path.AddArc(rect.GetRight() - diameter, rect.GetBottom() - diameter, diameter, diameter, 0.0f, 90.0f);
+        path.AddArc(rect.X, rect.GetBottom() - diameter, diameter, diameter, 90.0f, 90.0f);
+        path.CloseFigure();
+    }
+
     constexpr const wchar_t* WINDOW_CLASS_NAME = L"QuickDNS_MainWindowClass";
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
     constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.2.1 — Быстрая смена DNS в 1 клик";
@@ -380,17 +393,21 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hWnd, &ps);
 
-        // Draw background elevated card for Status area
-        RECT cardRect = { 20, 44, 20 + (WINDOW_WIDTH - 40), 44 + 114 };
-        HGDIOBJ oldBrush = SelectObject(hdc, m_hbrCard);
-        HPEN hPenCard = CreatePen(PS_SOLID, 1, COLOR_CARD_BORDER);
-        HGDIOBJ oldPen = SelectObject(hdc, hPenCard);
+        // Draw background elevated card for Status area with anti-aliasing
+        {
+            Gdiplus::Graphics g(hdc);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
-        RoundRect(hdc, cardRect.left, cardRect.top, cardRect.right, cardRect.bottom, 12, 12);
+            Gdiplus::GraphicsPath cardPath;
+            AddRoundedRect(cardPath, Gdiplus::RectF(20.5f, 44.5f, static_cast<float>(WINDOW_WIDTH - 40) - 1.0f, 114.0f - 1.0f), 12.0f);
 
-        SelectObject(hdc, oldPen);
-        DeleteObject(hPenCard);
-        SelectObject(hdc, oldBrush);
+            Gdiplus::SolidBrush cardBrush(Gdiplus::Color(255, 27, 31, 41));
+            Gdiplus::Pen cardPen(Gdiplus::Color(255, 45, 53, 70), 1.0f);
+
+            g.FillPath(&cardBrush, &cardPath);
+            g.DrawPath(&cardPen, &cardPath);
+        }
 
         EndPaint(hWnd, &ps);
         return 0;
@@ -681,18 +698,23 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     FillRect(hdcMem, &rcMem, hbrWin);
     DeleteObject(hbrWin);
 
-    // Draw rounded button surface
-    HBRUSH hbrBtn = CreateSolidBrush(bgCol);
-    HPEN hPenBtn  = CreatePen(PS_SOLID, 1, borderCol);
-    HGDIOBJ oldBrush = SelectObject(hdcMem, hbrBtn);
-    HGDIOBJ oldPen   = SelectObject(hdcMem, hPenBtn);
+    // Draw rounded button surface with anti-aliasing
+    {
+        Gdiplus::Graphics g(hdcMem);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
-    RoundRect(hdcMem, rcMem.left, rcMem.top, rcMem.right, rcMem.bottom, 8, 8);
+        Gdiplus::GraphicsPath btnPath;
+        float w = static_cast<float>(rcMem.right - rcMem.left);
+        float h = static_cast<float>(rcMem.bottom - rcMem.top);
+        AddRoundedRect(btnPath, Gdiplus::RectF(0.5f, 0.5f, w - 1.0f, h - 1.0f), 8.0f);
 
-    SelectObject(hdcMem, oldBrush);
-    SelectObject(hdcMem, oldPen);
-    DeleteObject(hbrBtn);
-    DeleteObject(hPenBtn);
+        Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, GetRValue(bgCol), GetGValue(bgCol), GetBValue(bgCol)));
+        Gdiplus::Pen borderPen(Gdiplus::Color(255, GetRValue(borderCol), GetGValue(borderCol), GetBValue(borderCol)), 1.2f);
+
+        g.FillPath(&bgBrush, &btnPath);
+        g.DrawPath(&borderPen, &btnPath);
+    }
 
     // Get Button text
     wchar_t btnText[128] = {};
@@ -725,27 +747,6 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
     HBITMAP hbmMem = CreateCompatibleBitmap(hdc, width, height);
     HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
-    // Background sparkline container
-    HBRUSH hbrContainer = CreateSolidBrush(RGB(20, 24, 32));
-    HPEN hPenBorder     = CreatePen(PS_SOLID, 1, RGB(45, 54, 72));
-    HGDIOBJ oldBrush    = SelectObject(hdcMem, hbrContainer);
-    HGDIOBJ oldPen      = SelectObject(hdcMem, hPenBorder);
-
-    RoundRect(hdcMem, 0, 0, width, height, 8, 8);
-
-    SelectObject(hdcMem, oldBrush);
-    SelectObject(hdcMem, oldPen);
-    DeleteObject(hbrContainer);
-    DeleteObject(hPenBorder);
-
-    // Top-left header: "Пинг (60 с)"
-    SetBkMode(hdcMem, TRANSPARENT);
-    SetTextColor(hdcMem, RGB(148, 163, 184));
-    HGDIOBJ oldFont = SelectObject(hdcMem, m_hFontSmall);
-
-    RECT rcTitle = { 10, 6, width - 10, 20 };
-    DrawTextW(hdcMem, L"Пинг (60 с)", -1, &rcTitle, DT_LEFT | DT_TOP | DT_SINGLELINE);
-
     // Copy latency history safely under lock
     std::vector<int> history;
     int currentPing = -1;
@@ -756,12 +757,12 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
     }
 
     // Grid coordinates
-    int plotTop    = 24;
-    int plotBottom = height - 12;
-    int plotLeft   = 10;
-    int plotRight  = width - 10;
-    int plotHeight = plotBottom - plotTop;
-    int plotWidth  = plotRight - plotLeft;
+    float plotTop    = 24.0f;
+    float plotBottom = static_cast<float>(height - 12);
+    float plotLeft   = 10.0f;
+    float plotRight  = static_cast<float>(width - 10);
+    float plotHeight = plotBottom - plotTop;
+    float plotWidth  = plotRight - plotLeft;
 
     // Determine scale: max latency, minimum 80ms, max 300ms
     int maxMs = 80;
@@ -769,99 +770,92 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
         if (v > maxMs) maxMs = std::min(300, v + 20);
     }
 
-    // Faint grid guide lines at 50ms and 100ms
-    HPEN hPenGrid = CreatePen(PS_DOT, 1, RGB(35, 42, 58));
-    HGDIOBJ oldGridPen = SelectObject(hdcMem, hPenGrid);
-
-    if (maxMs >= 50) {
-        int y50 = plotBottom - (50 * plotHeight / maxMs);
-        MoveToEx(hdcMem, plotLeft, y50, nullptr);
-        LineTo(hdcMem, plotRight, y50);
-    }
-    if (maxMs >= 100) {
-        int y100 = plotBottom - (100 * plotHeight / maxMs);
-        MoveToEx(hdcMem, plotLeft, y100, nullptr);
-        LineTo(hdcMem, plotRight, y100);
+    // Determine curve color based on latest valid latency
+    Gdiplus::Color lineColor;
+    if (currentPing > 0 && currentPing < 60) {
+        lineColor = Gdiplus::Color(255, 34, 197, 94);  // Emerald Green
+    } else if (currentPing >= 60 && currentPing <= 150) {
+        lineColor = Gdiplus::Color(255, 245, 158, 11); // Amber
+    } else if (currentPing > 150) {
+        lineColor = Gdiplus::Color(255, 239, 68, 68);  // Red
+    } else {
+        lineColor = Gdiplus::Color(255, 56, 189, 248); // Sky Cyan
     }
 
-    SelectObject(hdcMem, oldGridPen);
-    DeleteObject(hPenGrid);
+    // GDI+ Anti-Aliased Rendering
+    {
+        Gdiplus::Graphics g(hdcMem);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
-    // Plot latency line & area fill if points exist
-    if (!history.empty() && history.size() >= 2) {
-        size_t count = history.size();
-        std::vector<POINT> pts;
-        pts.reserve(count);
+        // 1. Draw smooth container background
+        Gdiplus::GraphicsPath contPath;
+        AddRoundedRect(contPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f), 8.0f);
+        Gdiplus::SolidBrush contBrush(Gdiplus::Color(255, 20, 24, 32));
+        Gdiplus::Pen contPen(Gdiplus::Color(255, 45, 54, 72), 1.0f);
+        g.FillPath(&contBrush, &contPath);
+        g.DrawPath(&contPen, &contPath);
 
-        for (size_t i = 0; i < count; ++i) {
-            int val = history[i];
-            int x = plotLeft + static_cast<int>(i * plotWidth / (count - 1));
-            int y;
-            if (val <= 0) {
-                y = plotBottom;
-            } else {
-                int clampedVal = std::min(val, maxMs);
-                y = plotBottom - (clampedVal * plotHeight / maxMs);
+        // 2. Faint grid guide lines at 50ms and 100ms
+        Gdiplus::Pen gridPen(Gdiplus::Color(70, 100, 116, 139), 1.0f);
+        gridPen.SetDashStyle(Gdiplus::DashStyleDash);
+
+        if (maxMs >= 50) {
+            float y50 = plotBottom - (50.0f * plotHeight / static_cast<float>(maxMs));
+            g.DrawLine(&gridPen, plotLeft, y50, plotRight, y50);
+        }
+        if (maxMs >= 100) {
+            float y100 = plotBottom - (100.0f * plotHeight / static_cast<float>(maxMs));
+            g.DrawLine(&gridPen, plotLeft, y100, plotRight, y100);
+        }
+
+        // 3. Smooth sparkline curve & translucent area fill
+        if (!history.empty() && history.size() >= 2) {
+            size_t count = history.size();
+            std::vector<Gdiplus::PointF> ptsF;
+            ptsF.reserve(count);
+
+            for (size_t i = 0; i < count; ++i) {
+                int val = history[i];
+                float x = plotLeft + (static_cast<float>(i) * plotWidth / static_cast<float>(count - 1));
+                float y = (val <= 0) ? plotBottom : (plotBottom - (static_cast<float>(std::min(val, maxMs)) * plotHeight / static_cast<float>(maxMs)));
+                ptsF.push_back(Gdiplus::PointF(x, y));
             }
-            pts.push_back({ x, y });
+
+            // Area polygon under curve with translucent alpha fill
+            std::vector<Gdiplus::PointF> polyF = ptsF;
+            polyF.push_back(Gdiplus::PointF(ptsF.back().X, plotBottom));
+            polyF.push_back(Gdiplus::PointF(ptsF.front().X, plotBottom));
+
+            Gdiplus::SolidBrush fillBrush(Gdiplus::Color(45, lineColor.GetR(), lineColor.GetG(), lineColor.GetB()));
+            g.FillPolygon(&fillBrush, polyF.data(), static_cast<int>(polyF.size()));
+
+            // Smooth anti-aliased curve line
+            Gdiplus::Pen linePen(lineColor, 2.2f);
+            linePen.SetLineJoin(Gdiplus::LineJoinRound);
+            linePen.SetStartCap(Gdiplus::LineCapRound);
+            linePen.SetEndCap(Gdiplus::LineCapRound);
+            g.DrawLines(&linePen, ptsF.data(), static_cast<int>(ptsF.size()));
+
+            // Latest point indicator: outer glow halo + inner solid dot + white ring
+            Gdiplus::PointF lastPt = ptsF.back();
+            Gdiplus::SolidBrush glowBrush(Gdiplus::Color(80, lineColor.GetR(), lineColor.GetG(), lineColor.GetB()));
+            g.FillEllipse(&glowBrush, lastPt.X - 6.0f, lastPt.Y - 6.0f, 12.0f, 12.0f);
+
+            Gdiplus::SolidBrush dotBrush(lineColor);
+            Gdiplus::Pen ringPen(Gdiplus::Color(255, 255, 255, 255), 1.5f);
+            g.FillEllipse(&dotBrush, lastPt.X - 3.5f, lastPt.Y - 3.5f, 7.0f, 7.0f);
+            g.DrawEllipse(&ringPen, lastPt.X - 3.5f, lastPt.Y - 3.5f, 7.0f, 7.0f);
         }
-
-        // Color based on latest valid latency
-        COLORREF lineColor, fillColor;
-        if (currentPing > 0 && currentPing < 60) {
-            lineColor = RGB(34, 197, 94);  // Emerald Green
-            fillColor = RGB(16, 50, 32);   // Dark Emerald fill
-        } else if (currentPing >= 60 && currentPing <= 150) {
-            lineColor = RGB(245, 158, 11); // Amber
-            fillColor = RGB(55, 40, 18);   // Dark Amber fill
-        } else if (currentPing > 150) {
-            lineColor = RGB(239, 68, 68);  // Red
-            fillColor = RGB(55, 20, 20);   // Dark Red fill
-        } else {
-            lineColor = RGB(56, 189, 248); // Cyan
-            fillColor = RGB(20, 45, 60);
-        }
-
-        // Area polygon below curve
-        std::vector<POINT> poly = pts;
-        poly.push_back({ pts.back().x, plotBottom });
-        poly.push_back({ pts.front().x, plotBottom });
-
-        HBRUSH hbrFill = CreateSolidBrush(fillColor);
-        HPEN hPenNull  = CreatePen(PS_NULL, 0, 0);
-        HGDIOBJ oldPolyBrush = SelectObject(hdcMem, hbrFill);
-        HGDIOBJ oldPolyPen   = SelectObject(hdcMem, hPenNull);
-
-        Polygon(hdcMem, poly.data(), static_cast<int>(poly.size()));
-
-        SelectObject(hdcMem, oldPolyBrush);
-        SelectObject(hdcMem, oldPolyPen);
-        DeleteObject(hbrFill);
-        DeleteObject(hPenNull);
-
-        // Draw sparkline curve
-        HPEN hPenLine = CreatePen(PS_SOLID, 2, lineColor);
-        HGDIOBJ oldLinePen = SelectObject(hdcMem, hPenLine);
-
-        Polyline(hdcMem, pts.data(), static_cast<int>(pts.size()));
-
-        SelectObject(hdcMem, oldLinePen);
-        DeleteObject(hPenLine);
-
-        // Draw glowing point on latest sample
-        POINT lastPt = pts.back();
-        HBRUSH hbrDot = CreateSolidBrush(lineColor);
-        HGDIOBJ oldDotBrush = SelectObject(hdcMem, hbrDot);
-        HPEN hPenDot = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
-        HGDIOBJ oldDotPen = SelectObject(hdcMem, hPenDot);
-
-        Ellipse(hdcMem, lastPt.x - 3, lastPt.y - 3, lastPt.x + 4, lastPt.y + 4);
-
-        SelectObject(hdcMem, oldDotBrush);
-        SelectObject(hdcMem, oldDotPen);
-        DeleteObject(hbrDot);
-        DeleteObject(hPenDot);
     }
+
+    // Top-left header: "Пинг (60 с)"
+    SetBkMode(hdcMem, TRANSPARENT);
+    SetTextColor(hdcMem, RGB(148, 163, 184));
+    HGDIOBJ oldFont = SelectObject(hdcMem, m_hFontSmall);
+
+    RECT rcTitle = { 10, 6, width - 10, 20 };
+    DrawTextW(hdcMem, L"Пинг (60 с)", -1, &rcTitle, DT_LEFT | DT_TOP | DT_SINGLELINE);
 
     // Value badge at top-right of graph
     std::wstring valStr;

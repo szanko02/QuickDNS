@@ -33,6 +33,7 @@ if(MSVC)
         advapi32.lib
         ole32.lib
         uuid.lib
+        gdiplus.lib
     )
 else()
     set(WIN32_LIBS
@@ -48,6 +49,7 @@ else()
         advapi32
         ole32
         uuid
+        gdiplus
     )
 endif()
 

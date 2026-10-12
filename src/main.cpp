@@ -1,9 +1,13 @@
 #include <windows.h>
-#include <commctrl.h>
 #include <objbase.h>
+#include <propidl.h>
+#include <gdiplus.h>
+#include <commctrl.h>
 #include <shellapi.h>
 #include "ui_main.h"
 #include "dns_manager.h"
+
+#pragma comment(lib, "gdiplus.lib")
 
 int WINAPI wWinMain(
     _In_ HINSTANCE hInstance,
@@ -46,6 +50,11 @@ int WINAPI wWinMain(
         return 1;
     }
 
+    // Initialize GDI+ for high-quality anti-aliased rendering (smooth buttons, curves and cards)
+    ULONG_PTR gdiplusToken = 0;
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
+
     // Enable Common Controls v6 (Visual Styles, modern buttons, combos)
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -57,6 +66,10 @@ int WINAPI wWinMain(
     int exitCode = 0;
     if (app.initialize(hInstance, showCmd)) {
         exitCode = app.run_message_loop();
+    }
+
+    if (gdiplusToken) {
+        Gdiplus::GdiplusShutdown(gdiplusToken);
     }
 
     CoUninitialize();
