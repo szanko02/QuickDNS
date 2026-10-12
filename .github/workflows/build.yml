@@ -56,5 +56,6 @@ jobs:
           build/Release/QuickDNS.exe
           dist/*.zip
         generate_release_notes: true
+        append_body: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
