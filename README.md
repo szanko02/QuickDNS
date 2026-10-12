@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="res/app_logo.png" width="128" height="128" alt="QuickDNS Logo" />
 
