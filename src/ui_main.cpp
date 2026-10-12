@@ -585,7 +585,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             SetTextColor(hdcStatic, pal.textSecondary);
         } else if (hwndStatic == m_hStatusAdapterName) {
             SetTextColor(hdcStatic, pal.textPrimary);
-        } else if (hwndStatic == m_hEditProfileIp) {
+        } else if (hwndStatic == m_hEditProfileIp || hwndStatic == m_hEditProfileDoh) {
             SetBkMode(hdcStatic, OPAQUE);
             SetTextColor(hdcStatic, pal.textPrimary);
             SetBkColor(hdcStatic, pal.cardBg);
@@ -879,7 +879,7 @@ void MainWindow::create_controls() {
         m_hWnd, (HMENU)IDC_BTN_COPY_IP, m_hInstance, nullptr);
     startY += 30;
 
-    // DoH Template (Editable manual template & Copyable)
+    // DoH Template (Copyable, Read-Only)
     HWND hLblDoh = CreateWindowExW(0, L"STATIC", L"Шаблон DNS over HTTPS (DoH):",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth, 16,
@@ -888,7 +888,7 @@ void MainWindow::create_controls() {
     startY += 18;
 
     m_hEditProfileDoh = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
         marginX, startY, editW, 26,
         m_hWnd, (HMENU)IDC_EDIT_PROFILE_DOH, m_hInstance, nullptr);
     SendMessageW(m_hEditProfileDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
@@ -926,7 +926,7 @@ void MainWindow::create_controls() {
         marginX, startY, halfWidth, 34,
         m_hWnd, (HMENU)IDC_BTN_RESET_DHCP, m_hInstance, nullptr);
 
-    m_hBtnWinNetwork = CreateWindowExW(0, WC_BUTTONW, L"Параметры сети Windows",
+    m_hBtnWinNetwork = CreateWindowExW(0, WC_BUTTONW, L"Параметры Ethernet (DNS)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + halfWidth + 12, startY, halfWidth, 34,
         m_hWnd, (HMENU)IDC_BTN_WIN_NETWORK, m_hInstance, nullptr);
@@ -1536,6 +1536,24 @@ void MainWindow::update_status_card() {
 void MainWindow::on_adapter_changed() {
     m_selectedAdapterIndex = ComboBox_GetCurSel(m_hComboAdapter);
     update_status_card();
+
+    if (m_hBtnWinNetwork && m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
+        const auto& adapter = m_adapters[m_selectedAdapterIndex];
+        std::wstring nameLower = adapter.name;
+        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::towlower);
+        std::wstring descLower = adapter.description;
+        std::transform(descLower.begin(), descLower.end(), descLower.begin(), ::towlower);
+
+        if (nameLower.find(L"wi-fi") != std::wstring::npos || 
+            nameLower.find(L"wifi") != std::wstring::npos ||
+            nameLower.find(L"беспровод") != std::wstring::npos ||
+            descLower.find(L"wireless") != std::wstring::npos ||
+            descLower.find(L"wi-fi") != std::wstring::npos) {
+            SetWindowTextW(m_hBtnWinNetwork, L"Параметры Wi-Fi (DNS)");
+        } else {
+            SetWindowTextW(m_hBtnWinNetwork, L"Параметры Ethernet (DNS)");
+        }
+    }
 }
 
 void MainWindow::on_profile_selected() {
@@ -1710,10 +1728,34 @@ void MainWindow::open_benchmark_dialog() {
 }
 
 void MainWindow::open_windows_network_settings() {
-    // Open Windows Modern Settings Network page, fallback to classic Control Panel ncpa.cpl
-    HINSTANCE res = ShellExecuteW(m_hWnd, L"open", L"ms-settings:network", nullptr, nullptr, SW_SHOWNORMAL);
+    // Determine the precise settings page based on active adapter type
+    std::wstring targetUri = L"ms-settings:network-ethernet";
+
+    if (m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
+        const auto& adapter = m_adapters[m_selectedAdapterIndex];
+        std::wstring nameLower = adapter.name;
+        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::towlower);
+        std::wstring descLower = adapter.description;
+        std::transform(descLower.begin(), descLower.end(), descLower.begin(), ::towlower);
+
+        if (nameLower.find(L"wi-fi") != std::wstring::npos || 
+            nameLower.find(L"wifi") != std::wstring::npos ||
+            nameLower.find(L"беспровод") != std::wstring::npos ||
+            descLower.find(L"wireless") != std::wstring::npos ||
+            descLower.find(L"wi-fi") != std::wstring::npos) {
+            targetUri = L"ms-settings:network-wifi";
+        }
+    }
+
+    // Open Windows 11 Modern Settings directly to Ethernet or Wi-Fi settings
+    HINSTANCE res = ShellExecuteW(m_hWnd, L"open", targetUri.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(res) <= 32) {
-        ShellExecuteW(m_hWnd, L"open", L"control.exe", L"ncpa.cpl", nullptr, SW_SHOWNORMAL);
+        // Fallback 1: general network settings page
+        HINSTANCE resNet = ShellExecuteW(m_hWnd, L"open", L"ms-settings:network", nullptr, nullptr, SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(resNet) <= 32) {
+            // Fallback 2: classic Network Connections control panel
+            ShellExecuteW(m_hWnd, L"open", L"control.exe", L"ncpa.cpl", nullptr, SW_SHOWNORMAL);
+        }
     }
 }
 
