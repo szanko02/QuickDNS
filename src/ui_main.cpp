@@ -229,6 +229,146 @@ namespace {
 
         return DefSubclassProc(hWnd, uMsg, wParam, lParam);
     }
+
+    struct ComboAnimationState {
+        MainWindow* pMain{nullptr};
+        bool isHovered{false};
+    };
+
+    LRESULT CALLBACK CustomComboSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+                                             UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+        auto* state = reinterpret_cast<ComboAnimationState*>(dwRefData);
+        if (!state || !state->pMain) {
+            return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        }
+
+        switch (uMsg) {
+        case WM_SETCURSOR: {
+            if (LOWORD(lParam) == HTCLIENT && IsWindowEnabled(hWnd)) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            break;
+        }
+        case WM_MOUSEMOVE: {
+            if (!state->isHovered) {
+                state->isHovered = true;
+                TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+                TrackMouseEvent(&tme);
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            state->isHovered = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        }
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS: {
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        }
+        case WM_ERASEBKGND: {
+            return 1;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+
+            RECT rc;
+            GetClientRect(hWnd, &rc);
+            int w = rc.right - rc.left;
+            int h = rc.bottom - rc.top;
+
+            HDC hdcMem = CreateCompatibleDC(hdc);
+            HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+            HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
+
+            bool isDark = state->pMain->is_dark_mode();
+            auto pal = GetPalette(isDark);
+
+            {
+                Gdiplus::Graphics g(hdcMem);
+                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+
+                // Clear memory buffer with parent window background color so rounded edges blend
+                g.Clear(Gdiplus::Color(255, GetRValue(pal.bg), GetGValue(pal.bg), GetBValue(pal.bg)));
+
+                float rW = static_cast<float>(w) - 1.0f;
+                float rH = static_cast<float>(h) - 1.0f;
+                Gdiplus::GraphicsPath boxPath;
+                AddRoundedRect(boxPath, Gdiplus::RectF(0.5f, 0.5f, rW, rH), 6.0f);
+
+                Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
+                g.FillPath(&bgBrush, &boxPath);
+
+                bool hasFocus = (GetFocus() == hWnd);
+                COLORREF borderCol = (state->isHovered || hasFocus) 
+                    ? (isDark ? RGB(96, 165, 250) : RGB(37, 99, 235)) 
+                    : pal.cardBorder;
+                float borderWidth = (state->isHovered || hasFocus) ? 1.5f : 1.0f;
+                Gdiplus::Pen borderPen(Gdiplus::Color(255, GetRValue(borderCol), GetGValue(borderCol), GetBValue(borderCol)), borderWidth);
+                g.DrawPath(&borderPen, &boxPath);
+
+                // Modern downward chevron arrow
+                Gdiplus::Pen arrowPen(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)), 1.8f);
+                arrowPen.SetStartCap(Gdiplus::LineCapRound);
+                arrowPen.SetEndCap(Gdiplus::LineCapRound);
+                arrowPen.SetLineJoin(Gdiplus::LineJoinRound);
+
+                float ax = static_cast<float>(w) - 18.0f;
+                float ay = static_cast<float>(h) / 2.0f - 1.5f;
+                Gdiplus::PointF arrowPts[3] = {
+                    Gdiplus::PointF(ax - 4.5f, ay),
+                    Gdiplus::PointF(ax, ay + 4.5f),
+                    Gdiplus::PointF(ax + 4.5f, ay)
+                };
+                g.DrawLines(&arrowPen, arrowPts, 3);
+            }
+
+            // Draw selected item text
+            int curSel = (int)SendMessageW(hWnd, CB_GETCURSEL, 0, 0);
+            std::wstring itemText;
+            if (curSel != CB_ERR) {
+                int len = (int)SendMessageW(hWnd, CB_GETLBTEXTLEN, curSel, 0);
+                if (len > 0) {
+                    itemText.resize(len);
+                    SendMessageW(hWnd, CB_GETLBTEXT, curSel, reinterpret_cast<LPARAM>(&itemText[0]));
+                }
+            }
+
+            SetBkMode(hdcMem, TRANSPARENT);
+            SetTextColor(hdcMem, pal.textPrimary);
+            HFONT hFont = state->pMain->get_font_regular();
+            HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
+
+            RECT rcText = rc;
+            rcText.left += 12;
+            rcText.right -= 30; // Leave room for chevron arrow
+            DrawTextW(hdcMem, itemText.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+            SelectObject(hdcMem, oldFont);
+
+            BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
+
+            SelectObject(hdcMem, oldBmp);
+            DeleteObject(hbmMem);
+            DeleteDC(hdcMem);
+
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        case WM_NCDESTROY: {
+            RemovePropW(hWnd, L"QuickDnsComboState");
+            delete state;
+            RemoveWindowSubclass(hWnd, CustomComboSubclassProc, uIdSubclass);
+            return 0;
+        }
+        }
+
+        return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    }
 }
 
 MainWindow::MainWindow()
@@ -549,17 +689,40 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         return 0;
     }
 
-    case WM_DRAWITEM: {
-        auto* pDis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (pDis && pDis->CtlType == ODT_BUTTON) {
-            if (pDis->CtlID == IDC_BTN_THEME_TOGGLE) {
-                draw_theme_toggle_button(pDis);
-            } else {
-                draw_custom_button(pDis);
-            }
+    case WM_MEASUREITEM: {
+        auto* pMis = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+        if (pMis && pMis->CtlType == ODT_COMBOBOX) {
+            pMis->itemHeight = 24;
             return TRUE;
         }
         break;
+    }
+
+    case WM_DRAWITEM: {
+        auto* pDis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+        if (pDis) {
+            if (pDis->CtlType == ODT_BUTTON) {
+                if (pDis->CtlID == IDC_BTN_THEME_TOGGLE) {
+                    draw_theme_toggle_button(pDis);
+                } else {
+                    draw_custom_button(pDis);
+                }
+                return TRUE;
+            } else if (pDis->CtlType == ODT_COMBOBOX) {
+                draw_combobox_item(pDis);
+                return TRUE;
+            }
+        }
+        break;
+    }
+
+    case WM_CTLCOLORLISTBOX: {
+        HDC hdcList = (HDC)wParam;
+        auto pal = GetPalette(m_isDarkMode);
+        SetBkMode(hdcList, OPAQUE);
+        SetTextColor(hdcList, pal.textPrimary);
+        SetBkColor(hdcList, pal.cardBg);
+        return (INT_PTR)m_hbrCard;
     }
 
     case WM_CTLCOLORSTATIC: {
@@ -695,6 +858,10 @@ void MainWindow::apply_theme(bool isDark) {
         SendMessageW(m_hToolTip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
     }
 
+    if (m_hComboAdapter) InvalidateRect(m_hComboAdapter, nullptr, TRUE);
+    if (m_hComboProfile) InvalidateRect(m_hComboProfile, nullptr, TRUE);
+    if (m_hGraphWnd) InvalidateRect(m_hGraphWnd, nullptr, TRUE);
+
     // Force full repaint of window and all child controls
     InvalidateRect(m_hWnd, nullptr, TRUE);
     RedrawWindow(m_hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
@@ -711,6 +878,14 @@ void MainWindow::attach_button_effects(HWND hBtn, UINT_PTR subclassId) {
     auto* anim = new ButtonAnimationState();
     SetPropW(hBtn, L"QuickDnsAnim", reinterpret_cast<HANDLE>(anim));
     SetWindowSubclass(hBtn, AnimatedButtonSubclassProc, subclassId, reinterpret_cast<DWORD_PTR>(anim));
+}
+
+void MainWindow::attach_combobox_effects(HWND hCombo, UINT_PTR subclassId) {
+    if (!hCombo) return;
+    auto* state = new ComboAnimationState();
+    state->pMain = this;
+    SetPropW(hCombo, L"QuickDnsComboState", reinterpret_cast<HANDLE>(state));
+    SetWindowSubclass(hCombo, CustomComboSubclassProc, subclassId, reinterpret_cast<DWORD_PTR>(state));
 }
 
 void MainWindow::setup_fonts() {
@@ -836,11 +1011,14 @@ void MainWindow::create_controls() {
     startY += 20;
 
     m_hComboAdapter = CreateWindowExW(0, WC_COMBOBOXW, L"",
-        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
-        marginX, startY, contentWidth, 200,
+        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+        marginX, startY, contentWidth, 240,
         m_hWnd, (HMENU)IDC_COMBO_ADAPTER, m_hInstance, nullptr);
     SendMessageW(m_hComboAdapter, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 36;
+    SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, (WPARAM)-1, 30);
+    SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, (WPARAM)0, 24);
+    attach_combobox_effects(m_hComboAdapter, 201);
+    startY += 38;
 
     // 3. DNS Profile Selector
     HWND hLblProfile = CreateWindowExW(0, L"STATIC", L"Выберите DNS профиль (Comss, GeoHide, Без межаў и др.):",
@@ -851,11 +1029,14 @@ void MainWindow::create_controls() {
     startY += 20;
 
     m_hComboProfile = CreateWindowExW(0, WC_COMBOBOXW, L"",
-        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
-        marginX, startY, contentWidth, 200,
+        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+        marginX, startY, contentWidth, 240,
         m_hWnd, (HMENU)IDC_COMBO_PROFILE, m_hInstance, nullptr);
     SendMessageW(m_hComboProfile, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 32;
+    SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, (WPARAM)-1, 30);
+    SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, (WPARAM)0, 24);
+    attach_combobox_effects(m_hComboProfile, 202);
+    startY += 36;
 
     int editW = contentWidth - 116;
     int btnCopyW = 106;
@@ -1202,6 +1383,45 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     DeleteDC(hdcMem);
 }
 
+void MainWindow::draw_combobox_item(DRAWITEMSTRUCT* pDis) {
+    if (!pDis || pDis->itemID == static_cast<UINT>(-1)) return;
+
+    HDC hdc = pDis->hDC;
+    RECT rc = pDis->rcItem;
+    auto pal = GetPalette(m_isDarkMode);
+
+    bool isSelected = (pDis->itemState & ODS_SELECTED) != 0;
+
+    COLORREF bgCol = isSelected 
+        ? (m_isDarkMode ? RGB(45, 65, 95) : RGB(219, 234, 254)) 
+        : pal.cardBg;
+    COLORREF textCol = isSelected 
+        ? (m_isDarkMode ? RGB(255, 255, 255) : RGB(30, 58, 138)) 
+        : pal.textPrimary;
+
+    HBRUSH hbr = CreateSolidBrush(bgCol);
+    FillRect(hdc, &rc, hbr);
+    DeleteObject(hbr);
+
+    int textLen = ComboBox_GetLBTextLen(pDis->hwndItem, pDis->itemID);
+    std::wstring text;
+    if (textLen > 0) {
+        text.resize(textLen);
+        ComboBox_GetLBText(pDis->hwndItem, pDis->itemID, &text[0]);
+    }
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, textCol);
+    HGDIOBJ oldFont = SelectObject(hdc, m_hFontRegular);
+
+    RECT rcText = rc;
+    rcText.left += 10;
+    rcText.right -= 10;
+    DrawTextW(hdc, text.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    SelectObject(hdc, oldFont);
+}
+
 void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
     RECT rc;
     GetClientRect(hWnd, &rc);
@@ -1256,9 +1476,12 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
+        // Pre-fill entire buffer with parent card background color so rounded corners blend seamlessly
+        g.Clear(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
+
         // 1. Draw smooth container background
         Gdiplus::GraphicsPath contPath;
-        AddRoundedRect(contPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f), 8.0f);
+        AddRoundedRect(contPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f), 10.0f);
         Gdiplus::SolidBrush contBrush(Gdiplus::Color(255, GetRValue(pal.graphBg), GetGValue(pal.graphBg), GetBValue(pal.graphBg)));
         Gdiplus::Pen contPen(Gdiplus::Color(255, GetRValue(pal.graphBorder), GetGValue(pal.graphBorder), GetBValue(pal.graphBorder)), 1.0f);
         g.FillPath(&contBrush, &contPath);

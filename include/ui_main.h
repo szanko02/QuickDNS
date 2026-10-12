@@ -27,6 +27,9 @@ public:
     bool initialize(HINSTANCE hInstance, int nCmdShow);
     int run_message_loop();
 
+    bool is_dark_mode() const { return m_isDarkMode; }
+    HFONT get_font_regular() const { return m_hFontRegular; }
+
 private:
     static LRESULT CALLBACK window_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK graph_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -58,7 +61,9 @@ private:
     void draw_custom_button(DRAWITEMSTRUCT* pDis);
     void draw_theme_toggle_button(DRAWITEMSTRUCT* pDis);
     void draw_sparkline(HWND hWnd, HDC hdc);
+    void draw_combobox_item(DRAWITEMSTRUCT* pDis);
     void attach_button_effects(HWND hBtn, UINT_PTR subclassId);
+    void attach_combobox_effects(HWND hCombo, UINT_PTR subclassId);
 
     // Theme Management
     void apply_theme(bool isDark);

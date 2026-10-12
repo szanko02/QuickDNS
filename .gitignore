@@ -23,6 +23,7 @@ Makefile
 *.pdb
 *.exp
 *.ilk
+*.zip
 
 # Temp files
 *.log
