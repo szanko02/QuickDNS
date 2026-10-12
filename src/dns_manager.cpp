@@ -765,11 +765,11 @@ void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::
     // 2. Windows netsh encryption (tries 'set encryption' first; if not found, tries 'add encryption')
     std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
     std::wstring cmd_set = netsh_path + L" dns set encryption server=" + server_ip +
-        L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=no";
+        L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=yes";
     log_info(L"Executing netsh set encryption: " + cmd_set);
     if (!execute_hidden_process(cmd_set)) {
         std::wstring cmd_add = netsh_path + L" dns add encryption server=" + server_ip +
-            L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=no";
+            L" dohtemplate=\"" + doh_template + L"\" autoupgrade=yes udpfallback=yes";
         log_info(L"Executing netsh add encryption fallback: " + cmd_add);
         execute_hidden_process(cmd_add);
     }
@@ -778,8 +778,8 @@ void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::
     std::wstring ps_path = get_system32_path() + L"\\WindowsPowerShell\\v1.0\\powershell.exe";
     std::wstring ps_cmd = ps_path + L" -NoProfile -ExecutionPolicy Bypass -Command \""
         L"if (Get-Command Add-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { "
-        L"  Add-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp:`$false -AutoUpgrade:`$true -ErrorAction SilentlyContinue; "
-        L"  Set-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp:`$false -AutoUpgrade:`$true -ErrorAction SilentlyContinue "
+        L"  Add-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; "
+        L"  Set-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue "
         L"}\"";
     execute_hidden_process(ps_cmd);
 }
