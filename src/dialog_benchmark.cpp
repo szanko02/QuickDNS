@@ -323,7 +323,7 @@ void BenchmarkDialog::create_controls() {
         0,
         LIST_CLASS_NAME,
         L"",
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
         marginX, curY, contentWidth, listHeight,
         m_hWnd, (HMENU)IDC_LIST_BENCHMARK, m_hInstance, this
     );
@@ -866,20 +866,13 @@ LRESULT BenchmarkDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam
             int rowStep = rowHeight + rowGap;
             int totalItems = static_cast<int>(m_items.size());
             int totalContentHeight = totalItems * rowStep;
+            bool needScroll = totalContentHeight > h;
+            int maxScroll = needScroll ? (totalContentHeight - h) : 0;
+            m_scrollOffset = std::clamp(m_scrollOffset, 0, maxScroll);
 
-            // Configure scrollbar
-            SCROLLINFO si = { sizeof(SCROLLINFO) };
-            si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-            si.nMin = 0;
-            si.nMax = totalContentHeight;
-            si.nPage = h;
-            si.nPos = m_scrollOffset;
-            SetScrollInfo(hWnd, SB_VERT, &si, TRUE);
-
-            int itemW = w;
-            if (totalContentHeight > h) {
-                itemW = w - 4;
-            }
+            int scrollBarW = 7;
+            int scrollBarMarginRight = 4;
+            int itemW = needScroll ? (w - scrollBarW - scrollBarMarginRight - 6) : w;
 
             for (int i = 0; i < totalItems; ++i) {
                 int y = i * rowStep - m_scrollOffset;
@@ -888,6 +881,48 @@ LRESULT BenchmarkDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam
                 bool isSelected = (i == m_selectedIndex);
                 bool isHovered = (i == m_hoveredIndex);
                 draw_list_item(g, i, y, itemW, rowHeight, isSelected, isHovered);
+            }
+
+            // Custom modern anti-aliased scrollbar themed to match the app
+            if (needScroll) {
+                float sbX = static_cast<float>(w - scrollBarMarginRight - scrollBarW);
+                float sbY = 4.0f;
+                float sbH = static_cast<float>(h - 8);
+
+                // Track
+                Gdiplus::SolidBrush trackBr(m_isDarkMode ? Gdiplus::Color(25, 255, 255, 255) : Gdiplus::Color(20, 0, 0, 0));
+                Gdiplus::GraphicsPath trackPath;
+                AddRoundedRect(trackPath, Gdiplus::RectF(sbX, sbY, static_cast<float>(scrollBarW), sbH), 3.5f);
+                g.FillPath(&trackBr, &trackPath);
+
+                // Thumb
+                float thumbH = std::max(32.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+                float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
+                float thumbY = sbY + scrollRatio * (sbH - thumbH);
+
+                Gdiplus::Color thumbColor;
+                if (m_isDarkMode) {
+                    if (m_isDraggingScroll) {
+                        thumbColor = Gdiplus::Color(255, 120, 140, 175);
+                    } else if (m_scrollThumbHovered) {
+                        thumbColor = Gdiplus::Color(255, 95, 110, 135);
+                    } else {
+                        thumbColor = Gdiplus::Color(255, 65, 75, 95);
+                    }
+                } else {
+                    if (m_isDraggingScroll) {
+                        thumbColor = Gdiplus::Color(255, 130, 150, 180);
+                    } else if (m_scrollThumbHovered) {
+                        thumbColor = Gdiplus::Color(255, 160, 175, 195);
+                    } else {
+                        thumbColor = Gdiplus::Color(255, 200, 210, 222);
+                    }
+                }
+
+                Gdiplus::SolidBrush thumbBr(thumbColor);
+                Gdiplus::GraphicsPath thumbPath;
+                AddRoundedRect(thumbPath, Gdiplus::RectF(sbX, thumbY, static_cast<float>(scrollBarW), thumbH), 3.5f);
+                g.FillPath(&thumbBr, &thumbPath);
             }
         }
 
@@ -900,16 +935,71 @@ LRESULT BenchmarkDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam
     }
 
     case WM_MOUSEMOVE: {
-        int my = GET_Y_LPARAM(lParam) + m_scrollOffset;
-        int idx = my / 54;
-        if (idx >= 0 && idx < static_cast<int>(m_items.size())) {
-            if (idx != m_hoveredIndex) {
-                m_hoveredIndex = idx;
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        int totalItems = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_itemsMutex);
+            totalItems = static_cast<int>(m_items.size());
+        }
+        int totalContentHeight = totalItems * 54;
+        bool needScroll = totalContentHeight > h;
+        int maxScroll = needScroll ? (totalContentHeight - h) : 0;
+
+        if (m_isDraggingScroll) {
+            if (needScroll) {
+                float sbY = 4.0f;
+                float sbH = static_cast<float>(h - 8);
+                float thumbH = std::max(32.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+                float availableTrack = sbH - thumbH;
+                if (availableTrack > 0.0f) {
+                    float deltaY = static_cast<float>(my - m_dragStartY);
+                    float offsetDelta = (deltaY / availableTrack) * static_cast<float>(maxScroll);
+                    m_scrollOffset = std::clamp(static_cast<int>(m_dragStartOffset + offsetDelta), 0, maxScroll);
+                    InvalidateRect(hWnd, nullptr, FALSE);
+                }
+            }
+            return 0;
+        }
+
+        bool overScrollArea = needScroll && (mx >= (w - 17));
+        if (overScrollArea) {
+            if (m_hoveredIndex != -1) {
+                m_hoveredIndex = -1;
                 InvalidateRect(hWnd, nullptr, FALSE);
             }
-        } else if (m_hoveredIndex != -1) {
-            m_hoveredIndex = -1;
-            InvalidateRect(hWnd, nullptr, FALSE);
+            float sbY = 4.0f;
+            float sbH = static_cast<float>(h - 8);
+            float thumbH = std::max(32.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+            float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
+            float thumbY = sbY + scrollRatio * (sbH - thumbH);
+
+            bool overThumb = (my >= thumbY && my <= thumbY + thumbH);
+            if (m_scrollThumbHovered != overThumb) {
+                m_scrollThumbHovered = overThumb;
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
+        } else {
+            if (m_scrollThumbHovered) {
+                m_scrollThumbHovered = false;
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
+            int contentY = my + m_scrollOffset;
+            int idx = contentY / 54;
+            if (idx >= 0 && idx < totalItems) {
+                if (idx != m_hoveredIndex) {
+                    m_hoveredIndex = idx;
+                    InvalidateRect(hWnd, nullptr, FALSE);
+                }
+            } else if (m_hoveredIndex != -1) {
+                m_hoveredIndex = -1;
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
         }
 
         TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
@@ -918,28 +1008,94 @@ LRESULT BenchmarkDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam
     }
 
     case WM_MOUSELEAVE: {
-        m_hoveredIndex = -1;
-        InvalidateRect(hWnd, nullptr, FALSE);
+        if (!m_isDraggingScroll) {
+            m_hoveredIndex = -1;
+            m_scrollThumbHovered = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
         break;
     }
 
     case WM_LBUTTONDOWN: {
         SetFocus(hWnd);
-        int my = GET_Y_LPARAM(lParam) + m_scrollOffset;
-        int idx = my / 54;
-        if (idx >= 0 && idx < static_cast<int>(m_items.size())) {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        int totalItems = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_itemsMutex);
+            totalItems = static_cast<int>(m_items.size());
+        }
+        int totalContentHeight = totalItems * 54;
+        bool needScroll = totalContentHeight > h;
+        int maxScroll = needScroll ? (totalContentHeight - h) : 0;
+
+        if (needScroll && mx >= (w - 17)) {
+            float sbY = 4.0f;
+            float sbH = static_cast<float>(h - 8);
+            float thumbH = std::max(32.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+            float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
+            float thumbY = sbY + scrollRatio * (sbH - thumbH);
+
+            if (my >= thumbY && my <= thumbY + thumbH) {
+                m_isDraggingScroll = true;
+                m_dragStartY = my;
+                m_dragStartOffset = m_scrollOffset;
+                SetCapture(hWnd);
+            } else if (my < thumbY) {
+                m_scrollOffset = std::max(0, m_scrollOffset - h);
+            } else {
+                m_scrollOffset = std::min(maxScroll, m_scrollOffset + h);
+            }
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return 0;
+        }
+
+        int contentY = my + m_scrollOffset;
+        int idx = contentY / 54;
+        if (idx >= 0 && idx < totalItems) {
             m_selectedIndex = idx;
             InvalidateRect(hWnd, nullptr, FALSE);
         }
         break;
     }
 
+    case WM_LBUTTONUP: {
+        if (m_isDraggingScroll) {
+            m_isDraggingScroll = false;
+            ReleaseCapture();
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        break;
+    }
+
+    case WM_CAPTURECHANGED: {
+        m_isDraggingScroll = false;
+        break;
+    }
+
     case WM_LBUTTONDBLCLK: {
-        int my = GET_Y_LPARAM(lParam) + m_scrollOffset;
-        int idx = my / 54;
-        if (idx >= 0 && idx < static_cast<int>(m_items.size())) {
-            m_selectedIndex = idx;
-            on_apply();
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int w = rc.right - rc.left;
+        if (mx < w - 17) {
+            int contentY = my + m_scrollOffset;
+            int idx = contentY / 54;
+            int totalItems = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_itemsMutex);
+                totalItems = static_cast<int>(m_items.size());
+            }
+            if (idx >= 0 && idx < totalItems) {
+                m_selectedIndex = idx;
+                on_apply();
+            }
         }
         break;
     }
@@ -949,7 +1105,11 @@ LRESULT BenchmarkDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam
         int step = 54;
         RECT rc;
         GetClientRect(hWnd, &rc);
-        int totalH = static_cast<int>(m_items.size()) * 54;
+        int totalH = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_itemsMutex);
+            totalH = static_cast<int>(m_items.size()) * 54;
+        }
         int maxScroll = std::max<int>(0, totalH - static_cast<int>(rc.bottom - rc.top));
         m_scrollOffset -= (delta / WHEEL_DELTA) * step;
         m_scrollOffset = std::clamp(m_scrollOffset, 0, maxScroll);
@@ -957,31 +1117,12 @@ LRESULT BenchmarkDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam
         return 0;
     }
 
-    case WM_VSCROLL: {
-        RECT rc;
-        GetClientRect(hWnd, &rc);
-        int totalH = static_cast<int>(m_items.size()) * 54;
-        int maxScroll = std::max<int>(0, totalH - static_cast<int>(rc.bottom - rc.top));
-
-        SCROLLINFO si = { sizeof(SCROLLINFO) };
-        si.fMask = SIF_ALL;
-        GetScrollInfo(hWnd, SB_VERT, &si);
-
-        int pos = m_scrollOffset;
-        switch (LOWORD(wParam)) {
-        case SB_LINEUP: pos -= 54; break;
-        case SB_LINEDOWN: pos += 54; break;
-        case SB_PAGEUP: pos -= (rc.bottom - rc.top); break;
-        case SB_PAGEDOWN: pos += (rc.bottom - rc.top); break;
-        case SB_THUMBTRACK: pos = HIWORD(wParam); break;
-        }
-
-        m_scrollOffset = std::clamp(pos, 0, maxScroll);
-        InvalidateRect(hWnd, nullptr, FALSE);
-        return 0;
-    }
-
     case WM_KEYDOWN: {
+        int totalItems = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_itemsMutex);
+            totalItems = static_cast<int>(m_items.size());
+        }
         if (wParam == VK_UP) {
             m_selectedIndex = std::max(0, m_selectedIndex - 1);
             int targetY = m_selectedIndex * 54;
@@ -990,12 +1131,25 @@ LRESULT BenchmarkDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam
             return 0;
         }
         if (wParam == VK_DOWN) {
-            m_selectedIndex = std::min(static_cast<int>(m_items.size()) - 1, m_selectedIndex + 1);
+            m_selectedIndex = std::min(totalItems - 1, m_selectedIndex + 1);
             RECT rc; GetClientRect(hWnd, &rc);
             int targetY = (m_selectedIndex + 1) * 54;
             if (targetY > m_scrollOffset + (rc.bottom - rc.top)) {
                 m_scrollOffset = targetY - (rc.bottom - rc.top);
             }
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_PRIOR) {
+            RECT rc; GetClientRect(hWnd, &rc);
+            m_scrollOffset = std::max(0, m_scrollOffset - static_cast<int>(rc.bottom - rc.top));
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_NEXT) {
+            RECT rc; GetClientRect(hWnd, &rc);
+            int maxScroll = std::max<int>(0, totalItems * 54 - static_cast<int>(rc.bottom - rc.top));
+            m_scrollOffset = std::min(maxScroll, m_scrollOffset + static_cast<int>(rc.bottom - rc.top));
             InvalidateRect(hWnd, nullptr, FALSE);
             return 0;
         }
@@ -1011,7 +1165,22 @@ LRESULT BenchmarkDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam
     }
 
     case WM_SETCURSOR: {
-        SetCursor(LoadCursorW(nullptr, IDC_HAND));
+        POINT pt;
+        GetCursorPos(&pt);
+        ScreenToClient(hWnd, &pt);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int totalItems = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_itemsMutex);
+            totalItems = static_cast<int>(m_items.size());
+        }
+        bool needScroll = (totalItems * 54) > (rc.bottom - rc.top);
+        if (needScroll && pt.x >= (rc.right - rc.left - 17)) {
+            SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+        } else {
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+        }
         return TRUE;
     }
     }

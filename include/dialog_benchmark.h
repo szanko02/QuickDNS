@@ -84,6 +84,10 @@ private:
     int m_selectedIndex = 0;
     int m_hoveredIndex = -1;
     int m_scrollOffset = 0;
+    bool m_isDraggingScroll = false;
+    bool m_scrollThumbHovered = false;
+    int m_dragStartY = 0;
+    int m_dragStartOffset = 0;
 
     std::atomic<bool> m_workerRunning{false};
     std::atomic<bool> m_isPaused{false};
