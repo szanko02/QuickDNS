@@ -129,11 +129,13 @@ QuickDNS/
 │   ├── config_manager.h          # Управление профилями и JSON-персистентность
 │   ├── dialog_add_profile.h      # Модальное окно добавления своих DNS-профилей
 │   ├── dialog_benchmark.h        # Диалог многопоточного тестирования скорости DNS
+│   ├── dialog_smartdns.h         # Каталог SmartDNS и разблокируемых сервисов
 │   ├── dns_benchmark.h          # Движок замера пинга серверов
 │   ├── dns_manager.h             # Сетевое ядро, Win32 IPHlpApi и сброс кэша
 │   ├── encoding_utils.h          # Декодирование UTF-8 <-> UTF-16
 │   ├── resource.h                # Идентификаторы ресурсов и контролов
-│   └── ui_main.h                 # Архитектура главного окна и системного трея
+│   ├── ui_main.h                 # Архитектура главного окна и системного трея
+│   └── ui_palette.h              # Цветовая палитра темной и светлой тем
 ├── res/
 │   ├── app.manifest              # Манифест UAC requireAdministrator + DPI v2
 │   ├── app_icon.ico              # Фирменная иконка приложения (16x16 - 256x256)
@@ -145,6 +147,7 @@ QuickDNS/
 │   ├── config_manager.cpp        # Реализация JSON хранилища и встроенных пресетов
 │   ├── dialog_add_profile.cpp    # Реализация модального диалога добавления профиля
 │   ├── dialog_benchmark.cpp      # Реализация окна тестирования DNS
+│   ├── dialog_smartdns.cpp       # Реализация каталога SmartDNS с поиском и карточками
 │   ├── dns_benchmark.cpp         # Реализация движка замера скорости
 │   ├── dns_manager.cpp           # Системные сетевые вызовы Windows
 │   ├── main.cpp                  # Точка входа wWinMain, инициализация GDI+ и COM
