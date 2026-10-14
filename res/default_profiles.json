@@ -11,7 +11,10 @@
       "secondary_ipv6": "",
       "doh_template": "https://dns.comss.one/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": true,
+      "website_url": "https://dns.comss.one/",
+      "unblocked_summary": "ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X"
     },
     {
       "id": "geohide",
@@ -23,7 +26,10 @@
       "secondary_ipv6": "",
       "doh_template": "https://dns.geohide.ru/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": true,
+      "website_url": "https://geohide.ru/",
+      "unblocked_summary": "ChatGPT, Claude, Gemini, Grok, Cursor, DeepL, Spotify, Notion, Canva, Autodesk"
     },
     {
       "id": "bezmezhau",
@@ -35,7 +41,10 @@
       "secondary_ipv6": "",
       "doh_template": "https://dns.bezmezhau.com/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": true,
+      "website_url": "https://bezmezhau.com/",
+      "unblocked_summary": "ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok"
     },
     {
       "id": "zapret",
@@ -47,7 +56,10 @@
       "secondary_ipv6": "",
       "doh_template": "https://dns.zapret.moe/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": true,
+      "website_url": "https://zapret.moe/",
+      "unblocked_summary": "Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker"
     },
     {
       "id": "malw",
@@ -59,7 +71,10 @@
       "secondary_ipv6": "2a13:82c0:0:d::3",
       "doh_template": "https://dns.malw.link/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": true,
+      "website_url": "https://info.dns.malw.link/",
+      "unblocked_summary": "ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva"
     },
     {
       "id": "cloudflare",
@@ -71,7 +86,10 @@
       "secondary_ipv6": "2606:4700:4700::1001",
       "doh_template": "https://cloudflare-dns.com/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": false,
+      "website_url": "https://1.1.1.1/",
+      "unblocked_summary": ""
     },
     {
       "id": "google",
@@ -83,7 +101,10 @@
       "secondary_ipv6": "2001:4860:4860::8844",
       "doh_template": "https://dns.google/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": false,
+      "website_url": "https://developers.google.com/speed/public-dns",
+      "unblocked_summary": ""
     },
     {
       "id": "quad9",
@@ -95,7 +116,10 @@
       "secondary_ipv6": "2620:fe::9",
       "doh_template": "https://dns.quad9.net/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": false,
+      "website_url": "https://quad9.net/",
+      "unblocked_summary": ""
     },
     {
       "id": "adguard",
@@ -107,7 +131,10 @@
       "secondary_ipv6": "2a10:50c0::ad2:ff",
       "doh_template": "https://dns.adguard-dns.com/dns-query",
       "is_builtin": true,
-      "is_dhcp": false
+      "is_dhcp": false,
+      "is_smart_dns": false,
+      "website_url": "https://adguard-dns.io/",
+      "unblocked_summary": ""
     },
     {
       "id": "dhcp",
@@ -119,7 +146,10 @@
       "secondary_ipv6": "",
       "doh_template": "",
       "is_builtin": true,
-      "is_dhcp": true
+      "is_dhcp": true,
+      "is_smart_dns": false,
+      "website_url": "",
+      "unblocked_summary": ""
     }
   ]
 }

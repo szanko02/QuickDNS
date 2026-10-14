@@ -1,6 +1,7 @@
 #include "ui_main.h"
 #include "dialog_add_profile.h"
 #include "dialog_benchmark.h"
+#include "dialog_smartdns.h"
 #include "encoding_utils.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
@@ -29,7 +30,7 @@ using namespace quickdns;
 namespace {
     constexpr const wchar_t* WINDOW_CLASS_NAME = L"QuickDNS_MainWindowClass";
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
-    constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.5.0 — Быстрая смена DNS в 1 клик";
+    constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.6.0 — Быстрая смена DNS в 1 клик";
 
     constexpr int WINDOW_CLIENT_WIDTH  = 560;
     constexpr int WINDOW_CLIENT_HEIGHT = 754;
@@ -441,6 +442,10 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             open_benchmark_dialog();
             return 0;
         }
+        if (wmId == IDC_BTN_SMARTDNS_CATALOG) {
+            open_smartdns_catalog_dialog();
+            return 0;
+        }
         if (wmId == IDC_BTN_RESET_DHCP) {
             reset_to_dhcp();
             return 0;
@@ -535,6 +540,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         m_isBusy = false;
         EnableWindow(m_hBtnApply, TRUE);
         EnableWindow(m_hBtnBenchmark, TRUE);
+        if (m_hBtnSmartDnsCatalog) EnableWindow(m_hBtnSmartDnsCatalog, TRUE);
         EnableWindow(m_hBtnResetDhcp, TRUE);
         EnableWindow(m_hBtnFlushDns, TRUE);
         if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, TRUE);
@@ -813,7 +819,7 @@ void MainWindow::create_controls() {
     int startY = 14;
 
     // 1. Status Card Header
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.5.0 — Менеджер DNS",
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.6.0 — Менеджер DNS",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth - 44, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -990,13 +996,18 @@ void MainWindow::create_controls() {
         m_hWnd, (HMENU)IDC_BTN_APPLY, m_hInstance, nullptr);
     startY += 38 + 10;
 
-    m_hBtnBenchmark = CreateWindowExW(0, WC_BUTTONW, L"Проверить скорость всех DNS (пинг)",
+    int halfWidth = (contentWidth - 12) / 2;
+    m_hBtnBenchmark = CreateWindowExW(0, WC_BUTTONW, L"Тест скорости DNS (пинг)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, contentWidth, 34,
+        marginX, startY, halfWidth, 34,
         m_hWnd, (HMENU)IDC_BTN_BENCHMARK, m_hInstance, nullptr);
+
+    m_hBtnSmartDnsCatalog = CreateWindowExW(0, WC_BUTTONW, L"Каталог SmartDNS",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX + halfWidth + 12, startY, halfWidth, 34,
+        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_CATALOG, m_hInstance, nullptr);
     startY += 34 + 10;
 
-    int halfWidth = (contentWidth - 12) / 2;
     m_hBtnResetDhcp = CreateWindowExW(0, WC_BUTTONW, L"Сброс на DHCP (Авто)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX, startY, halfWidth, 34,
@@ -1027,7 +1038,7 @@ void MainWindow::create_controls() {
     startY += 30 + 14;
 
     // 5. Footer Version Badge
-    m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.5.0 • Portable",
+    m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.6.0 • Portable",
         WS_CHILD | WS_VISIBLE | SS_CENTER,
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -1036,6 +1047,7 @@ void MainWindow::create_controls() {
     // Attach smooth animations, hover effects and hand cursor (IDC_HAND) to all buttons
     attach_button_effects(m_hBtnApply, 1);
     attach_button_effects(m_hBtnBenchmark, 2);
+    attach_button_effects(m_hBtnSmartDnsCatalog, 11);
     attach_button_effects(m_hBtnResetDhcp, 3);
     attach_button_effects(m_hBtnWinNetwork, 4);
     attach_button_effects(m_hBtnFlushDns, 5);
@@ -1310,7 +1322,24 @@ void MainWindow::draw_combobox_item(DRAWITEMSTRUCT* pDis) {
     RECT rcText = rc;
     rcText.left += 10;
     rcText.right -= 10;
-    DrawTextW(hdc, text.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    bool isSmart = (pDis->hwndItem == m_hComboProfile && pDis->itemID < m_profiles.size() && m_profiles[pDis->itemID].is_smart_dns);
+    if (isSmart) {
+        rcText.right -= 75;
+    }
+
+    DrawTextW(hdc, text.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+
+    if (isSmart) {
+        SelectObject(hdc, m_hFontSmall);
+        COLORREF smartCol = isSelected 
+            ? (m_isDarkMode ? RGB(110, 231, 183) : RGB(22, 101, 52))
+            : (m_isDarkMode ? RGB(52, 211, 153) : RGB(21, 128, 61));
+        SetTextColor(hdc, smartCol);
+        RECT rcBadge = rc;
+        rcBadge.right -= 12;
+        DrawTextW(hdc, L"SmartDNS", -1, &rcBadge, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
 
     SelectObject(hdc, oldFont);
 }
@@ -1536,7 +1565,7 @@ void MainWindow::setup_tray_icon() {
     m_nid.uCallbackMessage = WM_APP_TRAYMSG;
     m_nid.hIcon = LoadIconW(m_hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     if (!m_nid.hIcon) m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(m_nid.szTip, L"QuickDNS v1.5.0 — Быстрая смена DNS");
+    wcscpy_s(m_nid.szTip, L"QuickDNS v1.6.0 — Быстрая смена DNS");
 
     Shell_NotifyIconW(NIM_ADD, &m_nid);
 }
@@ -1689,7 +1718,14 @@ void MainWindow::on_profile_selected() {
         } else {
             std::wstring pri  = utf8_to_wide(p.primary_ipv4);
             std::wstring sec  = utf8_to_wide(p.secondary_ipv4);
-            descText = utf8_to_wide(p.description);
+            if (p.is_smart_dns) {
+                descText = L"[SmartDNS] " + utf8_to_wide(p.description);
+                if (!p.unblocked_summary.empty()) {
+                    descText += L" • Разблокирует: " + utf8_to_wide(p.unblocked_summary);
+                }
+            } else {
+                descText = utf8_to_wide(p.description);
+            }
             dohText  = utf8_to_wide(p.doh_template);
             ipText = pri + (sec.empty() ? L"" : L", " + sec);
         }
@@ -1724,6 +1760,7 @@ void MainWindow::apply_selected_dns() {
     m_isBusy = true;
     EnableWindow(m_hBtnApply, FALSE);
     EnableWindow(m_hBtnBenchmark, FALSE);
+    if (m_hBtnSmartDnsCatalog) EnableWindow(m_hBtnSmartDnsCatalog, FALSE);
     EnableWindow(m_hBtnResetDhcp, FALSE);
     EnableWindow(m_hBtnFlushDns, FALSE);
     if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, FALSE);
@@ -1831,6 +1868,22 @@ void MainWindow::open_add_profile_dialog() {
 
 void MainWindow::open_benchmark_dialog() {
     auto selectedId = BenchmarkDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id(), m_isDarkMode);
+    if (selectedId.has_value()) {
+        std::string chosenId = selectedId.value();
+        for (size_t i = 0; i < m_profiles.size(); ++i) {
+            if (m_profiles[i].id == chosenId) {
+                m_selectedProfileIndex = static_cast<int>(i);
+                ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                on_profile_selected();
+                apply_selected_dns();
+                break;
+            }
+        }
+    }
+}
+
+void MainWindow::open_smartdns_catalog_dialog() {
+    auto selectedId = SmartDnsDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id(), m_isDarkMode);
     if (selectedId.has_value()) {
         std::string chosenId = selectedId.value();
         for (size_t i = 0; i < m_profiles.size(); ++i) {
@@ -2178,6 +2231,9 @@ void MainWindow::show_tray_context_menu() {
     for (size_t i = 0; i < m_profiles.size() && i < 50; ++i) {
         const auto& p = m_profiles[i];
         std::wstring pName = utf8_to_wide(p.name);
+        if (p.is_smart_dns) {
+            pName += L" [SmartDNS]";
+        }
         UINT flags = MF_BYPOSITION | MF_STRING;
         if (p.id == activeId) {
             flags |= MF_CHECKED;

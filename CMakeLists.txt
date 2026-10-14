@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QuickDNS VERSION 1.5.0 LANGUAGES C CXX)
+project(QuickDNS VERSION 1.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,6 +69,7 @@ set(APP_SOURCES
     src/ui_main.cpp
     src/dialog_add_profile.cpp
     src/dialog_benchmark.cpp
+    src/dialog_smartdns.cpp
     res/resource.rc
 )
 

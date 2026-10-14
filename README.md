@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 <img src="res/app_logo.png" width="128" height="128" alt="QuickDNS Logo" />
 
@@ -15,7 +15,7 @@
 
 <br/>
 
-### [Скачать релиз v1.5.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
+### [Скачать релиз v1.6.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
 > Не требует установки. Скачайте архив или файл `QuickDNS.exe` и запустите.
 
 </div>
@@ -35,10 +35,12 @@ QuickDNS автоматизирует этот процесс:
 ## Возможности
 
 * **Смена DNS в один клик:** Мгновенное применение настроек к активному сетевому адаптеру (Ethernet / Wi-Fi) без перезагрузки системы.
+* **Метки [SmartDNS]:** Визуальная индикация профилей, автоматически проксирующих трафик для разблокировки зарубежных нейросетей (ChatGPT, Claude, Gemini, Copilot), музыки и стримингов (Spotify, YouTube, Deezer, Netflix), сервисов и рабочих платформ (Canva, Notion, Autodesk, JetBrains).
+* **Встроенный интерактивный Каталог SmartDNS:** Отдельное окно с подробными карточками провайдеров, категориями сервисов, поисковым фильтром в реальном времени и кнопками прямого перехода на официальные сайты.
 * **Копируемые IP и редактируемый DoH:** Текстовые поля IP-адресов и шаблона DNS over HTTPS доступны для выделения и копирования, а также для ручного редактирования пользовательского шаблона DoH.
 * **Переход в параметры сети Windows:** Отдельная кнопка прямого вызова системных настроек сети и DHCP Windows в один клик.
 * **Мониторинг задержки и график стабильности:** Встроенный sparkline-график в реальном времени с интервалом обновления 3 секунды и историей пинга за последние 60 секунд.
-* **Тестирование скорости всех серверов:** Многопоточный замер времени отклика на пуле популярных доменов (ChatGPT, Claude, Google) с градацией качества.
+* **Тестирование скорости всех серверов:** Многопоточный замер времени отклика на пуле популярных доменов с градацией качества и графиками sparkline.
 * **Предустановленные профили:** Популярные DNS-серверы для ускорения, защиты и обхода региональных ограничений (Comss.one, GeoHide, Без межаў, Zapret, Malw.link, Cloudflare, Google, Quad9, AdGuard).
 * **Добавление собственных профилей:** Диалоговое окно для сохранения пользовательских конфигураций с валидацией IP-адресов и поддержкой DoH-ссылок.
 * **Управление профилями:** Удаление пользовательских профилей в один клик.
@@ -53,24 +55,24 @@ QuickDNS автоматизирует этот процесс:
 
 ## Предустановленные профили DNS
 
-| Профиль | Основной DNS (IPv4) | Дополнительный DNS (IPv4) | DNS over HTTPS (DoH) URL | Назначение |
-| :--- | :--- | :--- | :--- | :--- |
-| **Comss.one DNS** | `83.220.169.155` | `212.109.195.93` | `https://dns.comss.one/dns-query` | Российский сервер: обход блокировок, защита от рекламы |
-| **GeoHide DNS** | `193.233.112.67` | `193.233.112.88` | `https://dns.geohide.ru/dns-query` | Обход гео-ограничений (ChatGPT, Spotify, зарубежные сервисы) |
-| **Без межаў DNS** | `143.20.64.55` | `31.58.216.201` | `https://dns.bezmezhau.com/dns-query` | Децентрализованный доступ к сети без фильтрации |
-| **Zapret DNS** | `83.217.211.149` | — | `https://dns.zapret.moe/dns-query` | Сервер проекта Zapret: доступ к зарубежным AI и сервисам |
-| **Malw.link DNS** | `179.254.166.171` | `164.5.224.81` | `https://dns.malw.link/dns-query` | Разблокировка сайтов, блокировка рекламы и трекеров |
-| **Cloudflare** | `1.1.1.1` | `1.0.0.1` | `https://cloudflare-dns.com/dns-query` | Высокая скорость отклика и повышенная приватность |
-| **Google Public DNS** | `8.8.8.8` | `8.8.4.4` | `https://dns.google/dns-query` | Общедоступный стабильный DNS-резолвер |
-| **Quad9 DNS** | `9.9.9.9` | `149.112.112.112` | `https://dns.quad9.net/dns-query` | Блокировка вредоносных и фишинговых ресурсов |
-| **AdGuard DNS** | `94.140.14.14` | `94.140.15.15` | `https://dns.adguard-dns.com/dns-query` | Фильтрация рекламы и счетчиков аналитики |
-| **Автоматически (DHCP)** | *Авто* | *Авто* | — | Сброс параметров на стандартный DNS роутера или провайдера |
+| Профиль | Тип | Основной DNS (IPv4) | Дополнительный DNS (IPv4) | DNS over HTTPS (DoH) URL | Официальный сайт | Разблокируемые сервисы |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **GeoHide DNS** | `[SmartDNS]` | `193.233.112.67` | `193.233.112.88` | `https://dns.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | ChatGPT, Claude, Gemini, Grok, Cursor, DeepL, Spotify, Notion, Canva, Autodesk, JetBrains |
+| **Comss.one DNS** | `[SmartDNS]` | `83.220.169.155` | `212.109.195.93` | `https://dns.comss.one/dns-query` | [dns.comss.one](https://dns.comss.one/) | ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X, AdGuard |
+| **Zapret DNS** | `[SmartDNS]` | `83.217.211.149` | — | `https://dns.zapret.moe/dns-query` | [zapret.moe](https://zapret.moe/) | Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker |
+| **Без межаў DNS** | `[SmartDNS]` | `143.20.64.55` | `31.58.216.201` | `https://dns.bezmezhau.com/dns-query` | [bezmezhau.com](https://bezmezhau.com/) | ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok |
+| **Malw.link DNS** | `[SmartDNS]` | `179.254.166.171` | `164.5.224.81` | `https://dns.malw.link/dns-query` | [info.dns.malw.link](https://info.dns.malw.link/) | ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva |
+| **Cloudflare** | Публичный | `1.1.1.1` | `1.0.0.1` | `https://cloudflare-dns.com/dns-query` | [1.1.1.1](https://1.1.1.1/) | Высокая скорость отклика и повышенная приватность |
+| **Google Public DNS** | Публичный | `8.8.8.8` | `8.8.4.4` | `https://dns.google/dns-query` | [dns.google](https://dns.google/) | Общедоступный стабильный глобальный DNS-резолвер |
+| **Quad9 DNS** | Безопасность | `9.9.9.9` | `149.112.112.112` | `https://dns.quad9.net/dns-query` | [quad9.net](https://quad9.net/) | Блокировка вредоносных и фишинговых ресурсов |
+| **AdGuard DNS** | Фильтрация | `94.140.14.14` | `94.140.15.15` | `https://dns.adguard-dns.com/dns-query` | [adguard-dns.io](https://adguard-dns.io/) | Фильтрация рекламы и счетчиков аналитики |
+| **Автоматически (DHCP)** | Системный | *Авто* | *Авто* | — | — | Сброс параметров на стандартный DNS роутера или провайдера |
 
 ---
 
 ## Инструкция по использованию
 
-1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v1.5.0-Portable.zip`.
+1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v1.6.0-Portable.zip`.
 2. Запустите **`QuickDNS.exe`** (при первом запуске подтвердите стандартный запрос UAC для доступа к сетевым параметрам).
 3. Программа автоматически выберет ваш активный адаптер (Wi-Fi или Ethernet).
 4. Выберите нужный DNS-профиль из выпадающего списка.

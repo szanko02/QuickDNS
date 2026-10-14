@@ -627,13 +627,24 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
     std::wstring pName = utf8_to_wide(it.profile.name);
     g.DrawString(pName.c_str(), -1, &fontTitle, Gdiplus::PointF(34.0f, static_cast<float>(y) + 6.0f), &textPriBr);
 
-    // Active profile badge [Текущий]
-    if (it.profile.id == m_currentActiveId) {
-        Gdiplus::SolidBrush activeBadgeBr(Gdiplus::Color(255, GetRValue(pal.accentBlue), GetGValue(pal.accentBlue), GetBValue(pal.accentBlue)));
-        g.DrawString(L"[Текущий DNS]", -1, &fontBadge, Gdiplus::PointF(34.0f + static_cast<float>(pName.length() * 8.0f) + 12.0f, static_cast<float>(y) + 8.0f), &activeBadgeBr);
+    Gdiplus::RectF nameBounds;
+    g.MeasureString(pName.c_str(), -1, &fontTitle, Gdiplus::PointF(0, 0), &nameBounds);
+    float badgeX = 34.0f + nameBounds.Width + 8.0f;
+
+    // SmartDNS badge
+    if (it.profile.is_smart_dns) {
+        Gdiplus::SolidBrush smartBadgeBr(Gdiplus::Color(255, 34, 197, 94));
+        g.DrawString(L"[SmartDNS]", -1, &fontBadge, Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &smartBadgeBr);
+        badgeX += 68.0f;
     }
 
-    // Subtitle: Primary IP & DoH badge
+    // Active profile badge [Текущий DNS]
+    if (it.profile.id == m_currentActiveId) {
+        Gdiplus::SolidBrush activeBadgeBr(Gdiplus::Color(255, GetRValue(pal.accentBlue), GetGValue(pal.accentBlue), GetBValue(pal.accentBlue)));
+        g.DrawString(L"[Текущий DNS]", -1, &fontBadge, Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &activeBadgeBr);
+    }
+
+    // Subtitle: Primary IP & DoH badge & SmartDNS summary
     std::wstring subInfo;
     if (it.profile.is_dhcp) {
         subInfo = L"DHCP роутера/провайдера";
@@ -645,11 +656,17 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
         if (!it.profile.doh_template.empty()) {
             subInfo += L"  •  DoH";
         }
+        if (it.profile.is_smart_dns && !it.profile.unblocked_summary.empty()) {
+            subInfo += L"  •  " + utf8_to_wide(it.profile.unblocked_summary);
+        }
     }
-    g.DrawString(subInfo.c_str(), -1, &fontSub, Gdiplus::PointF(34.0f, static_cast<float>(y) + 26.0f), &textSecBr);
+    float pingColX = static_cast<float>(width) - 265.0f;
+    Gdiplus::StringFormat fmtSub;
+    fmtSub.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+    fmtSub.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+    g.DrawString(subInfo.c_str(), -1, &fontSub, Gdiplus::RectF(34.0f, static_cast<float>(y) + 26.0f, pingColX - 44.0f, 18.0f), &fmtSub, &textSecBr);
 
     // 4. Ping & Rating Column (X ~ width - 265)
-    float pingColX = static_cast<float>(width) - 265.0f;
     std::wstring pingValStr;
     Gdiplus::Color pingTextColor;
     if (it.profile.is_dhcp) {

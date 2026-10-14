@@ -103,7 +103,10 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
                             p.secondary_ipv4 != def.secondary_ipv4 ||
                             p.doh_template != def.doh_template ||
                             p.name != def.name ||
-                            p.description != def.description) {
+                            p.description != def.description ||
+                            p.is_smart_dns != def.is_smart_dns ||
+                            p.website_url != def.website_url ||
+                            p.unblocked_summary != def.unblocked_summary) {
                             p.primary_ipv4 = def.primary_ipv4;
                             p.secondary_ipv4 = def.secondary_ipv4;
                             p.primary_ipv6 = def.primary_ipv6;
@@ -111,6 +114,9 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
                             p.doh_template = def.doh_template;
                             p.name = def.name;
                             p.description = def.description;
+                            p.is_smart_dns = def.is_smart_dns;
+                            p.website_url = def.website_url;
+                            p.unblocked_summary = def.unblocked_summary;
                             updatedAny = true;
                         }
                         break;
@@ -238,7 +244,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "",
             "https://dns.comss.one/dns-query",
             true,
-            false
+            false,
+            true,
+            "https://dns.comss.one/",
+            "ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X"
         },
         {
             "geohide",
@@ -250,7 +259,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "",
             "https://dns.geohide.ru/dns-query",
             true,
-            false
+            false,
+            true,
+            "https://geohide.ru/",
+            "ChatGPT, Claude, Gemini, Grok, Cursor, DeepL, Spotify, Notion, Canva, Autodesk"
         },
         {
             "bezmezhau",
@@ -262,7 +274,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "",
             "https://dns.bezmezhau.com/dns-query",
             true,
-            false
+            false,
+            true,
+            "https://bezmezhau.com/",
+            "ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok"
         },
         {
             "zapret",
@@ -274,7 +289,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "",
             "https://dns.zapret.moe/dns-query",
             true,
-            false
+            false,
+            true,
+            "https://zapret.moe/",
+            "Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker"
         },
         {
             "malw",
@@ -286,7 +304,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "2a13:82c0:0:d::3",
             "https://dns.malw.link/dns-query",
             true,
-            false
+            false,
+            true,
+            "https://info.dns.malw.link/",
+            "ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva"
         },
         {
             "cloudflare",
@@ -298,7 +319,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "2606:4700:4700::1001",
             "https://cloudflare-dns.com/dns-query",
             true,
-            false
+            false,
+            false,
+            "https://1.1.1.1/",
+            ""
         },
         {
             "google",
@@ -310,7 +334,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "2001:4860:4860::8844",
             "https://dns.google/dns-query",
             true,
-            false
+            false,
+            false,
+            "https://developers.google.com/speed/public-dns",
+            ""
         },
         {
             "quad9",
@@ -322,7 +349,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "2620:fe::9",
             "https://dns.quad9.net/dns-query",
             true,
-            false
+            false,
+            false,
+            "https://quad9.net/",
+            ""
         },
         {
             "adguard",
@@ -334,7 +364,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "2a10:50c0::ad2:ff",
             "https://dns.adguard-dns.com/dns-query",
             true,
-            false
+            false,
+            false,
+            "https://adguard-dns.io/",
+            ""
         },
         {
             "dhcp",
@@ -346,7 +379,10 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             "",
             "",
             true,
-            true
+            true,
+            false,
+            "",
+            ""
         }
     };
 }
@@ -378,7 +414,10 @@ bool ConfigManager::save_to_file() {
             ss << "      \"secondary_ipv6\": \"" << escape_json_string(p.secondary_ipv6) << "\",\n";
             ss << "      \"doh_template\": \"" << escape_json_string(p.doh_template) << "\",\n";
             ss << "      \"is_builtin\": " << (p.is_builtin ? "true" : "false") << ",\n";
-            ss << "      \"is_dhcp\": " << (p.is_dhcp ? "true" : "false") << "\n";
+            ss << "      \"is_dhcp\": " << (p.is_dhcp ? "true" : "false") << ",\n";
+            ss << "      \"is_smart_dns\": " << (p.is_smart_dns ? "true" : "false") << ",\n";
+            ss << "      \"website_url\": \"" << escape_json_string(p.website_url) << "\",\n";
+            ss << "      \"unblocked_summary\": \"" << escape_json_string(p.unblocked_summary) << "\"\n";
             ss << "    }" << (i + 1 < m_profiles.size() ? "," : "") << "\n";
         }
 
@@ -446,6 +485,9 @@ bool ConfigManager::load_from_file() {
                 p.doh_template = extract_json_value(objStr, "doh_template");
                 p.is_builtin = (extract_json_value(objStr, "is_builtin") == "true");
                 p.is_dhcp = (extract_json_value(objStr, "is_dhcp") == "true");
+                p.is_smart_dns = (extract_json_value(objStr, "is_smart_dns") == "true");
+                p.website_url = extract_json_value(objStr, "website_url");
+                p.unblocked_summary = extract_json_value(objStr, "unblocked_summary");
                 loadedProfiles.push_back(p);
             }
 

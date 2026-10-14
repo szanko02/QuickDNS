@@ -75,6 +75,7 @@ private:
     void flush_dns_cache();
     void open_add_profile_dialog();
     void open_benchmark_dialog();
+    void open_smartdns_catalog_dialog();
     void open_windows_network_settings();
     void copy_text_to_clipboard(const std::wstring& text);
 
@@ -110,6 +111,7 @@ private:
 
     HWND m_hBtnApply = nullptr;
     HWND m_hBtnBenchmark = nullptr;
+    HWND m_hBtnSmartDnsCatalog = nullptr;
     HWND m_hBtnResetDhcp = nullptr;
     HWND m_hBtnFlushDns = nullptr;
     HWND m_hBtnWinNetwork = nullptr;

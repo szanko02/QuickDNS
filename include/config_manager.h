@@ -20,6 +20,9 @@ struct DnsProfile {
     std::string doh_template;
     bool is_builtin = false;
     bool is_dhcp = false;
+    bool is_smart_dns = false;
+    std::string website_url;
+    std::string unblocked_summary;
 
     bool operator==(const DnsProfile& other) const = default;
 };

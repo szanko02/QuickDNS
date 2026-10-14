@@ -26,6 +26,7 @@
 #define IDC_BTN_COPY_IP             1023
 #define IDC_BTN_COPY_DOH            1024
 #define IDC_BTN_WIN_NETWORK         1025
+#define IDC_BTN_SMARTDNS_CATALOG    1026
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101
@@ -41,6 +42,14 @@
 #define IDC_BTN_BENCHMARK_RETEST    1203
 #define IDC_BTN_BENCHMARK_CLOSE     1204
 #define IDC_STATUS_BENCHMARK        1205
+
+// SmartDNS Catalog Dialog Controls
+#define IDC_LIST_SMARTDNS           1301
+#define IDC_EDIT_SMARTDNS_SEARCH    1302
+#define IDC_BTN_SMARTDNS_APPLY      1303
+#define IDC_BTN_SMARTDNS_WEBSITE    1304
+#define IDC_BTN_SMARTDNS_CLOSE      1305
+#define IDC_STATUS_SMARTDNS         1306
 
 // Tray Menu Commands
 #define IDM_TRAY_SHOW               2001

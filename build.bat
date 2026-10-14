@@ -116,6 +116,9 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] Add Profile Dialog compilation failed. & ex
 "!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -c src\dialog_benchmark.cpp -o build\dialog_benchmark.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Benchmark Dialog compilation failed. & exit /b 1 )
 
+"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -c src\dialog_smartdns.cpp -o build\dialog_smartdns.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] SmartDNS Dialog compilation failed. & exit /b 1 )
+
 "!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -c src\ui_main.cpp -o build\ui_main.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] UI compilation failed. & exit /b 1 )
 
@@ -123,7 +126,7 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] UI compilation failed. & exit /b 1 )
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Main compilation failed. & exit /b 1 )
 
 echo [5/6] Linking QuickDNS.exe with embedded App Icon...
-"!CXX!" -std=c++20 -O2 -mwindows -municode -static -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dns_benchmark.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus
+"!CXX!" -std=c++20 -O2 -mwindows -municode -static -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dns_benchmark.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking QuickDNS.exe failed. & exit /b 1 )
 copy /Y build\QuickDNS.exe "%~dp0QuickDNS.exe" >nul
 
