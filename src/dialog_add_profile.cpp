@@ -8,12 +8,8 @@ using QuickDns::Encoding::wide_to_utf8;
 
 namespace {
     constexpr const wchar_t* DIALOG_CLASS_NAME = L"QuickDNS_AddProfileDialogClass";
-    constexpr int DIALOG_WIDTH = 440;
-    constexpr int DIALOG_HEIGHT = 460;
-
-    constexpr COLORREF COLOR_BG_DARK = RGB(32, 32, 32);
-    constexpr COLORREF COLOR_TEXT_LIGHT = RGB(240, 240, 240);
-    constexpr COLORREF COLOR_INPUT_BG = RGB(45, 45, 45);
+    constexpr int DIALOG_WIDTH = 460;
+    constexpr int DIALOG_HEIGHT = 505;
 
     constexpr int ID_EDIT_NAME = 3001;
     constexpr int ID_EDIT_PRI  = 3002;
@@ -22,10 +18,11 @@ namespace {
     constexpr int ID_EDIT_DOH  = 3005;
     constexpr int ID_BTN_SAVE  = 3006;
     constexpr int ID_BTN_CANCEL= 3007;
+    constexpr int ID_CHECK_SMARTDNS = 3008;
 }
 
-std::optional<DnsProfile> AddProfileDialog::show(HWND hParent, HINSTANCE hInstance) {
-    AddProfileDialog dlg(hParent, hInstance);
+std::optional<DnsProfile> AddProfileDialog::show(HWND hParent, HINSTANCE hInstance, bool isDarkMode) {
+    AddProfileDialog dlg(hParent, hInstance, isDarkMode);
     if (!dlg.create_dialog_window()) {
         return std::nullopt;
     }
@@ -51,9 +48,13 @@ std::optional<DnsProfile> AddProfileDialog::show(HWND hParent, HINSTANCE hInstan
     return dlg.m_result;
 }
 
-AddProfileDialog::AddProfileDialog(HWND hParent, HINSTANCE hInstance)
-    : m_hParent(hParent), m_hInstance(hInstance)
+AddProfileDialog::AddProfileDialog(HWND hParent, HINSTANCE hInstance, bool isDarkMode)
+    : m_hParent(hParent), m_hInstance(hInstance), m_isDarkMode(isDarkMode)
 {
+    auto pal = quickdns::GetPalette(m_isDarkMode);
+    m_hbrBg = CreateSolidBrush(pal.bg);
+    m_hbrCard = CreateSolidBrush(pal.cardBg);
+
     m_hFontRegular = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
@@ -71,6 +72,8 @@ AddProfileDialog::~AddProfileDialog() {
     if (m_hFontRegular) DeleteObject(m_hFontRegular);
     if (m_hFontBold) DeleteObject(m_hFontBold);
     if (m_hFontHeader) DeleteObject(m_hFontHeader);
+    if (m_hbrBg) DeleteObject(m_hbrBg);
+    if (m_hbrCard) DeleteObject(m_hbrCard);
 }
 
 bool AddProfileDialog::create_dialog_window() {
@@ -81,7 +84,7 @@ bool AddProfileDialog::create_dialog_window() {
     wc.hInstance = m_hInstance;
     wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = CreateSolidBrush(COLOR_BG_DARK);
+    wc.hbrBackground = m_hbrBg;
     wc.lpszClassName = DIALOG_CLASS_NAME;
     RegisterClassExW(&wc);
 
@@ -114,7 +117,7 @@ bool AddProfileDialog::create_dialog_window() {
 }
 
 void AddProfileDialog::apply_theme() {
-    BOOL useDarkMode = TRUE;
+    BOOL useDarkMode = m_isDarkMode ? TRUE : FALSE;
     DwmSetWindowAttribute(m_hWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkMode, sizeof(useDarkMode));
     DWORD cornerPref = 2; // DWMWCP_ROUND
     DwmSetWindowAttribute(m_hWnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &cornerPref, sizeof(cornerPref));
@@ -208,9 +211,17 @@ void AddProfileDialog::create_controls() {
         marginX, curY, contentWidth, 24,
         m_hWnd, (HMENU)ID_EDIT_DOH, m_hInstance, nullptr);
     SendMessageW(m_hEditDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 40;
+    curY += 34;
 
-    // 6. Action Buttons
+    // 6. SmartDNS Checkbox Option
+    m_hCheckSmartDns = CreateWindowExW(0, WC_BUTTONW, L"SmartDNS (разблокировка сервисов и нейросетей)",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        marginX, curY, contentWidth, 24,
+        m_hWnd, (HMENU)ID_CHECK_SMARTDNS, m_hInstance, nullptr);
+    SendMessageW(m_hCheckSmartDns, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+    curY += 36;
+
+    // 7. Action Buttons
     int btnWidth = (contentWidth - 12) / 2;
     m_hBtnSave = CreateWindowExW(0, L"BUTTON", L"Сохранить",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
@@ -273,13 +284,21 @@ void AddProfileDialog::on_save() {
         return;
     }
 
+    bool isSmart = (Button_GetCheck(m_hCheckSmartDns) == BST_CHECKED);
+
     DnsProfile profile;
     profile.id = "custom_" + std::to_string(GetTickCount64());
     profile.name = wide_to_utf8(nameStr);
     profile.primary_ipv4 = wide_to_utf8(priStr);
     profile.secondary_ipv4 = wide_to_utf8(secStr);
     profile.doh_template = wide_to_utf8(dohStr);
-    profile.description = descStr.empty() ? ("Пользовательский DNS: " + profile.primary_ipv4) : wide_to_utf8(descStr);
+    profile.is_smart_dns = isSmart;
+    if (descStr.empty()) {
+        profile.description = isSmart ? ("Пользовательский SmartDNS: " + profile.primary_ipv4)
+                                      : ("Пользовательский DNS: " + profile.primary_ipv4);
+    } else {
+        profile.description = wide_to_utf8(descStr);
+    }
     profile.is_builtin = false;
     profile.is_dhcp = false;
 
@@ -339,10 +358,19 @@ LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = (HDC)wParam;
-        SetTextColor(hdcStatic, COLOR_TEXT_LIGHT);
+        auto pal = quickdns::GetPalette(m_isDarkMode);
+        SetTextColor(hdcStatic, pal.textPrimary);
         SetBkMode(hdcStatic, TRANSPARENT);
-        static HBRUSH hbrBg = CreateSolidBrush(COLOR_BG_DARK);
-        return (INT_PTR)hbrBg;
+        return (INT_PTR)m_hbrBg;
+    }
+
+    case WM_CTLCOLOREDIT: {
+        HDC hdcEdit = (HDC)wParam;
+        auto pal = quickdns::GetPalette(m_isDarkMode);
+        SetBkMode(hdcEdit, OPAQUE);
+        SetTextColor(hdcEdit, pal.textPrimary);
+        SetBkColor(hdcEdit, pal.cardBg);
+        return (INT_PTR)m_hbrCard;
     }
 
     case WM_CLOSE: {

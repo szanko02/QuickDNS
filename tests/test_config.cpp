@@ -75,10 +75,12 @@ int main() {
         custom.secondary_ipv4 = "77.88.8.1";
         custom.is_builtin = false;
         custom.is_dhcp = false;
+        custom.is_smart_dns = true;
 
         assert(cfg.add_profile(custom) == true);
         assert(cfg.get_profile_by_id("my_custom").has_value());
-        std::cout << "[PASS] Custom profile added successfully." << std::endl;
+        assert(cfg.get_profile_by_id("my_custom")->is_smart_dns == true);
+        std::cout << "[PASS] Custom profile with is_smart_dns added successfully." << std::endl;
 
         cfg.set_active_profile_id("my_custom");
         assert(cfg.save_to_file() == true);
@@ -92,7 +94,8 @@ int main() {
         auto custom = cfgReloaded.get_profile_by_id("my_custom");
         assert(custom.has_value());
         assert(custom->primary_ipv4 == "77.88.8.8");
-        std::cout << "[PASS] Configuration reloaded from disk with persistence intact." << std::endl;
+        assert(custom->is_smart_dns == true);
+        std::cout << "[PASS] Configuration reloaded from disk with is_smart_dns persistence intact." << std::endl;
 
         // 4. Delete profile
         assert(cfgReloaded.delete_profile("my_custom") == true);

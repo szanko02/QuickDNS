@@ -274,6 +274,40 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
         m_allEntries.push_back(std::move(e));
     }
 
+    // 6. User-defined / Custom SmartDNS profiles
+    for (const auto& p : profiles) {
+        if (!p.is_smart_dns) continue;
+        bool alreadyExists = false;
+        for (const auto& e : m_allEntries) {
+            if (e.profile_id == p.id) {
+                alreadyExists = true;
+                break;
+            }
+        }
+        if (!alreadyExists) {
+            SmartDnsEntry e;
+            e.profile_id = p.id;
+            e.name = utf8_to_wide(p.name);
+            e.website_url = utf8_to_wide(p.website_url);
+            e.primary_ipv4 = utf8_to_wide(p.primary_ipv4);
+            e.secondary_ipv4 = utf8_to_wide(p.secondary_ipv4);
+            e.doh_template = utf8_to_wide(p.doh_template);
+            e.location = L"Пользовательский";
+            e.description = utf8_to_wide(p.description);
+            if (!p.unblocked_summary.empty()) {
+                e.categories = {
+                    { L"Разблокировка", { utf8_to_wide(p.unblocked_summary) } }
+                };
+            } else {
+                e.categories = {
+                    { L"Сервис", { L"SmartDNS", L"Обход ограничений" } }
+                };
+            }
+            e.is_active = (e.profile_id == m_currentActiveId);
+            m_allEntries.push_back(std::move(e));
+        }
+    }
+
     // Select active profile if in catalog
     update_filtered_list();
     for (size_t i = 0; i < m_filteredIndices.size(); ++i) {
@@ -336,12 +370,16 @@ void SmartDnsDialog::update_filtered_list() {
         m_selectedIndex = m_filteredIndices.empty() ? -1 : 0;
     }
 
-    if (m_hStatusText) {
-        std::wstring statusStr = L"Найдено SmartDNS серверов: " + std::to_wstring(m_filteredIndices.size()) + L" из " + std::to_wstring(m_allEntries.size());
-        if (!query.empty()) {
-            statusStr += L" (по запросу: \"" + m_searchQuery + L"\")";
-        }
-        SetWindowTextW(m_hStatusText, statusStr.c_str());
+    m_statusText = L"Найдено SmartDNS серверов: " + std::to_wstring(m_filteredIndices.size()) + L" из " + std::to_wstring(m_allEntries.size());
+    if (!query.empty()) {
+        m_statusText += L" (по запросу: \"" + m_searchQuery + L"\")";
+    } else {
+        m_statusText += L" • Нажмите на карточку для выбора";
+    }
+
+    if (m_hWnd) {
+        RECT rcStatus = { 20, 105, DIALOG_CLIENT_WIDTH - 20, 130 };
+        InvalidateRect(m_hWnd, &rcStatus, FALSE);
     }
 }
 
@@ -442,8 +480,45 @@ LRESULT CALLBACK SmartDnsDialog::search_edit_subclass(
     auto* pDlg = reinterpret_cast<SmartDnsDialog*>(dwRefData);
     if (!pDlg) return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 
-    if (uMsg == WM_CHAR && wParam == VK_RETURN) {
-        return 0; // Prevent beep
+    switch (uMsg) {
+    case WM_SETFOCUS: {
+        pDlg->m_searchEditFocused = true;
+        RECT rc = { 20 + 115 - 2, 70 - 2, DIALOG_CLIENT_WIDTH - 20 + 2, 70 + 32 + 2 };
+        InvalidateRect(pDlg->m_hWnd, &rc, FALSE);
+        break;
+    }
+    case WM_KILLFOCUS: {
+        pDlg->m_searchEditFocused = false;
+        RECT rc = { 20 + 115 - 2, 70 - 2, DIALOG_CLIENT_WIDTH - 20 + 2, 70 + 32 + 2 };
+        InvalidateRect(pDlg->m_hWnd, &rc, FALSE);
+        break;
+    }
+    case WM_MOUSEMOVE: {
+        if (!pDlg->m_searchEditHovered) {
+            pDlg->m_searchEditHovered = true;
+            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+            TrackMouseEvent(&tme);
+            RECT rc = { 20 + 115 - 2, 70 - 2, DIALOG_CLIENT_WIDTH - 20 + 2, 70 + 32 + 2 };
+            InvalidateRect(pDlg->m_hWnd, &rc, FALSE);
+        }
+        break;
+    }
+    case WM_MOUSELEAVE: {
+        pDlg->m_searchEditHovered = false;
+        RECT rc = { 20 + 115 - 2, 70 - 2, DIALOG_CLIENT_WIDTH - 20 + 2, 70 + 32 + 2 };
+        InvalidateRect(pDlg->m_hWnd, &rc, FALSE);
+        break;
+    }
+    case WM_CHAR: {
+        if (wParam == VK_RETURN) {
+            return 0; // Prevent beep
+        }
+        break;
+    }
+    case WM_NCDESTROY: {
+        RemoveWindowSubclass(hWnd, search_edit_subclass, uIdSubclass);
+        return 0;
+    }
     }
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
@@ -456,63 +531,38 @@ void SmartDnsDialog::create_controls() {
 
     int marginX = 20;
     int contentWidth = clientWidth - (marginX * 2);
-    int curY = 16;
 
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"Каталог SmartDNS и разблокируемые сервисы",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 24,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hTitle, WM_SETFONT, (WPARAM)m_hFontHeader, TRUE);
-    curY += 28;
+    // Modern Search Edit Control inset inside the GDI+ rounded container card
+    int searchBoxX = marginX + 115;
+    int searchBoxY = 70;
+    int searchBoxW = contentWidth - 115;
+    int searchBoxH = 32;
 
-    HWND hSub = CreateWindowExW(0, L"STATIC", L"Серверы с автоматическим проксированием для доступа к зарубежным нейросетям, музыке и сайтам без VPN.",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hSub, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 24;
-
-    // Search Box Row: Label + Edit Control
-    int searchLblW = 125;
-    int searchEditW = contentWidth - searchLblW;
-
-    HWND hLblSearch = CreateWindowExW(0, L"STATIC", L"Поиск сервиса:",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY + 4, searchLblW, 20,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblSearch, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-
-    m_hSearchEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    // Create EDIT control WITHOUT WS_EX_CLIENTEDGE (use 0) so no harsh 3D borders appear!
+    m_hSearchEdit = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        marginX + searchLblW, curY, searchEditW, 26,
+        searchBoxX + 10, searchBoxY + 6, searchBoxW - 20, 20,
         m_hWnd, (HMENU)IDC_EDIT_SMARTDNS_SEARCH, m_hInstance, nullptr);
     SendMessageW(m_hSearchEdit, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     SendMessageW(m_hSearchEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"Введите название (например: ChatGPT, Spotify, Discord, Canva, Notion, Claude)...");
     SetWindowSubclass(m_hSearchEdit, search_edit_subclass, 501, reinterpret_cast<DWORD_PTR>(this));
-    curY += 34;
-
-    m_hStatusText = CreateWindowExW(0, L"STATIC", L"Найдено SmartDNS серверов: 5 • Нажмите на карточку для выбора",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, (HMENU)IDC_STATUS_SMARTDNS, m_hInstance, nullptr);
-    SendMessageW(m_hStatusText, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
-    curY += 22;
 
     // Custom Scrollable List of SmartDNS Cards
+    int listTop = 132;
     int bottomButtonsH = 38;
     int listBottomMargin = 16;
-    int listHeight = clientHeight - curY - bottomButtonsH - listBottomMargin - 16;
+    int listHeight = clientHeight - listTop - bottomButtonsH - listBottomMargin - 16;
 
     m_hListWnd = CreateWindowExW(
         0,
         LIST_CLASS_NAME,
         L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        marginX, curY, contentWidth, listHeight,
+        marginX, listTop, contentWidth, listHeight,
         m_hWnd, (HMENU)IDC_LIST_SMARTDNS, m_hInstance, this
     );
 
-    curY += listHeight + 16;
+    int curY = listTop + listHeight + 16;
 
     // Bottom Action Buttons
     int btnApplyW = 210;
@@ -889,6 +939,81 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             return TRUE;
         }
         break;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        HDC hdcMem = CreateCompatibleDC(hdc);
+        HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+        HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
+
+        auto pal = GetPalette(m_isDarkMode);
+        HBRUSH hbrBg = CreateSolidBrush(pal.bg);
+        FillRect(hdcMem, &rc, hbrBg);
+        DeleteObject(hbrBg);
+
+        {
+            Gdiplus::Graphics g(hdcMem);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+            Gdiplus::FontFamily ffDisplay(L"Segoe UI Variable Display");
+            Gdiplus::FontFamily ffRegular(L"Segoe UI");
+            Gdiplus::Font fontTitle(&ffDisplay, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+            Gdiplus::Font fontSub(&ffRegular, 9.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
+            Gdiplus::Font fontLbl(&ffRegular, 9.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+            Gdiplus::Font fontStatus(&ffRegular, 8.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
+
+            Gdiplus::SolidBrush brPri(Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary)));
+            Gdiplus::SolidBrush brSec(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)));
+            Gdiplus::SolidBrush brMuted(Gdiplus::Color(255, GetRValue(pal.textMuted), GetGValue(pal.textMuted), GetBValue(pal.textMuted)));
+
+            // 1. Header Title & Subtitle
+            g.DrawString(L"Каталог SmartDNS и разблокируемые сервисы", -1, &fontTitle, Gdiplus::PointF(20.0f, 14.0f), &brPri);
+            g.DrawString(L"Серверы с автоматическим проксированием для доступа к зарубежным нейросетям, музыке и сайтам без VPN.", -1, &fontSub, Gdiplus::PointF(20.0f, 42.0f), &brSec);
+
+            // 2. Search label
+            g.DrawString(L"Поиск сервиса:", -1, &fontLbl, Gdiplus::PointF(20.0f, 76.0f), &brPri);
+
+            // 3. Search edit container card
+            int searchBoxX = 20 + 115;
+            int searchBoxY = 70;
+            int searchBoxW = (w - 40) - 115;
+            int searchBoxH = 32;
+
+            Gdiplus::GraphicsPath sbPath;
+            AddRoundedRect(sbPath, Gdiplus::RectF(static_cast<float>(searchBoxX) + 0.5f, static_cast<float>(searchBoxY) + 0.5f, static_cast<float>(searchBoxW) - 1.0f, static_cast<float>(searchBoxH) - 1.0f), 6.0f);
+            Gdiplus::SolidBrush sbBg(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
+            g.FillPath(&sbBg, &sbPath);
+
+            bool isSearchActive = (m_searchEditFocused || m_searchEditHovered);
+            COLORREF sbBorderCol = isSearchActive 
+                ? (m_isDarkMode ? RGB(96, 165, 250) : RGB(37, 99, 235))
+                : pal.cardBorder;
+            float sbBorderWidth = isSearchActive ? 1.5f : 1.0f;
+            Gdiplus::Pen sbBorderPen(Gdiplus::Color(255, GetRValue(sbBorderCol), GetGValue(sbBorderCol), GetBValue(sbBorderCol)), sbBorderWidth);
+            g.DrawPath(&sbBorderPen, &sbPath);
+
+            // 4. Status text
+            g.DrawString(m_statusText.c_str(), -1, &fontStatus, Gdiplus::PointF(20.0f, 108.0f), &brMuted);
+        }
+
+        BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
+        SelectObject(hdcMem, oldBmp);
+        DeleteObject(hbmMem);
+        DeleteDC(hdcMem);
+        EndPaint(hWnd, &ps);
+        return 0;
     }
 
     case WM_CTLCOLORSTATIC: {

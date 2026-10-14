@@ -4,13 +4,14 @@
 #include <string>
 #include <optional>
 #include "config_manager.h"
+#include "ui_palette.h"
 
 class AddProfileDialog {
 public:
-    static std::optional<DnsProfile> show(HWND hParent, HINSTANCE hInstance);
+    static std::optional<DnsProfile> show(HWND hParent, HINSTANCE hInstance, bool isDarkMode = true);
 
 private:
-    AddProfileDialog(HWND hParent, HINSTANCE hInstance);
+    AddProfileDialog(HWND hParent, HINSTANCE hInstance, bool isDarkMode);
     ~AddProfileDialog();
 
     bool create_dialog_window();
@@ -25,6 +26,9 @@ private:
     HWND m_hParent = nullptr;
     HINSTANCE m_hInstance = nullptr;
     HWND m_hWnd = nullptr;
+    bool m_isDarkMode = true;
+    HBRUSH m_hbrBg = nullptr;
+    HBRUSH m_hbrCard = nullptr;
 
     HFONT m_hFontRegular = nullptr;
     HFONT m_hFontBold = nullptr;
@@ -35,9 +39,11 @@ private:
     HWND m_hEditSec = nullptr;
     HWND m_hEditDesc = nullptr;
     HWND m_hEditDoh = nullptr;
+    HWND m_hCheckSmartDns = nullptr;
     HWND m_hBtnSave = nullptr;
     HWND m_hBtnCancel = nullptr;
 
     std::optional<DnsProfile> m_result;
     bool m_finished = false;
 };
+

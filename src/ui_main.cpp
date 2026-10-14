@@ -1855,7 +1855,7 @@ void MainWindow::flush_dns_cache() {
 }
 
 void MainWindow::open_add_profile_dialog() {
-    auto newProfile = AddProfileDialog::show(m_hWnd, m_hInstance);
+    auto newProfile = AddProfileDialog::show(m_hWnd, m_hInstance, m_isDarkMode);
     if (newProfile.has_value()) {
         m_configManager->add_profile(newProfile.value());
         m_configManager->set_active_profile_id(newProfile.value().id);

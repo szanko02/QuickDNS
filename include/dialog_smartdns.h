@@ -85,10 +85,13 @@ private:
     HWND m_hWnd = nullptr;
     HWND m_hListWnd = nullptr;
     HWND m_hSearchEdit = nullptr;
-    HWND m_hStatusText = nullptr;
     HWND m_hBtnApply = nullptr;
     HWND m_hBtnWebsite = nullptr;
     HWND m_hBtnClose = nullptr;
+
+    std::wstring m_statusText;
+    bool m_searchEditFocused = false;
+    bool m_searchEditHovered = false;
 
     bool m_isDarkMode = true;
     HBRUSH m_hbrBg = nullptr;
