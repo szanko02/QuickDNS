@@ -1,15 +1,18 @@
 #include "dialog_add_profile.h"
 #include "dns_manager.h"
 #include "encoding_utils.h"
+#include "ui_palette.h"
 #include <dwmapi.h>
 #include <windowsx.h>
+#include <commctrl.h>
+#include <cmath>
 
 using QuickDns::Encoding::wide_to_utf8;
 
 namespace {
     constexpr const wchar_t* DIALOG_CLASS_NAME = L"QuickDNS_AddProfileDialogClass";
-    constexpr int DIALOG_WIDTH = 460;
-    constexpr int DIALOG_HEIGHT = 505;
+    constexpr int DIALOG_WIDTH = 520;
+    constexpr int DIALOG_HEIGHT = 600;
 
     constexpr int ID_EDIT_NAME = 3001;
     constexpr int ID_EDIT_PRI  = 3002;
@@ -19,6 +22,80 @@ namespace {
     constexpr int ID_BTN_SAVE  = 3006;
     constexpr int ID_BTN_CANCEL= 3007;
     constexpr int ID_CHECK_SMARTDNS = 3008;
+
+    struct ButtonAnimationState {
+        float hover = 0.0f;
+        float targetHover = 0.0f;
+        bool isTracking = false;
+        bool isPressed = false;
+    };
+
+    static LRESULT CALLBACK AnimatedButtonSubclassProc(
+        HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+        UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+    {
+        auto* anim = reinterpret_cast<ButtonAnimationState*>(dwRefData);
+        if (!anim) return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+
+        switch (uMsg) {
+        case WM_SETCURSOR: {
+            if (LOWORD(lParam) == HTCLIENT && IsWindowEnabled(hWnd)) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            break;
+        }
+        case WM_MOUSEMOVE: {
+            if (!anim->isTracking) {
+                anim->isTracking = true;
+                anim->targetHover = 1.0f;
+                TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+                TrackMouseEvent(&tme);
+                SetTimer(hWnd, 4001, 16, nullptr);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            anim->isTracking = false;
+            anim->targetHover = 0.0f;
+            SetTimer(hWnd, 4001, 16, nullptr);
+            break;
+        }
+        case WM_LBUTTONDOWN: {
+            anim->isPressed = true;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        }
+        case WM_LBUTTONUP: {
+            anim->isPressed = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        }
+        case WM_TIMER: {
+            if (wParam == 4001) {
+                float diff = anim->targetHover - anim->hover;
+                if (std::abs(diff) < 0.02f) {
+                    anim->hover = anim->targetHover;
+                    KillTimer(hWnd, 4001);
+                } else {
+                    anim->hover += diff * 0.28f;
+                }
+                InvalidateRect(hWnd, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        }
+        case WM_NCDESTROY: {
+            KillTimer(hWnd, 4001);
+            RemovePropW(hWnd, L"QuickDnsAnim");
+            delete anim;
+            RemoveWindowSubclass(hWnd, AnimatedButtonSubclassProc, uIdSubclass);
+            return 0;
+        }
+        }
+
+        return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    }
 }
 
 std::optional<DnsProfile> AddProfileDialog::show(HWND hParent, HINSTANCE hInstance, bool isDarkMode) {
@@ -66,14 +143,27 @@ AddProfileDialog::AddProfileDialog(HWND hParent, HINSTANCE hInstance, bool isDar
     m_hFontHeader = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Display");
+
+    m_hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+    m_hFontSmallBold = CreateFontW(-11, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 
 AddProfileDialog::~AddProfileDialog() {
     if (m_hFontRegular) DeleteObject(m_hFontRegular);
     if (m_hFontBold) DeleteObject(m_hFontBold);
     if (m_hFontHeader) DeleteObject(m_hFontHeader);
+    if (m_hFontSmall) DeleteObject(m_hFontSmall);
+    if (m_hFontSmallBold) DeleteObject(m_hFontSmallBold);
+
     if (m_hbrBg) DeleteObject(m_hbrBg);
     if (m_hbrCard) DeleteObject(m_hbrCard);
+
+    UnregisterClassW(DIALOG_CLASS_NAME, m_hInstance);
 }
 
 bool AddProfileDialog::create_dialog_window() {
@@ -84,22 +174,28 @@ bool AddProfileDialog::create_dialog_window() {
     wc.hInstance = m_hInstance;
     wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = m_hbrBg;
+    wc.hbrBackground = nullptr; // Handled in WM_ERASEBKGND / WM_PAINT
     wc.lpszClassName = DIALOG_CLASS_NAME;
     RegisterClassExW(&wc);
 
+    RECT wr = { 0, 0, DIALOG_WIDTH, DIALOG_HEIGHT };
+    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
+    AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
+    int winWidth = wr.right - wr.left;
+    int winHeight = wr.bottom - wr.top;
+
     RECT parentRect = {};
     GetWindowRect(m_hParent, &parentRect);
-    int posX = parentRect.left + ((parentRect.right - parentRect.left) - DIALOG_WIDTH) / 2;
-    int posY = parentRect.top + ((parentRect.bottom - parentRect.top) - DIALOG_HEIGHT) / 2;
+    int posX = parentRect.left + ((parentRect.right - parentRect.left) - winWidth) / 2;
+    int posY = parentRect.top + ((parentRect.bottom - parentRect.top) - winHeight) / 2;
 
     m_hWnd = CreateWindowExW(
         WS_EX_DLGMODALFRAME,
         DIALOG_CLASS_NAME,
         L"Добавить свой DNS сервер",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        dwStyle,
         posX, posY,
-        DIALOG_WIDTH, DIALOG_HEIGHT,
+        winWidth, winHeight,
         m_hParent,
         nullptr,
         m_hInstance,
@@ -119,6 +215,7 @@ bool AddProfileDialog::create_dialog_window() {
 void AddProfileDialog::apply_theme() {
     BOOL useDarkMode = m_isDarkMode ? TRUE : FALSE;
     DwmSetWindowAttribute(m_hWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkMode, sizeof(useDarkMode));
+    DwmSetWindowAttribute(m_hWnd, 19, &useDarkMode, sizeof(useDarkMode));
     DWORD cornerPref = 2; // DWMWCP_ROUND
     DwmSetWindowAttribute(m_hWnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &cornerPref, sizeof(cornerPref));
 }
@@ -127,113 +224,166 @@ void AddProfileDialog::create_controls() {
     RECT rcClient = {};
     GetClientRect(m_hWnd, &rcClient);
     int clientWidth = rcClient.right - rcClient.left;
-    int marginX = 20;
+    int marginX = 24;
     int contentWidth = clientWidth - (2 * marginX);
-    int curY = 16;
 
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"Новый профиль DNS",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 24,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hTitle, WM_SETFONT, (WPARAM)m_hFontHeader, TRUE);
-    curY += 32;
+    int fieldH = 36;
+    int innerEditH = 20;
+    int innerOffset = 8;
 
-    // 1. Name
-    HWND hLblName = CreateWindowExW(0, L"STATIC", L"Название (например: AdGuard DNS, Мой DNS):",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblName, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 22;
-
-    m_hEditName = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    // 1. Name Edit Box (Y = 76)
+    int yName = 76;
+    m_hEditName = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        marginX, curY, contentWidth, 24,
+        marginX + 10, yName + innerOffset, contentWidth - 20, innerEditH,
         m_hWnd, (HMENU)ID_EDIT_NAME, m_hInstance, nullptr);
     SendMessageW(m_hEditName, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 34;
+    SendMessageW(m_hEditName, EM_SETCUEBANNER, TRUE, (LPARAM)L"Например: AdGuard DNS, Мой DNS, Офисный сервер");
 
-    // 2. Primary IPv4
-    HWND hLblPri = CreateWindowExW(0, L"STATIC", L"Основной DNS IPv4 (обязательно):",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblPri, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 22;
-
-    m_hEditPri = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    // 2. Primary IPv4 Edit Box (Y = 144)
+    int yPri = 144;
+    m_hEditPri = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        marginX, curY, contentWidth, 24,
+        marginX + 10, yPri + innerOffset, contentWidth - 20, innerEditH,
         m_hWnd, (HMENU)ID_EDIT_PRI, m_hInstance, nullptr);
     SendMessageW(m_hEditPri, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 34;
+    SendMessageW(m_hEditPri, EM_SETCUEBANNER, TRUE, (LPARAM)L"Например: 94.140.14.14 или 77.88.8.8");
 
-    // 3. Secondary IPv4
-    HWND hLblSec = CreateWindowExW(0, L"STATIC", L"Дополнительный DNS IPv4 (необязательно):",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblSec, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 22;
-
-    m_hEditSec = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    // 3. Secondary IPv4 Edit Box (Y = 212)
+    int ySec = 212;
+    m_hEditSec = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        marginX, curY, contentWidth, 24,
+        marginX + 10, ySec + innerOffset, contentWidth - 20, innerEditH,
         m_hWnd, (HMENU)ID_EDIT_SEC, m_hInstance, nullptr);
     SendMessageW(m_hEditSec, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 34;
+    SendMessageW(m_hEditSec, EM_SETCUEBANNER, TRUE, (LPARAM)L"Например: 94.140.15.15 (необязательно)");
 
-    // 4. Description
-    HWND hLblDesc = CreateWindowExW(0, L"STATIC", L"Описание / заметка (необязательно):",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblDesc, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 22;
-
-    m_hEditDesc = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    // 4. Description Edit Box (Y = 280)
+    int yDesc = 280;
+    m_hEditDesc = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        marginX, curY, contentWidth, 24,
+        marginX + 10, yDesc + innerOffset, contentWidth - 20, innerEditH,
         m_hWnd, (HMENU)ID_EDIT_DESC, m_hInstance, nullptr);
     SendMessageW(m_hEditDesc, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 34;
+    SendMessageW(m_hEditDesc, EM_SETCUEBANNER, TRUE, (LPARAM)L"Краткое описание или назначение (необязательно)");
 
-    // 5. DNS over HTTPS (DoH) URL
-    HWND hLblDoh = CreateWindowExW(0, L"STATIC", L"DNS over HTTPS (DoH) URL (необязательно):",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 22;
-
-    m_hEditDoh = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    // 5. DoH URL Edit Box (Y = 348)
+    int yDoh = 348;
+    m_hEditDoh = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        marginX, curY, contentWidth, 24,
+        marginX + 10, yDoh + innerOffset, contentWidth - 20, innerEditH,
         m_hWnd, (HMENU)ID_EDIT_DOH, m_hInstance, nullptr);
     SendMessageW(m_hEditDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 34;
+    SendMessageW(m_hEditDoh, EM_SETCUEBANNER, TRUE, (LPARAM)L"https://dns.adguard-dns.com/dns-query (необязательно)");
 
-    // 6. SmartDNS Checkbox Option
-    m_hCheckSmartDns = CreateWindowExW(0, WC_BUTTONW, L"SmartDNS (разблокировка сервисов и нейросетей)",
+    // 6. SmartDNS Option Checkbox inside Card (Y = 416)
+    int ySmart = 416;
+    m_hCheckSmartDns = CreateWindowExW(0, WC_BUTTONW, L"Профиль SmartDNS (разблокировка сервисов и медиа)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-        marginX, curY, contentWidth, 24,
+        marginX + 14, ySmart + 10, contentWidth - 28, 22,
         m_hWnd, (HMENU)ID_CHECK_SMARTDNS, m_hInstance, nullptr);
-    SendMessageW(m_hCheckSmartDns, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 36;
+    SendMessageW(m_hCheckSmartDns, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
 
-    // 7. Action Buttons
-    int btnWidth = (contentWidth - 12) / 2;
-    m_hBtnSave = CreateWindowExW(0, L"BUTTON", L"Сохранить",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-        marginX, curY, btnWidth, 34,
+    // 7. Action Buttons (Y = 536)
+    int yButtons = 536;
+    int btnWidth = (contentWidth - 14) / 2;
+    int btnHeight = 38;
+
+    m_hBtnSave = CreateWindowExW(0, WC_BUTTONW, L"Сохранить профиль",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX, yButtons, btnWidth, btnHeight,
         m_hWnd, (HMENU)ID_BTN_SAVE, m_hInstance, nullptr);
-    SendMessageW(m_hBtnSave, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
 
-    m_hBtnCancel = CreateWindowExW(0, L"BUTTON", L"Отмена",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        marginX + btnWidth + 12, curY, btnWidth, 34,
+    m_hBtnCancel = CreateWindowExW(0, WC_BUTTONW, L"Отмена",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX + btnWidth + 14, yButtons, btnWidth, btnHeight,
         m_hWnd, (HMENU)ID_BTN_CANCEL, m_hInstance, nullptr);
-    SendMessageW(m_hBtnCancel, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+
+    attach_button_effects(m_hBtnSave, 301);
+    attach_button_effects(m_hBtnCancel, 302);
+}
+
+void AddProfileDialog::attach_button_effects(HWND hBtn, UINT_PTR subclassId) {
+    if (!hBtn) return;
+    auto* anim = new ButtonAnimationState();
+    SetPropW(hBtn, L"QuickDnsAnim", reinterpret_cast<HANDLE>(anim));
+    SetWindowSubclass(hBtn, AnimatedButtonSubclassProc, subclassId, reinterpret_cast<DWORD_PTR>(anim));
+}
+
+void AddProfileDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
+    if (!pDis) return;
+
+    HDC hdc = pDis->hDC;
+    RECT rc = pDis->rcItem;
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+
+    auto pal = quickdns::GetPalette(m_isDarkMode);
+    bool isPrimary = (pDis->CtlID == ID_BTN_SAVE);
+
+    auto* anim = reinterpret_cast<ButtonAnimationState*>(GetPropW(pDis->hwndItem, L"QuickDnsAnim"));
+    float hoverVal = anim ? anim->hover : 0.0f;
+    bool isPressed = (pDis->itemState & ODS_SELECTED) || (anim && anim->isPressed);
+
+    COLORREF baseBg = isPrimary ? pal.btnPrimaryBg : pal.btnUtilBg;
+    COLORREF hoverBg = isPrimary ? pal.btnPrimaryHover : pal.btnUtilHover;
+    COLORREF pressBg = isPrimary ? pal.btnPrimaryPress : pal.btnUtilPress;
+
+    COLORREF baseBorder = isPrimary ? pal.btnPrimaryBorder : pal.btnUtilBorder;
+    COLORREF hoverBorder = isPrimary ? pal.btnPrimaryHover : (m_isDarkMode ? RGB(70, 85, 110) : RGB(180, 195, 220));
+
+    COLORREF curBg = isPressed ? pressBg : quickdns::LerpColor(baseBg, hoverBg, hoverVal);
+    COLORREF curBorder = quickdns::LerpColor(baseBorder, hoverBorder, hoverVal);
+    COLORREF textColor = isPrimary ? pal.btnPrimaryText : pal.btnUtilText;
+
+    // Double buffer
+    HDC hdcMem = CreateCompatibleDC(hdc);
+    HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+    HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
+
+    HBRUSH hbrWin = CreateSolidBrush(pal.bg);
+    FillRect(hdcMem, &rc, hbrWin);
+    DeleteObject(hbrWin);
+
+    {
+        Gdiplus::Graphics g(hdcMem);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+
+        Gdiplus::GraphicsPath path;
+        quickdns::AddRoundedRect(path, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), 7.0f);
+
+        Gdiplus::SolidBrush br(Gdiplus::Color(255, GetRValue(curBg), GetGValue(curBg), GetBValue(curBg)));
+        g.FillPath(&br, &path);
+
+        Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(curBorder), GetGValue(curBorder), GetBValue(curBorder)), 1.0f);
+        g.DrawPath(&pen, &path);
+    }
+
+    wchar_t btnText[128] = {};
+    GetWindowTextW(pDis->hwndItem, btnText, 128);
+
+    SetBkMode(hdcMem, TRANSPARENT);
+    SetTextColor(hdcMem, textColor);
+    HFONT hFont = isPrimary ? m_hFontBold : m_hFontRegular;
+    HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
+
+    RECT rcText = rc;
+    if (isPressed) {
+        rcText.left += 1;
+        rcText.top += 1;
+        rcText.right += 1;
+        rcText.bottom += 1;
+    }
+
+    DrawTextW(hdcMem, btnText, -1, &rcText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(hdcMem, oldFont);
+    BitBlt(hdc, rc.left, rc.top, w, h, hdcMem, 0, 0, SRCCOPY);
+
+    SelectObject(hdcMem, oldBmp);
+    DeleteObject(hbmMem);
+    DeleteDC(hdcMem);
 }
 
 void AddProfileDialog::on_save() {
@@ -255,7 +405,6 @@ void AddProfileDialog::on_save() {
     std::wstring descStr = descBuf;
     std::wstring dohStr = dohBuf;
 
-    // Trim whitespace
     auto trim = [](std::wstring& s) {
         while (!s.empty() && iswspace(s.front())) s.erase(s.begin());
         while (!s.empty() && iswspace(s.back())) s.pop_back();
@@ -272,13 +421,13 @@ void AddProfileDialog::on_save() {
         return;
     }
 
-    if (priStr.empty() || !DnsManager::is_valid_ipv4(priStr)) {
+    if (priStr.empty() || !quickdns::DnsManager::is_valid_ipv4(priStr)) {
         MessageBoxW(m_hWnd, L"Пожалуйста, укажите корректный основной IPv4 адрес (например, 77.88.8.8 или 94.140.14.14).", L"Некорректный IP", MB_OK | MB_ICONWARNING);
         SetFocus(m_hEditPri);
         return;
     }
 
-    if (!secStr.empty() && !DnsManager::is_valid_ipv4(secStr)) {
+    if (!secStr.empty() && !quickdns::DnsManager::is_valid_ipv4(secStr)) {
         MessageBoxW(m_hWnd, L"Дополнительный адрес должен быть корректным IPv4 адресом (или оставьте это поле пустым).", L"Некорректный IP", MB_OK | MB_ICONWARNING);
         SetFocus(m_hEditSec);
         return;
@@ -330,17 +479,85 @@ LRESULT CALLBACK AddProfileDialog::dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARA
 
 LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
-    case WM_SETCURSOR: {
-        HWND hTarget = (HWND)wParam;
-        if (hTarget && IsWindow(hTarget)) {
-            wchar_t cls[32] = {};
-            GetClassNameW(hTarget, cls, 32);
-            if (wcscmp(cls, WC_BUTTONW) == 0 && IsWindowEnabled(hTarget)) {
-                SetCursor(LoadCursorW(nullptr, IDC_HAND));
-                return TRUE;
-            }
+    case WM_ERASEBKGND:
+        return 1; // Double buffered paint
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        HDC hdcMem = CreateCompatibleDC(hdc);
+        HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+        HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
+
+        auto pal = quickdns::GetPalette(m_isDarkMode);
+
+        // Fill background
+        HBRUSH hbrBg = CreateSolidBrush(pal.bg);
+        FillRect(hdcMem, &rc, hbrBg);
+        DeleteObject(hbrBg);
+
+        {
+            Gdiplus::Graphics g(hdcMem);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+            int marginX = 24;
+            int contentW = w - (2 * marginX);
+
+            Gdiplus::FontFamily ffDisplay(L"Segoe UI Variable Display");
+            Gdiplus::FontFamily ffRegular(L"Segoe UI");
+            Gdiplus::Font fontHeader(&ffDisplay, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+            Gdiplus::Font fontLabel(&ffRegular, 9.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+            Gdiplus::Font fontSub(&ffRegular, 8.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
+
+            Gdiplus::SolidBrush textPriBr(Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary)));
+            Gdiplus::SolidBrush textSecBr(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)));
+
+            // Header Title and Subtitle
+            g.DrawString(L"Добавить свой DNS сервер", -1, &fontHeader, Gdiplus::PointF(static_cast<float>(marginX), 16.0f), &textPriBr);
+            g.DrawString(L"Создайте собственный профиль DNS с поддержкой IPv4, DoH и SmartDNS", -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX), 38.0f), &textSecBr);
+
+            // Container card brush & pen
+            Gdiplus::SolidBrush cardBgBr(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
+            Gdiplus::Pen cardBorderPen(Gdiplus::Color(255, GetRValue(pal.cardBorder), GetGValue(pal.cardBorder), GetBValue(pal.cardBorder)), 1.0f);
+
+            // Helper lambda to draw rounded input field container card and its label
+            auto drawFieldCard = [&](const wchar_t* label, int y, int fieldH) {
+                g.DrawString(label, -1, &fontLabel, Gdiplus::PointF(static_cast<float>(marginX), static_cast<float>(y - 18)), &textPriBr);
+                Gdiplus::GraphicsPath p;
+                quickdns::AddRoundedRect(p, Gdiplus::RectF(static_cast<float>(marginX), static_cast<float>(y), static_cast<float>(contentW), static_cast<float>(fieldH)), 6.0f);
+                g.FillPath(&cardBgBr, &p);
+                g.DrawPath(&cardBorderPen, &p);
+            };
+
+            drawFieldCard(L"Название профиля (обязательно):", 76, 36);
+            drawFieldCard(L"Основной DNS IPv4 (обязательно):", 144, 36);
+            drawFieldCard(L"Дополнительный DNS IPv4 (необязательно):", 212, 36);
+            drawFieldCard(L"Описание / заметка (необязательно):", 280, 36);
+            drawFieldCard(L"DNS over HTTPS (DoH) URL (необязательно):", 348, 36);
+
+            // SmartDNS card container (Y = 416, H = 58)
+            Gdiplus::GraphicsPath smartCardPath;
+            quickdns::AddRoundedRect(smartCardPath, Gdiplus::RectF(static_cast<float>(marginX), 416.0f, static_cast<float>(contentW), 58.0f), 8.0f);
+            g.FillPath(&cardBgBr, &smartCardPath);
+            g.DrawPath(&cardBorderPen, &smartCardPath);
+
+            g.DrawString(L"Отметьте, если сервер предоставляет функцию обхода блокировок и стриминга",
+                -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX + 36), 446.0f), &textSecBr);
         }
-        break;
+
+        BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
+        SelectObject(hdcMem, oldBmp);
+        DeleteObject(hbmMem);
+        DeleteDC(hdcMem);
+        EndPaint(hWnd, &ps);
+        return 0;
     }
 
     case WM_COMMAND: {
@@ -356,11 +573,24 @@ LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
         break;
     }
 
+    case WM_DRAWITEM: {
+        auto* pDis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+        if (pDis && pDis->CtlType == ODT_BUTTON) {
+            draw_custom_button(pDis);
+            return TRUE;
+        }
+        break;
+    }
+
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = (HDC)wParam;
+        HWND hwndStatic = (HWND)lParam;
         auto pal = quickdns::GetPalette(m_isDarkMode);
         SetTextColor(hdcStatic, pal.textPrimary);
         SetBkMode(hdcStatic, TRANSPARENT);
+        if (hwndStatic == m_hCheckSmartDns) {
+            return (INT_PTR)m_hbrCard;
+        }
         return (INT_PTR)m_hbrBg;
     }
 

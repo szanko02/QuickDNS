@@ -20,6 +20,9 @@ private:
     void on_save();
     void on_cancel();
 
+    void draw_custom_button(DRAWITEMSTRUCT* pDis);
+    void attach_button_effects(HWND hBtn, UINT_PTR subclassId);
+
     static LRESULT CALLBACK dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -33,6 +36,8 @@ private:
     HFONT m_hFontRegular = nullptr;
     HFONT m_hFontBold = nullptr;
     HFONT m_hFontHeader = nullptr;
+    HFONT m_hFontSmall = nullptr;
+    HFONT m_hFontSmallBold = nullptr;
 
     HWND m_hEditName = nullptr;
     HWND m_hEditPri = nullptr;
@@ -46,4 +51,3 @@ private:
     std::optional<DnsProfile> m_result;
     bool m_finished = false;
 };
-

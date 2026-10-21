@@ -28,6 +28,22 @@ struct DnsBenchmarkResult {
 class DnsBenchmark {
 public:
     /**
+     * @brief Sanitizes user domain input (removes http://, https://, paths, ports, whitespace).
+     * @param input_domain Raw user domain input.
+     * @return Clean lower-case domain name, e.g. "youtube.com".
+     */
+    static std::string sanitize_domain(const std::string& input_domain);
+
+    /**
+     * @brief Measures DNS query latency against a target DNS IP address in milliseconds for a specific domain.
+     * @param ip_str IPv4 or IPv6 address of the DNS server.
+     * @param target_domain Target domain to query (e.g. "youtube.com", "google.com").
+     * @param timeout_ms Per-query timeout in milliseconds (default 800ms).
+     * @return Latency in milliseconds, or -1 if unreachable/timed out.
+     */
+    static int ping_dns_server_domain(const std::string& ip_str, const std::string& target_domain, int timeout_ms = 800);
+
+    /**
      * @brief Measures DNS query latency against a target DNS IP address in milliseconds.
      * Queries a pool of test domains (chatgpt.com, claude.ai, google.com).
      * @param ip_str IPv4 or IPv6 address of the DNS server.

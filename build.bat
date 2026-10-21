@@ -128,6 +128,8 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] Main compilation failed. & exit /b 1 )
 echo [5/6] Linking QuickDNS.exe with embedded App Icon...
 "!CXX!" -std=c++20 -O2 -mwindows -municode -static -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dns_benchmark.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking QuickDNS.exe failed. & exit /b 1 )
+if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
+move /Y "%~dp0QuickDNS.exe" "%~dp0QuickDNS.exe.old" >nul 2>&1
 copy /Y build\QuickDNS.exe "%~dp0QuickDNS.exe" >nul
 
 echo [6/6] Linking Diagnostic tools [test_dns.exe, test_config.exe, test_benchmark.exe]...

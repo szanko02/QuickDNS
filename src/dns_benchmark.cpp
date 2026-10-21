@@ -34,9 +34,34 @@ const std::vector<std::string> BENCHMARK_DOMAINS = {
 
 namespace quickdns {
 
-int DnsBenchmark::ping_dns_server(const std::string& ip_str, int timeout_ms, bool single_domain) {
+std::string DnsBenchmark::sanitize_domain(const std::string& input_domain) {
+    std::string domain = input_domain;
+    while (!domain.empty() && isspace(static_cast<unsigned char>(domain.front()))) domain.erase(domain.begin());
+    while (!domain.empty() && isspace(static_cast<unsigned char>(domain.back()))) domain.pop_back();
+
+    if (domain.rfind("http://", 0) == 0) domain = domain.substr(7);
+    if (domain.rfind("https://", 0) == 0) domain = domain.substr(8);
+
+    size_t slash = domain.find('/');
+    if (slash != std::string::npos) domain = domain.substr(0, slash);
+    size_t qmark = domain.find('?');
+    if (qmark != std::string::npos) domain = domain.substr(0, qmark);
+    size_t hash = domain.find('#');
+    if (hash != std::string::npos) domain = domain.substr(0, hash);
+    size_t colon = domain.find(':');
+    if (colon != std::string::npos) domain = domain.substr(0, colon);
+
+    for (char& c : domain) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+
+    if (domain.empty()) domain = "google.com";
+    return domain;
+}
+
+int DnsBenchmark::ping_dns_server_domain(const std::string& ip_str, const std::string& target_domain, int timeout_ms) {
     if (ip_str.empty()) return -1;
     ensure_winsock();
+
+    std::string domain = sanitize_domain(target_domain);
 
     sockaddr_in sa4{};
     sockaddr_in6 sa6{};
@@ -64,80 +89,88 @@ int DnsBenchmark::ping_dns_server(const std::string& ip_str, int timeout_ms, boo
         sa6.sin6_port = htons(53);
     }
 
-    std::vector<int> measured_latencies;
     static thread_local std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<uint16_t> dist(1, 0xFFFE);
 
-    for (const auto& domain : BENCHMARK_DOMAINS) {
-        std::vector<uint8_t> packet;
-        packet.reserve(64);
+    std::vector<uint8_t> packet;
+    packet.reserve(64 + domain.size());
 
-        uint16_t txid = dist(rng);
-        packet.push_back(static_cast<uint8_t>(txid >> 8));
-        packet.push_back(static_cast<uint8_t>(txid & 0xFF));
-        packet.push_back(0x01); packet.push_back(0x00); // Standard query with RD=1
-        packet.push_back(0x00); packet.push_back(0x01); // 1 Question
-        packet.push_back(0x00); packet.push_back(0x00); // 0 Answers
-        packet.push_back(0x00); packet.push_back(0x00); // 0 Authority
-        packet.push_back(0x00); packet.push_back(0x00); // 0 Additional
+    uint16_t txid = dist(rng);
+    packet.push_back(static_cast<uint8_t>(txid >> 8));
+    packet.push_back(static_cast<uint8_t>(txid & 0xFF));
+    packet.push_back(0x01); packet.push_back(0x00); // Standard query with RD=1
+    packet.push_back(0x00); packet.push_back(0x01); // 1 Question
+    packet.push_back(0x00); packet.push_back(0x00); // 0 Answers
+    packet.push_back(0x00); packet.push_back(0x00); // 0 Authority
+    packet.push_back(0x00); packet.push_back(0x00); // 0 Additional
 
-        // QNAME encoding
-        size_t start = 0;
-        while (start < domain.size()) {
-            size_t dot = domain.find('.', start);
-            if (dot == std::string::npos) dot = domain.size();
-            size_t len = dot - start;
-            if (len > 0) {
-                packet.push_back(static_cast<uint8_t>(len));
-                for (size_t i = start; i < dot; ++i) {
-                    packet.push_back(static_cast<uint8_t>(domain[i]));
-                }
-            }
-            start = dot + 1;
-        }
-        packet.push_back(0x00); // End of labels
-
-        packet.push_back(0x00); packet.push_back(0x01); // Type: A
-        packet.push_back(0x00); packet.push_back(0x01); // Class: IN
-
-        auto t0 = std::chrono::steady_clock::now();
-        int sent = 0;
-        if (is_v4) {
-            sent = sendto(sock, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
-                          reinterpret_cast<const sockaddr*>(&sa4), sizeof(sa4));
-        } else {
-            sent = sendto(sock, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
-                          reinterpret_cast<const sockaddr*>(&sa6), sizeof(sa6));
-        }
-
-        if (sent > 0) {
-            char recv_buf[512] = {};
-            sockaddr_storage from{};
-            int from_len = sizeof(from);
-            int received = recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
-                                    reinterpret_cast<sockaddr*>(&from), &from_len);
-            if (received >= 12) {
-                uint16_t r_txid = (static_cast<uint8_t>(recv_buf[0]) << 8) | static_cast<uint8_t>(recv_buf[1]);
-                if (r_txid == txid) {
-                    auto t1 = std::chrono::steady_clock::now();
-                    int ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
-                    measured_latencies.push_back(ms);
-                    if (single_domain) break;
-                }
+    // QNAME encoding
+    size_t start = 0;
+    while (start < domain.size()) {
+        size_t dot = domain.find('.', start);
+        if (dot == std::string::npos) dot = domain.size();
+        size_t len = dot - start;
+        if (len > 0) {
+            packet.push_back(static_cast<uint8_t>(len));
+            for (size_t i = start; i < dot; ++i) {
+                packet.push_back(static_cast<uint8_t>(domain[i]));
             }
         }
-        if (single_domain && !measured_latencies.empty()) break;
+        start = dot + 1;
+    }
+    packet.push_back(0x00); // End of labels
+
+    packet.push_back(0x00); packet.push_back(0x01); // Type: A
+    packet.push_back(0x00); packet.push_back(0x01); // Class: IN
+
+    auto t0 = std::chrono::steady_clock::now();
+    int sent = 0;
+    if (is_v4) {
+        sent = sendto(sock, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
+                      reinterpret_cast<const sockaddr*>(&sa4), sizeof(sa4));
+    } else {
+        sent = sendto(sock, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
+                      reinterpret_cast<const sockaddr*>(&sa6), sizeof(sa6));
+    }
+
+    int measured_lat = -1;
+    if (sent > 0) {
+        char recv_buf[512] = {};
+        sockaddr_storage from{};
+        int from_len = sizeof(from);
+        int received = recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
+                                reinterpret_cast<sockaddr*>(&from), &from_len);
+        if (received >= 12) {
+            uint16_t r_txid = (static_cast<uint8_t>(recv_buf[0]) << 8) | static_cast<uint8_t>(recv_buf[1]);
+            if (r_txid == txid) {
+                auto t1 = std::chrono::steady_clock::now();
+                measured_lat = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+            }
+        }
     }
 
     closesocket(sock);
+    return measured_lat;
+}
+
+int DnsBenchmark::ping_dns_server(const std::string& ip_str, int timeout_ms, bool single_domain) {
+    if (single_domain) {
+        return ping_dns_server_domain(ip_str, "google.com", timeout_ms);
+    }
+
+    std::vector<int> measured_latencies;
+    for (const auto& domain : BENCHMARK_DOMAINS) {
+        int lat = ping_dns_server_domain(ip_str, domain, timeout_ms);
+        if (lat > 0) {
+            measured_latencies.push_back(lat);
+        }
+    }
 
     if (measured_latencies.empty()) {
         return -1;
     }
 
-    // Return the minimum (best round-trip response time) measured
-    int min_lat = *std::min_element(measured_latencies.begin(), measured_latencies.end());
-    return min_lat;
+    return *std::min_element(measured_latencies.begin(), measured_latencies.end());
 }
 
 std::vector<DnsBenchmarkResult> DnsBenchmark::run_benchmark(

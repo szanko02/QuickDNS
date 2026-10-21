@@ -28,5 +28,6 @@ Makefile
 # Temp files
 *.log
 *.tmp
+*.old
 .DS_Store
 Thumbs.db

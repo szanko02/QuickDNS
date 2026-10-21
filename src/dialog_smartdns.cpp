@@ -166,6 +166,9 @@ SmartDnsDialog::~SmartDnsDialog() {
 
     if (m_hbrBg) DeleteObject(m_hbrBg);
     if (m_hbrCard) DeleteObject(m_hbrCard);
+
+    UnregisterClassW(DIALOG_CLASS_NAME, m_hInstance);
+    UnregisterClassW(LIST_CLASS_NAME, m_hInstance);
 }
 
 void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profiles) {
@@ -558,7 +561,7 @@ bool SmartDnsDialog::create_dialog_window() {
     wc.hIcon = LoadIconW(m_hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     if (!wc.hIcon) wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = m_hbrBg;
+    wc.hbrBackground = nullptr;
     wc.lpszClassName = DIALOG_CLASS_NAME;
     RegisterClassExW(&wc);
 

@@ -9,6 +9,8 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <algorithm>
+#include <cmath>
 #include "dns_benchmark.h"
 #include "config_manager.h"
 #include "ui_palette.h"
@@ -22,6 +24,67 @@ struct BenchmarkItem {
     std::wstring status_text = L"Ожидание...";
     std::wstring quality_label = L"Ожидание";
     std::vector<int> latency_history;
+
+    int total_queries = 0;
+    int success_queries = 0;
+    int min_ping = -1;
+    int max_ping = -1;
+    int avg_ping = -1;
+    float jitter = 0.0f;
+    float reliability = 0.0f;
+    bool is_fastest = false;
+    bool is_most_stable = false;
+
+    void reset_stats() {
+        current_ping = -1;
+        latency_history.clear();
+        total_queries = 0;
+        success_queries = 0;
+        min_ping = -1;
+        max_ping = -1;
+        avg_ping = -1;
+        jitter = 0.0f;
+        reliability = 0.0f;
+        is_fastest = false;
+        is_most_stable = false;
+        quality = DnsQuality::Moderate;
+        status_text = L"Ожидание...";
+        quality_label = L"Ожидание";
+    }
+
+    void recalculate_stats() {
+        std::vector<int> valid;
+        for (int p : latency_history) {
+            if (p > 0) valid.push_back(p);
+        }
+        if (valid.empty()) {
+            min_ping = -1;
+            max_ping = -1;
+            avg_ping = -1;
+            jitter = 0.0f;
+            reliability = (total_queries > 0) ? (static_cast<float>(success_queries) * 100.0f / total_queries) : 0.0f;
+            return;
+        }
+        min_ping = *std::min_element(valid.begin(), valid.end());
+        max_ping = *std::max_element(valid.begin(), valid.end());
+        long long sum = 0;
+        for (int v : valid) sum += v;
+        avg_ping = static_cast<int>(sum / valid.size());
+
+        float diffSum = 0.0f;
+        for (int v : valid) {
+            diffSum += std::abs(static_cast<float>(v) - static_cast<float>(avg_ping));
+        }
+        jitter = diffSum / static_cast<float>(valid.size());
+        reliability = (total_queries > 0) ? (static_cast<float>(success_queries) * 100.0f / total_queries) : 100.0f;
+    }
+};
+
+enum class BenchmarkDurationMode {
+    Timed30s = 0,
+    Timed10s,
+    Timed60s,
+    Continuous
 };
 
 class BenchmarkDialog {
@@ -48,6 +111,12 @@ private:
     void on_apply();
     void on_close();
 
+    void start_timed_test();
+    void stop_timed_test(bool finishedNaturally = false);
+    void reset_all_stats();
+    void update_verdict();
+    void apply_best_profile(bool applyFastest);
+
     static LRESULT CALLBACK dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK list_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -71,8 +140,13 @@ private:
     HFONT m_hFontHeader = nullptr;
     HFONT m_hFontMonospace = nullptr;
     HFONT m_hFontSmall = nullptr;
+    HFONT m_hFontSmallBold = nullptr;
 
-    HWND m_hStatusText = nullptr;
+    // Controls
+    HWND m_hComboDomain = nullptr;
+    HWND m_hComboDuration = nullptr;
+    HWND m_hBtnStartStop = nullptr;
+    HWND m_hBtnReset = nullptr;
     HWND m_hBtnApply = nullptr;
     HWND m_hBtnPauseResume = nullptr;
     HWND m_hBtnClose = nullptr;
@@ -92,6 +166,17 @@ private:
     std::atomic<bool> m_workerRunning{false};
     std::atomic<bool> m_isPaused{false};
     std::thread m_workerThread;
+
+    std::string m_targetDomain = "google.com";
+    BenchmarkDurationMode m_durationMode = BenchmarkDurationMode::Timed30s;
+    std::atomic<bool> m_isTimedRunning{false};
+    int m_targetDurationSec = 30;
+    int m_elapsedSec = 0;
+    bool m_timedFinished = false;
+    int m_fastestIndex = -1;
+    int m_mostStableIndex = -1;
+    std::wstring m_verdictFastest;
+    std::wstring m_verdictStable;
 
     std::optional<std::string> m_selectedProfileId;
     bool m_finished = false;

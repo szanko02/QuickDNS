@@ -9,6 +9,8 @@
 #include <future>
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
+#include <sstream>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -21,12 +23,16 @@ namespace {
     constexpr const wchar_t* DIALOG_CLASS_NAME = L"QuickDNS_BenchmarkDialogClass";
     constexpr const wchar_t* LIST_CLASS_NAME   = L"QuickDNS_BenchmarkListClass";
 
-    constexpr int DIALOG_CLIENT_WIDTH  = 700;
-    constexpr int DIALOG_CLIENT_HEIGHT = 640;
+    constexpr int DIALOG_CLIENT_WIDTH  = 760;
+    constexpr int DIALOG_CLIENT_HEIGHT = 700;
 
     constexpr UINT WM_APP_BENCHMARK_PING_UPDATE = WM_APP + 20;
 
-    constexpr int IDC_BTN_BENCHMARK_PAUSE   = 1206;
+    constexpr int IDC_COMBO_BENCHMARK_DOMAIN   = 1210;
+    constexpr int IDC_COMBO_BENCHMARK_DURATION = 1211;
+    constexpr int IDC_BTN_BENCHMARK_START_STOP = 1212;
+    constexpr int IDC_BTN_BENCHMARK_RESET      = 1213;
+    constexpr int IDC_BTN_BENCHMARK_PAUSE      = 1214;
 
     struct ButtonAnimationState {
         float hover = 0.0f;
@@ -166,7 +172,7 @@ BenchmarkDialog::BenchmarkDialog(
             item.quality_label = L"Провайдер";
             item.quality = DnsQuality::Fast;
         } else {
-            item.status_text = L"Опрос...";
+            item.status_text = L"Ожидание...";
             item.quality_label = L"Ожидание";
             item.quality = DnsQuality::Moderate;
         }
@@ -192,9 +198,13 @@ BenchmarkDialog::~BenchmarkDialog() {
     if (m_hFontHeader) DeleteObject(m_hFontHeader);
     if (m_hFontMonospace) DeleteObject(m_hFontMonospace);
     if (m_hFontSmall) DeleteObject(m_hFontSmall);
+    if (m_hFontSmallBold) DeleteObject(m_hFontSmallBold);
 
     if (m_hbrBg) DeleteObject(m_hbrBg);
     if (m_hbrCard) DeleteObject(m_hbrCard);
+
+    UnregisterClassW(DIALOG_CLASS_NAME, m_hInstance);
+    UnregisterClassW(LIST_CLASS_NAME, m_hInstance);
 }
 
 void BenchmarkDialog::setup_fonts() {
@@ -217,6 +227,10 @@ void BenchmarkDialog::setup_fonts() {
     m_hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+    m_hFontSmallBold = CreateFontW(-11, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 
 bool BenchmarkDialog::create_dialog_window() {
@@ -228,7 +242,7 @@ bool BenchmarkDialog::create_dialog_window() {
     wc.hIcon = LoadIconW(m_hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     if (!wc.hIcon) wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = m_hbrBg;
+    wc.hbrBackground = nullptr; // Explicitly handled in WM_ERASEBKGND/WM_PAINT
     wc.lpszClassName = DIALOG_CLASS_NAME;
     RegisterClassExW(&wc);
 
@@ -257,7 +271,7 @@ bool BenchmarkDialog::create_dialog_window() {
     m_hWnd = CreateWindowExW(
         WS_EX_DLGMODALFRAME,
         DIALOG_CLASS_NAME,
-        L"Тест скорости и мониторинг DNS (Пинг)",
+        L"Тест скорости и стабильности DNS",
         dwStyle,
         posX, posY,
         winWidth, winHeight,
@@ -279,6 +293,7 @@ bool BenchmarkDialog::create_dialog_window() {
 void BenchmarkDialog::apply_theme() {
     BOOL useDarkMode = m_isDarkMode ? TRUE : FALSE;
     DwmSetWindowAttribute(m_hWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkMode, sizeof(useDarkMode));
+    DwmSetWindowAttribute(m_hWnd, 19, &useDarkMode, sizeof(useDarkMode));
     DWORD cornerPref = 2; // DWMWCP_ROUND
     DwmSetWindowAttribute(m_hWnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &cornerPref, sizeof(cornerPref));
 }
@@ -291,48 +306,81 @@ void BenchmarkDialog::create_controls() {
 
     int marginX = 20;
     int contentWidth = clientWidth - (marginX * 2);
-    int curY = 16;
 
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"Тест скорости и отклика DNS",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 24,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hTitle, WM_SETFONT, (WPARAM)m_hFontHeader, TRUE);
-    curY += 28;
+    // Target Domain & Mode Bar (Y = 62)
+    int barY = 62;
+    int comboDomainW = 210;
+    int comboDurW = 180;
+    int btnStartW = 180;
+    int btnResetW = 110;
 
-    HWND hSub = CreateWindowExW(0, L"STATIC", L"Мониторинг задержки (пинг) серверов в реальном времени с графиком отклика.",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hSub, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    curY += 22;
+    // Domain ComboBox (editable dropdown with popular presets)
+    int domainX = marginX + 54;
+    m_hComboDomain = CreateWindowExW(0, WC_COMBOBOXW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWN | CBS_AUTOHSCROLL,
+        domainX, barY + 7, comboDomainW, 200,
+        m_hWnd, (HMENU)IDC_COMBO_BENCHMARK_DOMAIN, m_hInstance, nullptr);
+    SendMessageW(m_hComboDomain, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
 
-    m_hStatusText = CreateWindowExW(0, L"STATIC", L"Автомониторинг активен (опрос каждые 2 сек) • Нажмите на DNS для выбора",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, curY, contentWidth, 18,
-        m_hWnd, (HMENU)IDC_STATUS_BENCHMARK, m_hInstance, nullptr);
-    SendMessageW(m_hStatusText, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-    curY += 24;
+    const wchar_t* presetDomains[] = {
+        L"google.com",
+        L"youtube.com",
+        L"discord.com",
+        L"ya.ru",
+        L"chatgpt.com",
+        L"steamcommunity.com",
+        L"roblox.com",
+        L"twitch.tv",
+        L"cloudflare.com",
+        L"github.com"
+    };
+    for (const auto* d : presetDomains) {
+        SendMessageW(m_hComboDomain, CB_ADDSTRING, 0, (LPARAM)d);
+    }
+    SendMessageW(m_hComboDomain, CB_SETCURSEL, 0, 0);
+
+    // Duration ComboBox
+    int durX = domainX + comboDomainW + 68;
+    m_hComboDuration = CreateWindowExW(0, WC_COMBOBOXW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+        durX, barY + 7, comboDurW, 160,
+        m_hWnd, (HMENU)IDC_COMBO_BENCHMARK_DURATION, m_hInstance, nullptr);
+    SendMessageW(m_hComboDuration, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+
+    SendMessageW(m_hComboDuration, CB_ADDSTRING, 0, (LPARAM)L"30 сек (Стандартный)");
+    SendMessageW(m_hComboDuration, CB_ADDSTRING, 0, (LPARAM)L"10 сек (Быстрый)");
+    SendMessageW(m_hComboDuration, CB_ADDSTRING, 0, (LPARAM)L"60 сек (Глубокий)");
+    SendMessageW(m_hComboDuration, CB_ADDSTRING, 0, (LPARAM)L"Непрерывный мониторинг");
+    SendMessageW(m_hComboDuration, CB_SETCURSEL, 0, 0);
+
+    // Start / Stop Button
+    int startBtnX = durX + comboDurW + 12;
+    m_hBtnStartStop = CreateWindowExW(0, WC_BUTTONW, L"Старт (30 сек)",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        startBtnX, barY + 4, btnStartW, 34,
+        m_hWnd, (HMENU)IDC_BTN_BENCHMARK_START_STOP, m_hInstance, nullptr);
+    attach_button_effects(m_hBtnStartStop, 201);
 
     // Custom Sparkline Benchmark List
+    int listTop = 186;
     int bottomButtonsH = 38;
     int listBottomMargin = 16;
-    int listHeight = clientHeight - curY - bottomButtonsH - listBottomMargin - 16;
+    int listHeight = clientHeight - listTop - bottomButtonsH - listBottomMargin - 16;
 
     m_hListWnd = CreateWindowExW(
         0,
         LIST_CLASS_NAME,
         L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        marginX, curY, contentWidth, listHeight,
+        marginX, listTop, contentWidth, listHeight,
         m_hWnd, (HMENU)IDC_LIST_BENCHMARK, m_hInstance, this
     );
 
-    curY += listHeight + 16;
+    int curY = listTop + listHeight + 16;
 
     // Bottom Action Buttons with modern styling
     int btnApplyW = 210;
-    int btnPauseW = 180;
+    int btnPauseW = 170;
     int btnCloseW = 110;
 
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить этот DNS",
@@ -340,10 +388,15 @@ void BenchmarkDialog::create_controls() {
         marginX, curY, btnApplyW, bottomButtonsH,
         m_hWnd, (HMENU)IDC_BTN_BENCHMARK_APPLY, m_hInstance, nullptr);
 
-    m_hBtnPauseResume = CreateWindowExW(0, WC_BUTTONW, L"Пауза мониторинга",
+    m_hBtnPauseResume = CreateWindowExW(0, WC_BUTTONW, L"Пауза",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + btnApplyW + 12, curY, btnPauseW, bottomButtonsH,
+        marginX + btnApplyW + 10, curY, btnPauseW, bottomButtonsH,
         m_hWnd, (HMENU)IDC_BTN_BENCHMARK_PAUSE, m_hInstance, nullptr);
+
+    m_hBtnReset = CreateWindowExW(0, WC_BUTTONW, L"Сбросить историю",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX + btnApplyW + btnPauseW + 20, curY, 160, bottomButtonsH,
+        m_hWnd, (HMENU)IDC_BTN_BENCHMARK_RESET, m_hInstance, nullptr);
 
     m_hBtnClose = CreateWindowExW(0, WC_BUTTONW, L"Закрыть",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
@@ -352,7 +405,143 @@ void BenchmarkDialog::create_controls() {
 
     attach_button_effects(m_hBtnApply, 101);
     attach_button_effects(m_hBtnPauseResume, 102);
-    attach_button_effects(m_hBtnClose, 103);
+    attach_button_effects(m_hBtnReset, 103);
+    attach_button_effects(m_hBtnClose, 104);
+
+    // Start 30s timed test by default for instant stability and speed insights
+    start_timed_test();
+}
+
+void BenchmarkDialog::reset_all_stats() {
+    std::lock_guard<std::mutex> lock(m_itemsMutex);
+    for (auto& it : m_items) {
+        it.reset_stats();
+    }
+    m_fastestIndex = -1;
+    m_mostStableIndex = -1;
+    m_verdictFastest.clear();
+    m_verdictStable.clear();
+    m_timedFinished = false;
+    m_elapsedSec = 0;
+
+    if (m_hWnd && IsWindow(m_hWnd)) {
+        InvalidateRect(m_hWnd, nullptr, FALSE);
+    }
+}
+
+void BenchmarkDialog::start_timed_test() {
+    // Read domain from ComboBox
+    wchar_t domBuf[256] = {};
+    GetWindowTextW(m_hComboDomain, domBuf, _countof(domBuf));
+    std::string rawDomain = wide_to_utf8(domBuf);
+    m_targetDomain = DnsBenchmark::sanitize_domain(rawDomain);
+
+    // Read duration
+    int curDurIdx = static_cast<int>(SendMessageW(m_hComboDuration, CB_GETCURSEL, 0, 0));
+    if (curDurIdx == 1) {
+        m_durationMode = BenchmarkDurationMode::Timed10s;
+        m_targetDurationSec = 10;
+    } else if (curDurIdx == 2) {
+        m_durationMode = BenchmarkDurationMode::Timed60s;
+        m_targetDurationSec = 60;
+    } else if (curDurIdx == 3) {
+        m_durationMode = BenchmarkDurationMode::Continuous;
+        m_targetDurationSec = 0;
+    } else {
+        m_durationMode = BenchmarkDurationMode::Timed30s;
+        m_targetDurationSec = 30;
+    }
+
+    reset_all_stats();
+
+    if (m_durationMode != BenchmarkDurationMode::Continuous) {
+        m_isTimedRunning = true;
+        if (m_hBtnStartStop) {
+            SetWindowTextW(m_hBtnStartStop, L"Остановить");
+        }
+    } else {
+        m_isTimedRunning = false;
+        if (m_hBtnStartStop) {
+            SetWindowTextW(m_hBtnStartStop, L"Тест стабильности");
+        }
+    }
+
+    if (m_hWnd && IsWindow(m_hWnd)) {
+        InvalidateRect(m_hWnd, nullptr, FALSE);
+    }
+}
+
+void BenchmarkDialog::stop_timed_test(bool finishedNaturally) {
+    m_isTimedRunning = false;
+    m_timedFinished = true;
+
+    if (m_hBtnStartStop) {
+        std::wstring btnLabel = L"Старт (" + std::to_wstring(m_targetDurationSec > 0 ? m_targetDurationSec : 30) + L" сек)";
+        SetWindowTextW(m_hBtnStartStop, btnLabel.c_str());
+    }
+
+    update_verdict();
+
+    if (m_hWnd && IsWindow(m_hWnd)) {
+        InvalidateRect(m_hWnd, nullptr, FALSE);
+    }
+}
+
+void BenchmarkDialog::update_verdict() {
+    std::lock_guard<std::mutex> lock(m_itemsMutex);
+
+    int bestFastIdx = -1;
+    int bestFastPing = 999999;
+
+    int bestStableIdx = -1;
+    float bestJitter = 999999.0f;
+
+    for (size_t i = 0; i < m_items.size(); ++i) {
+        auto& it = m_items[i];
+        it.is_fastest = false;
+        it.is_most_stable = false;
+
+        if (it.profile.is_dhcp) continue;
+        if (it.avg_ping <= 0 || it.reliability < 50.0f) continue;
+
+        // Fastest: lowest avg_ping with >= 70% reliability
+        if (it.reliability >= 70.0f && it.avg_ping < bestFastPing) {
+            bestFastPing = it.avg_ping;
+            bestFastIdx = static_cast<int>(i);
+        }
+
+        // Most Stable: lowest jitter with >= 85% reliability
+        if (it.reliability >= 85.0f && it.jitter < bestJitter) {
+            bestJitter = it.jitter;
+            bestStableIdx = static_cast<int>(i);
+        }
+    }
+
+    m_fastestIndex = bestFastIdx;
+    m_mostStableIndex = bestStableIdx;
+
+    if (bestFastIdx >= 0) {
+        m_items[bestFastIdx].is_fastest = true;
+        std::wstringstream ss;
+        ss << utf8_to_wide(m_items[bestFastIdx].profile.name) << L" (ср. "
+           << m_items[bestFastIdx].avg_ping << L" ms, мин. "
+           << m_items[bestFastIdx].min_ping << L" ms)";
+        m_verdictFastest = ss.str();
+    } else {
+        m_verdictFastest = L"Нет стабильных ответов";
+    }
+
+    if (bestStableIdx >= 0) {
+        m_items[bestStableIdx].is_most_stable = true;
+        std::wstringstream ss;
+        ss << std::fixed << std::setprecision(1);
+        ss << utf8_to_wide(m_items[bestStableIdx].profile.name) << L" (джиттер ±"
+           << m_items[bestStableIdx].jitter << L" ms, "
+           << static_cast<int>(m_items[bestStableIdx].reliability) << L"% стабильность)";
+        m_verdictStable = ss.str();
+    } else {
+        m_verdictStable = L"Недостаточно данных";
+    }
 }
 
 void BenchmarkDialog::start_ping_worker() {
@@ -367,6 +556,7 @@ void BenchmarkDialog::start_ping_worker() {
             }
 
             size_t count = 0;
+            std::string currentDomain = m_targetDomain;
             {
                 std::lock_guard<std::mutex> lock(m_itemsMutex);
                 count = m_items.size();
@@ -387,9 +577,9 @@ void BenchmarkDialog::start_ping_worker() {
                     }
                 }
 
-                futures.push_back(std::async(std::launch::async, [i, ip, isDhcp]() -> std::pair<size_t, int> {
+                futures.push_back(std::async(std::launch::async, [i, ip, isDhcp, currentDomain]() -> std::pair<size_t, int> {
                     if (isDhcp || ip.empty()) return { i, -2 }; // -2 for DHCP
-                    int ping = DnsBenchmark::ping_dns_server(ip, 700, true);
+                    int ping = DnsBenchmark::ping_dns_server_domain(ip, currentDomain, 750);
                     return { i, ping };
                 }));
             }
@@ -401,6 +591,8 @@ void BenchmarkDialog::start_ping_worker() {
                     std::lock_guard<std::mutex> lock(m_itemsMutex);
                     if (idx < m_items.size()) {
                         auto& it = m_items[idx];
+                        it.total_queries++;
+
                         if (ping == -2) {
                             it.current_ping = 0;
                             it.status_text = L"DHCP (Авто)";
@@ -408,10 +600,14 @@ void BenchmarkDialog::start_ping_worker() {
                             it.quality = DnsQuality::Fast;
                         } else {
                             it.current_ping = ping;
-                            if (it.latency_history.size() >= 16) {
+                            if (ping > 0) {
+                                it.success_queries++;
+                            }
+                            if (it.latency_history.size() >= 32) {
                                 it.latency_history.erase(it.latency_history.begin());
                             }
                             it.latency_history.push_back(ping);
+                            it.recalculate_stats();
 
                             if (ping > 0 && ping < 60) {
                                 it.status_text = std::to_wstring(ping) + L" ms";
@@ -435,12 +631,20 @@ void BenchmarkDialog::start_ping_worker() {
                 }
             }
 
+            // Timed test progress management
+            if (m_isTimedRunning && m_targetDurationSec > 0) {
+                m_elapsedSec++;
+                if (m_elapsedSec >= m_targetDurationSec) {
+                    stop_timed_test(true);
+                }
+            }
+
             if (m_hWnd && IsWindow(m_hWnd)) {
                 PostMessageW(m_hWnd, WM_APP_BENCHMARK_PING_UPDATE, 0, 0);
             }
 
-            // Sleep 2.0 seconds between testing cycles
-            for (int s = 0; s < 20 && m_workerRunning && !m_isPaused; ++s) {
+            // Sleep 1.0 second between query rounds for balanced load and fast convergence
+            for (int s = 0; s < 10 && m_workerRunning && !m_isPaused; ++s) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
@@ -457,10 +661,10 @@ void BenchmarkDialog::stop_ping_worker() {
 void BenchmarkDialog::toggle_pause() {
     m_isPaused = !m_isPaused;
     if (m_hBtnPauseResume) {
-        SetWindowTextW(m_hBtnPauseResume, m_isPaused ? L"Возобновить" : L"Пауза мониторинга");
+        SetWindowTextW(m_hBtnPauseResume, m_isPaused ? L"Возобновить" : L"Пауза");
     }
-    if (m_hStatusText) {
-        SetWindowTextW(m_hStatusText, m_isPaused ? L"Мониторинг приостановлен" : L"Автомониторинг активен (опрос каждые 2 сек)");
+    if (m_hWnd && IsWindow(m_hWnd)) {
+        InvalidateRect(m_hWnd, nullptr, FALSE);
     }
 }
 
@@ -468,6 +672,15 @@ void BenchmarkDialog::on_apply() {
     std::lock_guard<std::mutex> lock(m_itemsMutex);
     if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_items.size())) {
         m_selectedProfileId = m_items[m_selectedIndex].profile.id;
+        m_finished = true;
+    }
+}
+
+void BenchmarkDialog::apply_best_profile(bool applyFastest) {
+    std::lock_guard<std::mutex> lock(m_itemsMutex);
+    int targetIdx = applyFastest ? m_fastestIndex : m_mostStableIndex;
+    if (targetIdx >= 0 && targetIdx < static_cast<int>(m_items.size())) {
+        m_selectedProfileId = m_items[targetIdx].profile.id;
         m_finished = true;
     }
 }
@@ -492,7 +705,7 @@ void BenchmarkDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     int h = rc.bottom - rc.top;
 
     auto pal = GetPalette(m_isDarkMode);
-    bool isPrimary = (pDis->CtlID == IDC_BTN_BENCHMARK_APPLY);
+    bool isPrimary = (pDis->CtlID == IDC_BTN_BENCHMARK_APPLY || pDis->CtlID == IDC_BTN_BENCHMARK_START_STOP);
 
     auto* anim = reinterpret_cast<ButtonAnimationState*>(GetPropW(pDis->hwndItem, L"QuickDnsAnim"));
     float hoverVal = anim ? anim->hover : 0.0f;
@@ -514,7 +727,6 @@ void BenchmarkDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
     HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
-    // Pre-fill memory buffer with window background for perfect rounded blending
     HBRUSH hbrWin = CreateSolidBrush(pal.bg);
     FillRect(hdcMem, &rc, hbrWin);
     DeleteObject(hbrWin);
@@ -553,7 +765,6 @@ void BenchmarkDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     DrawTextW(hdcMem, btnText, -1, &rcText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     SelectObject(hdcMem, oldFont);
-
     BitBlt(hdc, rc.left, rc.top, w, h, hdcMem, 0, 0, SRCCOPY);
 
     SelectObject(hdcMem, oldBmp);
@@ -615,7 +826,7 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
     Gdiplus::SolidBrush dotBr(dotColor);
     g.FillEllipse(&dotBr, dotX - 4.0f, dotY - 4.0f, 8.0f, 8.0f);
 
-    // 3. Profile Name and Tags
+    // 3. Profile Name and Badges
     Gdiplus::FontFamily fontFamily(L"Segoe UI");
     Gdiplus::Font fontTitle(&fontFamily, 10.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
     Gdiplus::Font fontSub(&fontFamily, 8.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
@@ -638,35 +849,46 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
         badgeX += 68.0f;
     }
 
-    // Active profile badge [Текущий DNS]
+    // Active profile badge
     if (it.profile.id == m_currentActiveId) {
         Gdiplus::SolidBrush activeBadgeBr(Gdiplus::Color(255, GetRValue(pal.accentBlue), GetGValue(pal.accentBlue), GetBValue(pal.accentBlue)));
-        g.DrawString(L"[Текущий DNS]", -1, &fontBadge, Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &activeBadgeBr);
+        g.DrawString(L"[Текущий]", -1, &fontBadge, Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &activeBadgeBr);
+        badgeX += 62.0f;
     }
 
-    // Subtitle: Primary IP & DoH badge & SmartDNS summary
+    // Winner Badges
+    if (it.is_fastest) {
+        Gdiplus::SolidBrush fastBadgeBr(Gdiplus::Color(255, 34, 197, 94));
+        g.DrawString(L"[Самый быстрый]", -1, &fontBadge, Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &fastBadgeBr);
+        badgeX += 105.0f;
+    }
+    if (it.is_most_stable) {
+        Gdiplus::SolidBrush stableBadgeBr(Gdiplus::Color(255, 59, 130, 246));
+        g.DrawString(L"[Самый стабильный]", -1, &fontBadge, Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &stableBadgeBr);
+    }
+
+    // Subtitle: Primary IP & Stability Stats
     std::wstring subInfo;
     if (it.profile.is_dhcp) {
         subInfo = L"DHCP роутера/провайдера";
     } else {
         subInfo = L"IP: " + utf8_to_wide(it.profile.primary_ipv4);
-        if (!it.profile.secondary_ipv4.empty()) {
-            subInfo += L", " + utf8_to_wide(it.profile.secondary_ipv4);
-        }
-        if (!it.profile.doh_template.empty()) {
-            subInfo += L"  •  DoH";
-        }
-        if (it.profile.is_smart_dns && !it.profile.unblocked_summary.empty()) {
+        if (it.avg_ping > 0) {
+            std::wstringstream ss;
+            ss << std::fixed << std::setprecision(1);
+            ss << L"  •  Ср: " << it.avg_ping << L" ms  •  Мин: " << it.min_ping << L"  •  Джиттер: ±" << it.jitter << L" ms";
+            subInfo += ss.str();
+        } else if (!it.profile.unblocked_summary.empty() && it.profile.is_smart_dns) {
             subInfo += L"  •  " + utf8_to_wide(it.profile.unblocked_summary);
         }
     }
-    float pingColX = static_cast<float>(width) - 265.0f;
+    float pingColX = static_cast<float>(width) - 275.0f;
     Gdiplus::StringFormat fmtSub;
     fmtSub.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
     fmtSub.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-    g.DrawString(subInfo.c_str(), -1, &fontSub, Gdiplus::RectF(34.0f, static_cast<float>(y) + 26.0f, pingColX - 44.0f, 18.0f), &fmtSub, &textSecBr);
+    g.DrawString(subInfo.c_str(), -1, &fontSub, Gdiplus::RectF(34.0f, static_cast<float>(y) + 26.0f, pingColX - 40.0f, 18.0f), &fmtSub, &textSecBr);
 
-    // 4. Ping & Rating Column (X ~ width - 265)
+    // 4. Ping Column (X ~ width - 275)
     std::wstring pingValStr;
     Gdiplus::Color pingTextColor;
     if (it.profile.is_dhcp) {
@@ -689,12 +911,15 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
     g.DrawString(pingValStr.c_str(), -1, &fontPing, Gdiplus::PointF(pingColX, static_cast<float>(y) + 6.0f), &pingTextBr);
 
     std::wstring qualStr = it.quality_label;
+    if (it.total_queries > 1 && !it.profile.is_dhcp) {
+        qualStr += L" (" + std::to_wstring(static_cast<int>(it.reliability)) + L"%)";
+    }
     g.DrawString(qualStr.c_str(), -1, &fontSub, Gdiplus::PointF(pingColX, static_cast<float>(y) + 26.0f), &textSecBr);
 
-    // 5. Mini Sparkline Graph Column (X: width - 146, Width: 136, Height: 34)
-    float graphX = static_cast<float>(width) - 146.0f;
+    // 5. Mini Sparkline Graph Column (X: width - 150, Width: 140, Height: 34)
+    float graphX = static_cast<float>(width) - 150.0f;
     float graphY = static_cast<float>(y) + 7.0f;
-    float graphW = 136.0f;
+    float graphW = 140.0f;
     float graphH = 34.0f;
 
     Gdiplus::GraphicsPath graphCont;
@@ -704,12 +929,11 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
     g.FillPath(&graphBgBr, &graphCont);
     g.DrawPath(&graphBorderPen, &graphCont);
 
-    // Faint grid guide line at center
-    Gdiplus::Pen gridPen(Gdiplus::Color(80, GetRValue(pal.graphGrid), GetGValue(pal.graphGrid), GetBValue(pal.graphGrid)), 1.0f);
+    // Grid line
+    Gdiplus::Pen gridPen(Gdiplus::Color(70, GetRValue(pal.graphGrid), GetGValue(pal.graphGrid), GetBValue(pal.graphGrid)), 1.0f);
     gridPen.SetDashStyle(Gdiplus::DashStyleDash);
     g.DrawLine(&gridPen, graphX + 4.0f, graphY + graphH / 2.0f, graphX + graphW - 4.0f, graphY + graphH / 2.0f);
 
-    // Draw sparkline curve if points exist
     const auto& hist = it.latency_history;
     if (!hist.empty()) {
         float pLeft = graphX + 6.0f;
@@ -719,9 +943,9 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
         float pWidth = pRight - pLeft;
         float pHeight = pBottom - pTop;
 
-        int maxMs = 80;
+        int maxMs = 70;
         for (int v : hist) {
-            if (v > maxMs) maxMs = std::min(300, v + 20);
+            if (v > maxMs) maxMs = std::min(300, v + 15);
         }
 
         std::vector<Gdiplus::PointF> pts;
@@ -736,14 +960,12 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
         }
 
         if (pts.size() >= 2) {
-            // Area polygon under curve
             std::vector<Gdiplus::PointF> poly = pts;
             poly.push_back(Gdiplus::PointF(pts.back().X, pBottom));
             poly.push_back(Gdiplus::PointF(pts.front().X, pBottom));
             Gdiplus::SolidBrush fillBr(Gdiplus::Color(45, dotColor.GetR(), dotColor.GetG(), dotColor.GetB()));
             g.FillPolygon(&fillBr, poly.data(), static_cast<int>(poly.size()));
 
-            // Anti-aliased line
             Gdiplus::Pen curvePen(dotColor, 1.8f);
             curvePen.SetLineJoin(Gdiplus::LineJoinRound);
             curvePen.SetStartCap(Gdiplus::LineCapRound);
@@ -751,7 +973,6 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, int index, int y, int
             g.DrawLines(&curvePen, pts.data(), static_cast<int>(pts.size()));
         }
 
-        // Indicator dot on last point
         Gdiplus::PointF lastPt = pts.back();
         Gdiplus::SolidBrush dotHalo(Gdiplus::Color(70, dotColor.GetR(), dotColor.GetG(), dotColor.GetB()));
         g.FillEllipse(&dotHalo, lastPt.X - 4.5f, lastPt.Y - 4.5f, 9.0f, 9.0f);
@@ -781,7 +1002,137 @@ LRESULT CALLBACK BenchmarkDialog::dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARAM
 
 LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+    case WM_ERASEBKGND:
+        return 1; // Seamless double buffer
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        HDC hdcMem = CreateCompatibleDC(hdc);
+        HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+        HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
+
+        auto pal = GetPalette(m_isDarkMode);
+
+        // Pre-fill window background
+        HBRUSH hbrBg = CreateSolidBrush(pal.bg);
+        FillRect(hdcMem, &rc, hbrBg);
+        DeleteObject(hbrBg);
+
+        {
+            Gdiplus::Graphics g(hdcMem);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+            int marginX = 20;
+            int contentW = w - (marginX * 2);
+
+            // 1. Header Typography
+            Gdiplus::FontFamily ffDisplay(L"Segoe UI Variable Display");
+            Gdiplus::FontFamily ffRegular(L"Segoe UI");
+            Gdiplus::Font fontHeader(&ffDisplay, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+            Gdiplus::Font fontSub(&ffRegular, 9.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
+            Gdiplus::Font fontBold(&ffRegular, 9.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+
+            Gdiplus::SolidBrush textPriBr(Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary)));
+            Gdiplus::SolidBrush textSecBr(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)));
+
+            g.DrawString(L"Тест скорости и стабильности DNS", -1, &fontHeader, Gdiplus::PointF(static_cast<float>(marginX), 14.0f), &textPriBr);
+            g.DrawString(L"Замер отклика DNS-серверов в реальном времени и тестирование стабильности для любого выбранного сайта.",
+                -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX), 38.0f), &textSecBr);
+
+            // 2. Control Bar Card Background
+            Gdiplus::RectF rcBar(static_cast<float>(marginX), 60.0f, static_cast<float>(contentW), 44.0f);
+            Gdiplus::GraphicsPath barPath;
+            AddRoundedRect(barPath, rcBar, 8.0f);
+            Gdiplus::SolidBrush barCardBr(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
+            Gdiplus::Pen barPen(Gdiplus::Color(255, GetRValue(pal.cardBorder), GetGValue(pal.cardBorder), GetBValue(pal.cardBorder)), 1.0f);
+            g.FillPath(&barCardBr, &barPath);
+            g.DrawPath(&barPen, &barPath);
+
+            // Labels inside bar
+            g.DrawString(L"Сайт:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 12), 73.0f), &textPriBr);
+            int durLabelX = marginX + 54 + 210 + 16;
+            g.DrawString(L"Режим:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(durLabelX), 73.0f), &textPriBr);
+
+            // 3. Status / Verdict / Progress Container (Y = 112 to 174)
+            Gdiplus::RectF rcVerdict(static_cast<float>(marginX), 112.0f, static_cast<float>(contentW), 62.0f);
+            Gdiplus::GraphicsPath vPath;
+            AddRoundedRect(vPath, rcVerdict, 8.0f);
+            g.FillPath(&barCardBr, &vPath);
+            g.DrawPath(&barPen, &vPath);
+
+            if (m_isTimedRunning) {
+                // Progress Bar & Countdown Mode
+                int totalSec = m_targetDurationSec > 0 ? m_targetDurationSec : 30;
+                int remainSec = std::max(0, totalSec - m_elapsedSec);
+
+                std::wstring testMsg = L"Идет замер стабильности для \"" + utf8_to_wide(m_targetDomain) + 
+                    L"\" • Осталось: " + std::to_wstring(remainSec) + L" сек (секунда " + std::to_wstring(m_elapsedSec) + L" из " + std::to_wstring(totalSec) + L")";
+                g.DrawString(testMsg.c_str(), -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 16), 122.0f), &textPriBr);
+
+                // Animated Progress Track
+                float progX = static_cast<float>(marginX + 16);
+                float progY = 148.0f;
+                float progW = static_cast<float>(contentW - 32);
+                float progH = 10.0f;
+
+                Gdiplus::RectF rcTrack(progX, progY, progW, progH);
+                Gdiplus::GraphicsPath trackPath;
+                AddRoundedRect(trackPath, rcTrack, 5.0f);
+                Gdiplus::SolidBrush trackBg(m_isDarkMode ? Gdiplus::Color(255, 38, 44, 56) : Gdiplus::Color(255, 226, 232, 240));
+                g.FillPath(&trackBg, &trackPath);
+
+                float ratio = std::clamp(static_cast<float>(m_elapsedSec) / static_cast<float>(totalSec), 0.0f, 1.0f);
+                if (ratio > 0.01f) {
+                    float fillW = std::max(10.0f, progW * ratio);
+                    Gdiplus::RectF rcFill(progX, progY, fillW, progH);
+                    Gdiplus::GraphicsPath fillPath;
+                    AddRoundedRect(fillPath, rcFill, 5.0f);
+                    Gdiplus::SolidBrush fillBr(Gdiplus::Color(255, 34, 197, 94));
+                    g.FillPath(&fillBr, &fillPath);
+                }
+            } else if (m_timedFinished && (!m_verdictFastest.empty() || !m_verdictStable.empty())) {
+                // Verdict Highlights: Fastest & Most Stable
+                float colW = static_cast<float>(contentW - 24) / 2.0f;
+
+                // Fastest Box
+                Gdiplus::SolidBrush greenTextBr(Gdiplus::Color(255, 34, 197, 94));
+                g.DrawString(L"Самый быстрый DNS:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 14), 121.0f), &greenTextBr);
+                g.DrawString(m_verdictFastest.c_str(), -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX + 14), 142.0f), &textPriBr);
+
+                // Most Stable Box
+                Gdiplus::SolidBrush blueTextBr(Gdiplus::Color(255, 59, 130, 246));
+                g.DrawString(L"Самый стабильный DNS:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 14 + colW), 121.0f), &blueTextBr);
+                g.DrawString(m_verdictStable.c_str(), -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX + 14 + colW), 142.0f), &textPriBr);
+            } else {
+                // Continuous Monitoring / Ready Mode
+                std::wstring readyMsg = L"Целевой сайт: " + utf8_to_wide(m_targetDomain) + L"  •  " +
+                    (m_isPaused ? L"Мониторинг приостановлен" : L"Автомониторинг активен (опрос каждые 1.0 сек)");
+                g.DrawString(readyMsg.c_str(), -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 16), 122.0f), &textPriBr);
+
+                std::wstring hintMsg = L"Нажмите «Старт» для замера стабильности с определением лучшего сервера, или выберите DNS из списка.";
+                g.DrawString(hintMsg.c_str(), -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX + 16), 144.0f), &textSecBr);
+            }
+        }
+
+        BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
+        SelectObject(hdcMem, oldBmp);
+        DeleteObject(hbmMem);
+        DeleteDC(hdcMem);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+
     case WM_APP_BENCHMARK_PING_UPDATE: {
+        RECT rcVerdict = { 20, 112, DIALOG_CLIENT_WIDTH - 20, 176 };
+        InvalidateRect(hWnd, &rcVerdict, FALSE);
         if (m_hListWnd && IsWindow(m_hListWnd)) {
             InvalidateRect(m_hListWnd, nullptr, FALSE);
         }
@@ -790,14 +1141,39 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
 
     case WM_COMMAND: {
         int id = LOWORD(wParam);
+        int code = HIWORD(wParam);
+
+        if (id == IDC_BTN_BENCHMARK_START_STOP) {
+            if (m_isTimedRunning) {
+                stop_timed_test(false);
+            } else {
+                start_timed_test();
+            }
+            return 0;
+        }
+
+        if (id == IDC_BTN_BENCHMARK_RESET) {
+            reset_all_stats();
+            return 0;
+        }
+
+        if (id == IDC_COMBO_BENCHMARK_DOMAIN && (code == CBN_SELCHANGE || code == CBN_EDITCHANGE)) {
+            wchar_t buf[256] = {};
+            GetWindowTextW(m_hComboDomain, buf, _countof(buf));
+            m_targetDomain = DnsBenchmark::sanitize_domain(wide_to_utf8(buf));
+            return 0;
+        }
+
         if (id == IDC_BTN_BENCHMARK_APPLY) {
             on_apply();
             return 0;
         }
+
         if (id == IDC_BTN_BENCHMARK_PAUSE) {
             toggle_pause();
             return 0;
         }
+
         if (id == IDC_BTN_BENCHMARK_CLOSE || id == IDCANCEL) {
             on_close();
             return 0;
@@ -820,6 +1196,15 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
         SetTextColor(hdc, pal.textPrimary);
         SetBkMode(hdc, TRANSPARENT);
         return (INT_PTR)m_hbrBg;
+    }
+
+    case WM_CTLCOLORLISTBOX:
+    case WM_CTLCOLOREDIT: {
+        HDC hdc = (HDC)wParam;
+        auto pal = GetPalette(m_isDarkMode);
+        SetTextColor(hdc, pal.textPrimary);
+        SetBkColor(hdc, pal.cardBg);
+        return (INT_PTR)m_hbrCard;
     }
 
     case WM_CLOSE: {
