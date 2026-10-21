@@ -58,10 +58,17 @@ QuickDNS автоматизирует этот процесс:
 | Профиль | Тип | Основной DNS (IPv4) | Дополнительный DNS (IPv4) | DNS over HTTPS (DoH) URL | Официальный сайт | Разблокируемые сервисы |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **GeoHide DNS** | `[SmartDNS]` | `193.233.112.67` | `193.233.112.88` | `https://dns.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | ChatGPT, Claude, Gemini, Grok, Cursor, DeepL, Spotify, Notion, Canva, Autodesk, JetBrains |
+| **GeoHide EU (Европа)** | `[SmartDNS]` | `45.13.237.213` | `5.175.161.3` | `https://eu.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | Европейские ноды: ChatGPT, Claude, Gemini, Grok, Deezer, Spotify, Canva, Notion |
+| **GeoHide US (США)** | `[SmartDNS]` | `192.255.159.241` | `192.3.233.253` | `https://us.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | Серверы США: ChatGPT, Claude, Gemini, Copilot, Grok, Spotify, Netflix US, Notion |
 | **Comss.one DNS** | `[SmartDNS]` | `83.220.169.155` | `212.109.195.93` | `https://dns.comss.one/dns-query` | [dns.comss.one](https://dns.comss.one/) | ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X, AdGuard |
 | **Zapret DNS** | `[SmartDNS]` | `83.217.211.149` | — | `https://dns.zapret.moe/dns-query` | [zapret.moe](https://zapret.moe/) | Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker |
 | **Без межаў DNS** | `[SmartDNS]` | `143.20.64.55` | `31.58.216.201` | `https://dns.bezmezhau.com/dns-query` | [bezmezhau.com](https://bezmezhau.com/) | ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok |
 | **Malw.link DNS** | `[SmartDNS]` | `179.254.166.171` | `164.5.224.81` | `https://dns.malw.link/dns-query` | [info.dns.malw.link](https://info.dns.malw.link/) | ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva |
+| **Astracat DNS** | `[SmartDNS]` | `135.106.217.200` | `185.139.69.24` | `https://dns.astracat.ru/dns-query` | [astracat.ru](https://astracat.ru/) | ChatGPT, Claude, Discord, YouTube, Spotify, Twitter/X, Instagram, Notion |
+| **Mafioznik DNS** | `[SmartDNS]` | `103.27.157.38` | `103.27.157.100` | `https://dns.mafioznik.xyz/dns-query` | [dns.mafioznik.xyz](https://dns.mafioznik.xyz/) | ChatGPT, Discord, YouTube, Steam Community, Spotify, Instagram, Twitter/X |
+| **Shecan DNS** | `[SmartDNS]` | `178.22.122.100` | `185.51.200.2` | `https://free.shecan.ir/dns-query` | [shecan.ir](https://shecan.ir/) | Антисанкционный: Docker Hub, Android Dev, Oracle, NVIDIA, Gradle, Google Services |
+| **Control D (ControlID)** | `[SmartDNS]` | `76.76.2.0` | `76.76.10.0` | `https://freedns.controld.com/p0` | [controld.com](https://controld.com/) | Anycast SmartDNS от Windscribe: ChatGPT, Claude, стриминги, защита от фишинга |
+| **Akile DNS (AKDNS)** | `[SmartDNS]` | `66.66.66.66` | `108.160.138.51` | `https://dns.akile.ai/dns-query` | [dns.akile.ai](https://dns.akile.ai/) | Разблокировка стримингов: Netflix, Disney+, YouTube Premium, Spotify, TikTok |
 | **Cloudflare** | Публичный | `1.1.1.1` | `1.0.0.1` | `https://cloudflare-dns.com/dns-query` | [1.1.1.1](https://1.1.1.1/) | Высокая скорость отклика и повышенная приватность |
 | **Google Public DNS** | Публичный | `8.8.8.8` | `8.8.4.4` | `https://dns.google/dns-query` | [dns.google](https://dns.google/) | Общедоступный стабильный глобальный DNS-резолвер |
 | **Quad9 DNS** | Безопасность | `9.9.9.9` | `149.112.112.112` | `https://dns.quad9.net/dns-query` | [quad9.net](https://quad9.net/) | Блокировка вредоносных и фишинговых ресурсов |

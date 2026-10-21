@@ -56,6 +56,50 @@ int main() {
         assert(malw->is_smart_dns == true);
         std::cout << "[PASS] Malw.link preset verified: " << malw->primary_ipv4 << " (DoH: " << malw->doh_template << ")" << std::endl;
 
+        auto geohide_eu = cfg.get_profile_by_id("geohide_eu");
+        assert(geohide_eu.has_value());
+        assert(geohide_eu->primary_ipv4 == "45.13.237.213");
+        assert(geohide_eu->doh_template == "https://eu.geohide.ru/dns-query");
+        assert(geohide_eu->is_smart_dns == true);
+        std::cout << "[PASS] GeoHide EU preset verified: " << geohide_eu->primary_ipv4 << std::endl;
+
+        auto geohide_us = cfg.get_profile_by_id("geohide_us");
+        assert(geohide_us.has_value());
+        assert(geohide_us->primary_ipv4 == "192.255.159.241");
+        assert(geohide_us->doh_template == "https://us.geohide.ru/dns-query");
+        assert(geohide_us->is_smart_dns == true);
+        std::cout << "[PASS] GeoHide US preset verified: " << geohide_us->primary_ipv4 << std::endl;
+
+        auto astracat = cfg.get_profile_by_id("astracat");
+        assert(astracat.has_value());
+        assert(astracat->primary_ipv4 == "135.106.217.200");
+        assert(astracat->is_smart_dns == true);
+        std::cout << "[PASS] Astracat preset verified: " << astracat->primary_ipv4 << std::endl;
+
+        auto mafioznik = cfg.get_profile_by_id("mafioznik");
+        assert(mafioznik.has_value());
+        assert(mafioznik->primary_ipv4 == "103.27.157.38");
+        assert(mafioznik->is_smart_dns == true);
+        std::cout << "[PASS] Mafioznik preset verified: " << mafioznik->primary_ipv4 << std::endl;
+
+        auto shecan = cfg.get_profile_by_id("shecan");
+        assert(shecan.has_value());
+        assert(shecan->primary_ipv4 == "178.22.122.100");
+        assert(shecan->is_smart_dns == true);
+        std::cout << "[PASS] Shecan preset verified: " << shecan->primary_ipv4 << std::endl;
+
+        auto controld = cfg.get_profile_by_id("controld");
+        assert(controld.has_value());
+        assert(controld->primary_ipv4 == "76.76.2.0");
+        assert(controld->is_smart_dns == true);
+        std::cout << "[PASS] Control D preset verified: " << controld->primary_ipv4 << std::endl;
+
+        auto akile = cfg.get_profile_by_id("akile");
+        assert(akile.has_value());
+        assert(akile->primary_ipv4 == "66.66.66.66");
+        assert(akile->is_smart_dns == true);
+        std::cout << "[PASS] Akile preset verified: " << akile->primary_ipv4 << std::endl;
+
         auto cloudflare = cfg.get_profile_by_id("cloudflare");
         assert(cloudflare.has_value());
         assert(cloudflare->is_smart_dns == false);

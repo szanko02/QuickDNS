@@ -274,6 +274,146 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
         m_allEntries.push_back(std::move(e));
     }
 
+    // 6. GeoHide EU
+    {
+        SmartDnsEntry e;
+        e.profile_id = "geohide_eu";
+        e.name = L"GeoHide EU (Европа)";
+        e.website_url = L"https://geohide.ru/";
+        e.primary_ipv4 = L"45.13.237.213";
+        e.secondary_ipv4 = L"5.175.161.3";
+        e.doh_template = L"https://eu.geohide.ru/dns-query";
+        e.location = L"Нидерланды / Германия";
+        e.description = L"Европейские ноды GeoHide для разблокировки ChatGPT, Claude, Gemini, Spotify, Canva и Notion.";
+        e.categories = {
+            { L"Нейросети и AI", { L"ChatGPT", L"Claude", L"Gemini", L"Grok", L"Cursor AI", L"DeepL" } },
+            { L"Медиа и Стриминг", { L"Spotify", L"Netflix", L"Deezer", L"SoundCloud", L"Tidal" } },
+            { L"Работа и ПО", { L"Notion", L"Canva", L"Autodesk", L"JetBrains", L"Docker Hub" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
+    // 7. GeoHide US
+    {
+        SmartDnsEntry e;
+        e.profile_id = "geohide_us";
+        e.name = L"GeoHide US (США)";
+        e.website_url = L"https://geohide.ru/";
+        e.primary_ipv4 = L"192.255.159.241";
+        e.secondary_ipv4 = L"192.3.233.253";
+        e.doh_template = L"https://us.geohide.ru/dns-query";
+        e.location = L"США / Северная Америка";
+        e.description = L"Североамериканские ноды GeoHide для доступа к сервисам США, ChatGPT, Claude и американским медиа.";
+        e.categories = {
+            { L"Нейросети и AI", { L"ChatGPT", L"Claude", L"Gemini", L"Copilot", L"Grok", L"Perplexity" } },
+            { L"Медиа и Стриминг", { L"Netflix US", L"Hulu", L"HBO Max", L"Spotify", L"YouTube" } },
+            { L"Работа и ПО", { L"Notion", L"Canva", L"Figma", L"Docker Hub" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
+    // 8. Astracat DNS
+    {
+        SmartDnsEntry e;
+        e.profile_id = "astracat";
+        e.name = L"Astracat DNS";
+        e.website_url = L"https://astracat.ru/";
+        e.primary_ipv4 = L"135.106.217.200";
+        e.secondary_ipv4 = L"185.139.69.24";
+        e.doh_template = L"https://dns.astracat.ru/dns-query";
+        e.location = L"Россия / Европа";
+        e.description = L"Быстрый SmartDNS для обхода блокировок нейросетей, Discord, голосовых каналов и YouTube.";
+        e.categories = {
+            { L"Нейросети и AI", { L"ChatGPT", L"Claude", L"Gemini", L"Perplexity" } },
+            { L"Медиа и Соцсети", { L"Discord", L"YouTube", L"Spotify", L"Twitter/X", L"Instagram" } },
+            { L"Сервисы", { L"Notion", L"Twitch", L"Reddit", L"RuTracker" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
+    // 9. Mafioznik DNS
+    {
+        SmartDnsEntry e;
+        e.profile_id = "mafioznik";
+        e.name = L"Mafioznik DNS";
+        e.website_url = L"https://dns.mafioznik.xyz/";
+        e.primary_ipv4 = L"103.27.157.38";
+        e.secondary_ipv4 = L"103.27.157.100";
+        e.doh_template = L"https://dns.mafioznik.xyz/dns-query";
+        e.location = L"Сингапур / Anycast";
+        e.description = L"Популярный комьюнити SmartDNS для разблокировки Discord, YouTube, Steam и нейросетей.";
+        e.categories = {
+            { L"Игры и Связь", { L"Discord (войс и медиа)", L"Steam Community", L"Twitch" } },
+            { L"Нейросети и AI", { L"ChatGPT", L"Claude", L"Microsoft Copilot" } },
+            { L"Медиа", { L"YouTube", L"Spotify", L"Instagram", L"Twitter/X" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
+    // 10. Shecan DNS
+    {
+        SmartDnsEntry e;
+        e.profile_id = "shecan";
+        e.name = L"Shecan DNS";
+        e.website_url = L"https://shecan.ir/";
+        e.primary_ipv4 = L"178.22.122.100";
+        e.secondary_ipv4 = L"185.51.200.2";
+        e.doh_template = L"https://free.shecan.ir/dns-query";
+        e.location = L"Anycast / Ближний Восток";
+        e.description = L"Специализированный антисанкционный SmartDNS для разблокировки IT-сервисов, вендоров и репозиториев.";
+        e.categories = {
+            { L"IT и Разработка", { L"Docker Hub", L"Android Developers", L"Gradle", L"Oracle", L"GitLab" } },
+            { L"Вендоры и Драйверы", { L"NVIDIA", L"AMD", L"Intel", L"Dell", L"VMware" } },
+            { L"Сервисы", { L"Google Services", L"Spotify", L"Adobe" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
+    // 11. Control D (ControlID)
+    {
+        SmartDnsEntry e;
+        e.profile_id = "controld";
+        e.name = L"Control D (ControlID)";
+        e.website_url = L"https://controld.com/";
+        e.primary_ipv4 = L"76.76.2.0";
+        e.secondary_ipv4 = L"76.76.10.0";
+        e.doh_template = L"https://freedns.controld.com/p0";
+        e.location = L"Глобальный Anycast (100+ локаций)";
+        e.description = L"Продвинутый Anycast SmartDNS от Windscribe со сверхнизким пингом, фильтрацией трекеров и разблокировкой.";
+        e.categories = {
+            { L"Приватность и Защита", { L"Блокировка рекламы", L"Антитрекинг", L"Защита от вредоносных доменов" } },
+            { L"Нейросети и AI", { L"ChatGPT", L"Claude", L"Gemini", L"Copilot" } },
+            { L"Медиа", { L"YouTube", L"Twitch", L"Reddit", L"Discord" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
+    // 12. Akile DNS (AKDNS)
+    {
+        SmartDnsEntry e;
+        e.profile_id = "akile";
+        e.name = L"Akile DNS (AKDNS)";
+        e.website_url = L"https://dns.akile.ai/";
+        e.primary_ipv4 = L"66.66.66.66";
+        e.secondary_ipv4 = L"108.160.138.51";
+        e.doh_template = L"https://dns.akile.ai/dns-query";
+        e.location = L"Гонконг / Anycast";
+        e.description = L"SmartDNS сервис для разблокировки зарубежного стриминга и нейросетей (требуется привязка IP в консоли).";
+        e.categories = {
+            { L"Стриминг", { L"Netflix", L"Disney+", L"YouTube Premium", L"Spotify" } },
+            { L"Нейросети", { L"ChatGPT", L"Claude", L"Gemini" } },
+            { L"Соцсети", { L"TikTok", L"Twitter/X", L"Instagram" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
     // 6. User-defined / Custom SmartDNS profiles
     for (const auto& p : profiles) {
         if (!p.is_smart_dns) continue;

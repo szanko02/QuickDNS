@@ -6,7 +6,7 @@ QuickDNS — Быстрая смена DNS в 1 клик для Windows
 КАК ЗАПУСТИТЬ:
 1. Запустите файл QuickDNS.exe.
 2. При запросе Windows подтвердите запуск от имени Администратора (необходимо для изменения сетевых параметров системы).
-3. Выберите нужный DNS-сервер (Comss.one, GeoHide, Без межаў, Zapret, Malw.link, Cloudflare, Google или ваш собственный).
+3. Выберите нужный DNS-сервер (Comss.one, GeoHide RU/EU/US, Zapret, Malw.link, Astracat, Mafioznik, Shecan, Control D, Akile, Cloudflare или ваш собственный).
 4. Нажмите «Применить DNS в 1 клик» — готово!
 
 ОСОБЕННОСТИ:
