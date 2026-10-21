@@ -30,7 +30,7 @@ using namespace quickdns;
 namespace {
     constexpr const wchar_t* WINDOW_CLASS_NAME = L"QuickDNS_MainWindowClass";
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
-    constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.6.1 — Быстрая смена DNS в 1 клик";
+    constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.6.2 — Быстрая смена DNS в 1 клик";
 
     constexpr int WINDOW_CLIENT_WIDTH  = 560;
     constexpr int WINDOW_CLIENT_HEIGHT = 754;
@@ -835,7 +835,7 @@ void MainWindow::create_controls() {
     int startY = 14;
 
     // 1. Status Card Header
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.6.1 — Менеджер DNS",
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.6.2 — Менеджер DNS",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth - 44, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -1054,7 +1054,7 @@ void MainWindow::create_controls() {
     startY += 30 + 14;
 
     // 5. Footer Version Badge
-    m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.6.1 • Portable",
+    m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.6.2 • Portable",
         WS_CHILD | WS_VISIBLE | SS_CENTER,
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -1581,7 +1581,7 @@ void MainWindow::setup_tray_icon() {
     m_nid.uCallbackMessage = WM_APP_TRAYMSG;
     m_nid.hIcon = LoadIconW(m_hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     if (!m_nid.hIcon) m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(m_nid.szTip, L"QuickDNS v1.6.1 — Быстрая смена DNS");
+    wcscpy_s(m_nid.szTip, L"QuickDNS v1.6.2 — Быстрая смена DNS");
 
     Shell_NotifyIconW(NIM_ADD, &m_nid);
 }
