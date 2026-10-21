@@ -18,6 +18,7 @@
 #define WM_APP_DNS_APPLIED      (WM_APP + 2)
 #define WM_APP_REFRESH_STATUS   (WM_APP + 3)
 #define WM_APP_PING_UPDATED     (WM_APP + 4)
+#define WM_APP_RESTORE_INSTANCE (WM_APP + 5)
 
 class MainWindow {
 public:
@@ -26,6 +27,7 @@ public:
 
     bool initialize(HINSTANCE hInstance, int nCmdShow);
     int run_message_loop();
+    void restore_from_tray();
 
     bool is_dark_mode() const { return m_isDarkMode; }
     HFONT get_font_regular() const { return m_hFontRegular; }
@@ -126,9 +128,10 @@ private:
     HWND m_hProfileDetails = nullptr;
     HWND m_hFooterVersion = nullptr;
 
-    // System Tray
+    // System Tray & Single-Instance
     NOTIFYICONDATAW m_nid = {};
     bool m_inTray = false;
+    UINT m_msgRestoreInstance = 0;
 
     // Business Logic Engines
     std::unique_ptr<DnsManager> m_dnsManager;

@@ -314,6 +314,13 @@ bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
     create_controls();
     setup_tray_icon();
 
+    // Enable inter-process single-instance communication
+    m_msgRestoreInstance = RegisterWindowMessageW(L"QuickDNS_RestoreExistingInstanceMessage");
+    if (m_msgRestoreInstance != 0) {
+        ChangeWindowMessageFilterEx(m_hWnd, m_msgRestoreInstance, MSGFLT_ALLOW, nullptr);
+        ChangeWindowMessageFilter(m_msgRestoreInstance, MSGFLT_ADD);
+    }
+
     // Load initial network & profile data
     refresh_network_adapters();
     populate_profiles_combobox();
@@ -421,7 +428,17 @@ LRESULT MainWindow::handle_graph_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 }
 
 LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != 0 && uMsg == m_msgRestoreInstance) {
+        restore_from_tray();
+        return 0;
+    }
+
     switch (uMsg) {
+    case WM_APP_RESTORE_INSTANCE: {
+        restore_from_tray();
+        return 0;
+    }
+
     case WM_COMMAND: {
         int wmId = LOWORD(wParam);
         int wmEvent = HIWORD(wParam);
@@ -503,8 +520,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             return 0;
         }
         if (wmId == IDM_TRAY_SHOW) {
-            ShowWindow(m_hWnd, SW_RESTORE);
-            SetForegroundWindow(m_hWnd);
+            restore_from_tray();
             return 0;
         }
         if (wmId == IDM_TRAY_RESET_DHCP) {
@@ -528,8 +544,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     case WM_APP_TRAYMSG: {
         if (lParam == WM_LBUTTONUP || lParam == WM_LBUTTONDBLCLK) {
-            ShowWindow(m_hWnd, SW_RESTORE);
-            SetForegroundWindow(m_hWnd);
+            restore_from_tray();
         } else if (lParam == WM_RBUTTONUP) {
             show_tray_context_menu();
         }
@@ -709,6 +724,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_DESTROY: {
+        remove_tray_icon();
         stop_ping_worker();
         PostQuitMessage(0);
         return 0;
@@ -1579,6 +1595,21 @@ void MainWindow::show_tray_notification(const std::wstring& title, const std::ws
     wcsncpy_s(m_nid.szInfo, message.c_str(), _countof(m_nid.szInfo) - 1);
     m_nid.dwInfoFlags = NIIF_INFO;
     Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+}
+
+void MainWindow::restore_from_tray() {
+    m_inTray = false;
+    ShowWindow(m_hWnd, SW_RESTORE);
+    UpdateWindow(m_hWnd);
+
+    HWND hPopup = GetLastActivePopup(m_hWnd);
+    if (hPopup && hPopup != m_hWnd && IsWindow(hPopup)) {
+        BringWindowToTop(hPopup);
+        SetForegroundWindow(hPopup);
+    } else {
+        BringWindowToTop(m_hWnd);
+        SetForegroundWindow(m_hWnd);
+    }
 }
 
 void MainWindow::refresh_network_adapters() {
