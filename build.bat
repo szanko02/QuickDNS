@@ -131,6 +131,7 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking QuickDNS.exe failed. & exit /b 1 )
 if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
 move /Y "%~dp0QuickDNS.exe" "%~dp0QuickDNS.exe.old" >nul 2>&1
 copy /Y build\QuickDNS.exe "%~dp0QuickDNS.exe" >nul
+if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
 
 echo [6/6] Linking Diagnostic tools [test_dns.exe, test_config.exe, test_benchmark.exe]...
 "!CXX!" -std=c++20 -O2 -static -I include tests\test_dns.cpp build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_dns.exe
