@@ -180,7 +180,7 @@ std::vector<std::string> SmartDnsVerifier::scrape_ips_from_webpage(const std::st
     }
 
     HINTERNET hSession = WinHttpOpen(
-        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) QuickDNS/1.7.0",
+        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) QuickDNS/2.0.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0
@@ -384,7 +384,7 @@ DohVerificationResult SmartDnsVerifier::verify_doh(const std::string& doh_url, i
     }
 
     HINTERNET hSession = WinHttpOpen(
-        L"QuickDNS/1.7.0 (Windows NT 10.0; Win64; x64)",
+        L"QuickDNS/2.0.0 (Windows NT 10.0; Win64; x64)",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0
