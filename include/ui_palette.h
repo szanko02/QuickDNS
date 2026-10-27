@@ -48,18 +48,18 @@ inline ColorPalette GetPalette(bool isDark) {
             RGB(22, 25, 31),     // bg (refined dark charcoal)
             RGB(30, 34, 43),     // cardBg
             RGB(48, 55, 68),     // cardBorder
-            RGB(241, 245, 249),  // textPrimary
-            RGB(156, 163, 175),  // textSecondary
-            RGB(110, 118, 132),  // textMuted
-            RGB(92, 130, 165),   // accentBlue (muted steel)
-            RGB(72, 150, 112),   // accentGreen (calm sage)
-            RGB(185, 142, 60),   // accentAmber (muted warm amber)
-            RGB(192, 82, 82),    // accentRed (muted brick)
+            RGB(248, 250, 252),  // textPrimary (crisp pure white)
+            RGB(203, 213, 225),  // textSecondary (bright, high-contrast readable silver)
+            RGB(156, 163, 175),  // textMuted (clear readable gray)
+            RGB(96, 165, 250),   // accentBlue (vibrant modern sky blue)
+            RGB(34, 197, 94),    // accentGreen (vibrant clean emerald)
+            RGB(245, 158, 11),   // accentAmber (warm amber)
+            RGB(239, 68, 68),    // accentRed (clear coral red)
             RGB(48, 55, 68),     // separator
-            RGB(44, 76, 112),    // btnPrimaryBg (calm slate navy)
-            RGB(54, 92, 134),    // btnPrimaryHover
-            RGB(36, 62, 92),     // btnPrimaryPress
-            RGB(62, 102, 146),   // btnPrimaryBorder
+            RGB(37, 99, 235),    // btnPrimaryBg (vibrant accent blue)
+            RGB(59, 130, 246),   // btnPrimaryHover
+            RGB(29, 78, 216),    // btnPrimaryPress
+            RGB(96, 165, 250),   // btnPrimaryBorder
             RGB(255, 255, 255),  // btnPrimaryText
             RGB(50, 64, 94),     // btnBenchBg (subdued steel indigo)
             RGB(62, 79, 115),    // btnBenchHover
@@ -74,8 +74,8 @@ inline ColorPalette GetPalette(bool isDark) {
             RGB(25, 29, 37),     // graphBg
             RGB(48, 55, 68),     // graphBorder
             RGB(38, 44, 56),     // graphGrid
-            RGB(88, 132, 174),   // graphLine (neutral steel blue)
-            RGB(140, 148, 162)   // graphText
+            RGB(96, 165, 250),   // graphLine (vibrant steel blue)
+            RGB(156, 163, 175)   // graphText
         };
     } else {
         return ColorPalette{

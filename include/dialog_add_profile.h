@@ -10,6 +10,9 @@ class AddProfileDialog {
 public:
     static std::optional<DnsProfile> show(HWND hParent, HINSTANCE hInstance, bool isDarkMode = true);
 
+    HFONT get_font_bold() const { return m_hFontBold; }
+    bool is_dark_mode() const { return m_isDarkMode; }
+
 private:
     AddProfileDialog(HWND hParent, HINSTANCE hInstance, bool isDarkMode);
     ~AddProfileDialog();

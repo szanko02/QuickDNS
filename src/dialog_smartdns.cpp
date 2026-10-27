@@ -680,9 +680,9 @@ void SmartDnsDialog::create_controls() {
     int contentWidth = clientWidth - (marginX * 2);
 
     // Modern Search Edit Control inset inside the GDI+ rounded container card
-    int searchBoxX = marginX + 115;
-    int searchBoxY = 70;
-    int searchBoxW = contentWidth - 115;
+    int searchBoxX = marginX + 120;
+    int searchBoxY = 82;
+    int searchBoxW = contentWidth - 120;
     int searchBoxH = 32;
 
     // Create EDIT control WITHOUT WS_EX_CLIENTEDGE (use 0) so no harsh 3D borders appear!
@@ -695,7 +695,7 @@ void SmartDnsDialog::create_controls() {
     SetWindowSubclass(m_hSearchEdit, search_edit_subclass, 501, reinterpret_cast<DWORD_PTR>(this));
 
     // Custom Scrollable List of SmartDNS Cards
-    int listTop = 132;
+    int listTop = 148;
     int bottomButtonsH = 38;
     int listBottomMargin = 16;
     int listHeight = clientHeight - listTop - bottomButtonsH - listBottomMargin - 16;
@@ -755,15 +755,15 @@ void SmartDnsDialog::reposition_controls() {
     int marginX = 20;
     int contentWidth = clientWidth - (marginX * 2);
 
-    int searchBoxX = marginX + 115;
-    int searchBoxY = 70;
-    int searchBoxW = std::max(180, contentWidth - 115);
+    int searchBoxX = marginX + 120;
+    int searchBoxY = 82;
+    int searchBoxW = std::max(180, contentWidth - 120);
 
     if (m_hSearchEdit) {
         SetWindowPos(m_hSearchEdit, nullptr, searchBoxX + 10, searchBoxY + 6, searchBoxW - 20, 20, SWP_NOZORDER);
     }
 
-    int listTop = 132;
+    int listTop = 148;
     int bottomButtonsH = 38;
     int listBottomMargin = 16;
     int listHeight = std::max(80, clientHeight - listTop - bottomButtonsH - listBottomMargin - 16);
@@ -813,49 +813,70 @@ void SmartDnsDialog::recalculate_item_layouts() {
 }
 
 int SmartDnsDialog::calculate_item_height(const SmartDnsEntry& entry, int cardWidth) const {
-    float curH = 12.0f; // top padding
+    float curH = 14.0f; // top padding
 
-    // 1. Title + badges row
-    curH += 26.0f;
+    // 1. Title + badges row (dynamic wrap simulation matching draw_card_item)
+    float maxHeaderW = static_cast<float>(cardWidth - 175);
+    float headerLineY = 0.0f;
+    float curLineX = 16.0f + static_cast<float>(entry.name.length()) * 8.5f + 12.0f;
+    float curLineMaxW = maxHeaderW;
+
+    auto checkWrap = [&](float neededW) {
+        if (curLineX + neededW > curLineMaxW) {
+            headerLineY += 26.0f;
+            curLineX = 16.0f;
+            curLineMaxW = static_cast<float>(cardWidth - 24);
+        }
+        curLineX += neededW + 8.0f;
+    };
+
+    checkWrap(85.0f); // [SmartDNS] badge
+    if (!entry.location.empty()) {
+        checkWrap(static_cast<float>(entry.location.length()) * 7.5f + 20.0f); // Location badge
+    }
+    if (entry.is_active) {
+        checkWrap(135.0f); // [Активен в системе] badge
+    }
+    curH += headerLineY + 28.0f;
 
     // 2. Addresses row (IPv4 + DoH)
-    curH += 20.0f;
+    curH += 22.0f;
 
     // 3. Status row (UDP/DoH verified)
     if (entry.is_verified) {
-        curH += 18.0f;
+        curH += 20.0f;
     }
 
     // 4. Description line (multi-line word wrap)
     float maxDescW = static_cast<float>(std::max(200, cardWidth - 36));
-    int charsPerLine = std::max(20, static_cast<int>(maxDescW / 6.8f));
+    int charsPerLine = std::max(20, static_cast<int>(maxDescW / 7.0f));
     int descLines = std::max(1, static_cast<int>((entry.description.length() + charsPerLine - 1) / charsPerLine));
-    curH += descLines * 18.0f + 4.0f;
+    curH += descLines * 19.0f + 6.0f;
 
     // 5. Separator line
-    curH += 14.0f;
+    curH += 16.0f;
 
     // 6. Categories & tags with Flow Layout
     float maxChipRowW = static_cast<float>(std::max(200, cardWidth - 28));
-    float indentX = 160.0f;
+    float indentX = 168.0f;
 
     for (const auto& cat : entry.categories) {
         float chipX = indentX;
-        float rowH = 22.0f;
+        float rowH = 24.0f;
 
         for (const auto& svc : cat.services) {
-            float chipW = svc.length() * 6.8f + 16.0f;
+            float chipW = svc.length() * 7.0f + 20.0f;
             if (chipX + chipW > maxChipRowW) {
                 chipX = indentX;
-                rowH += 22.0f;
+                rowH += 27.0f;
             }
             chipX += chipW + 6.0f;
         }
-        curH += rowH + 4.0f;
+        curH += rowH + 6.0f;
     }
 
-    curH += 16.0f; // bottom padding & safe margin
-    return std::max(190, static_cast<int>(std::ceil(curH)));
+    curH += 18.0f; // bottom padding & safe margin
+    return std::max(200, static_cast<int>(std::ceil(curH)));
 }
 
 int SmartDnsDialog::get_item_at_point(int mouseY, int& outItemY) const {
@@ -1053,17 +1074,44 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
 
     // 2. Header Row: Name + Badges
     Gdiplus::FontFamily fontFamily(L"Segoe UI");
-    Gdiplus::Font fontTitle(&fontFamily, 11.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    Gdiplus::Font fontBadge(&fontFamily, 8.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    Gdiplus::Font fontSub(&fontFamily, 8.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
-    Gdiplus::Font fontCatHeader(&fontFamily, 8.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    Gdiplus::Font fontTag(&fontFamily, 7.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
+    Gdiplus::Font fontTitle(&fontFamily, 11.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+    Gdiplus::Font fontBadge(&fontFamily, 8.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+    Gdiplus::Font fontSub(&fontFamily, 9.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
+    Gdiplus::Font fontCatHeader(&fontFamily, 8.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+    Gdiplus::Font fontTag(&fontFamily, 8.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
 
     Gdiplus::SolidBrush textPriBr(Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary)));
     Gdiplus::SolidBrush textSecBr(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)));
     Gdiplus::SolidBrush textMutedBr(Gdiplus::Color(255, GetRValue(pal.textMuted), GetGValue(pal.textMuted), GetBValue(pal.textMuted)));
 
-    float curCardY = static_cast<float>(y) + 8.0f;
+    Gdiplus::StringFormat sfCenter(Gdiplus::StringFormat::GenericTypographic());
+    sfCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+    sfCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+
+    // Top-right website action pill button
+    std::wstring linkLabel = L"Сайт провайдера ↗";
+    Gdiplus::Font fontLink(&fontFamily, 8.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+    Gdiplus::RectF linkBounds;
+    g.MeasureString(linkLabel.c_str(), -1, &fontLink, Gdiplus::PointF(0, 0), &sfCenter, &linkBounds);
+    float linkBtnW = linkBounds.Width + 22.0f;
+    float linkBtnH = 24.0f;
+    float linkBtnX = static_cast<float>(width) - linkBtnW - 16.0f;
+    float linkBtnY = static_cast<float>(y) + 9.0f;
+
+    Gdiplus::RectF linkRc(linkBtnX, linkBtnY, linkBtnW, linkBtnH);
+    Gdiplus::GraphicsPath linkPath;
+    AddRoundedRect(linkPath, linkRc, 4.5f);
+    Gdiplus::SolidBrush linkBgBr(m_isDarkMode ? Gdiplus::Color(40, 59, 130, 246) : Gdiplus::Color(25, 37, 99, 235));
+    Gdiplus::Pen linkPen(m_isDarkMode ? Gdiplus::Color(100, 96, 165, 250) : Gdiplus::Color(80, 37, 99, 235), 1.0f);
+    g.FillPath(&linkBgBr, &linkPath);
+    g.DrawPath(&linkPen, &linkPath);
+
+    Gdiplus::SolidBrush linkTextBr(m_isDarkMode ? Gdiplus::Color(255, 147, 197, 253) : Gdiplus::Color(255, 37, 99, 235));
+    g.DrawString(linkLabel.c_str(), -1, &fontLink, linkRc, &sfCenter, &linkTextBr);
+
+    // Header Title & Badges with wrap protection so it never touches the website button
+    float maxHeaderLeftW = linkBtnX - 12.0f;
+    float curCardY = static_cast<float>(y) + 10.0f;
     float curCardX = 16.0f;
 
     // Provider Title
@@ -1071,61 +1119,88 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
 
     Gdiplus::RectF nameBounds;
     g.MeasureString(e.name.c_str(), -1, &fontTitle, Gdiplus::PointF(0, 0), &nameBounds);
-    float badgeX = curCardX + nameBounds.Width + 10.0f;
+    float badgeX = curCardX + nameBounds.Width + 12.0f;
+    if (badgeX > maxHeaderLeftW) {
+        curCardY += 26.0f;
+        badgeX = curCardX;
+        maxHeaderLeftW = static_cast<float>(width) - 24.0f;
+    }
 
-    // [SmartDNS] pill tag
+    auto checkWrapBadge = [&](float neededW) {
+        if (badgeX + neededW > maxHeaderLeftW) {
+            curCardY += 26.0f;
+            badgeX = curCardX;
+            maxHeaderLeftW = static_cast<float>(width) - 24.0f;
+        }
+    };
+
+    // [SmartDNS] green pill badge (centered with generous padding)
     {
-        Gdiplus::RectF pillRc(badgeX, curCardY + 2.0f, 68.0f, 18.0f);
+        Gdiplus::RectF sBounds;
+        g.MeasureString(L"SmartDNS", -1, &fontBadge, Gdiplus::PointF(0, 0), &sfCenter, &sBounds);
+        float pillW = sBounds.Width + 20.0f;
+        checkWrapBadge(pillW);
+
+        Gdiplus::RectF pillRc(badgeX, curCardY, pillW, 22.0f);
         Gdiplus::GraphicsPath pillPath;
-        AddRoundedRect(pillPath, pillRc, 4.0f);
-        Gdiplus::SolidBrush pillBg(Gdiplus::Color(35, 34, 197, 94));
-        Gdiplus::Pen pillPen(Gdiplus::Color(120, 34, 197, 94), 1.0f);
+        AddRoundedRect(pillPath, pillRc, 4.5f);
+        Gdiplus::SolidBrush pillBg(Gdiplus::Color(45, 34, 197, 94));
+        Gdiplus::Pen pillPen(Gdiplus::Color(140, 34, 197, 94), 1.0f);
         g.FillPath(&pillBg, &pillPath);
         g.DrawPath(&pillPen, &pillPath);
 
         Gdiplus::SolidBrush pillText(Gdiplus::Color(255, 34, 197, 94));
-        g.DrawString(L"SmartDNS", -1, &fontBadge, Gdiplus::PointF(badgeX + 6.0f, curCardY + 4.0f), &pillText);
-        badgeX += 76.0f;
+        g.DrawString(L"SmartDNS", -1, &fontBadge, pillRc, &sfCenter, &pillText);
+        badgeX += pillW + 8.0f;
     }
 
-    // Location badge
+    // Location badge (centered with generous padding)
     if (!e.location.empty()) {
         Gdiplus::RectF locBounds;
-        g.MeasureString(e.location.c_str(), -1, &fontBadge, Gdiplus::PointF(0, 0), &locBounds);
-        float locW = locBounds.Width + 12.0f;
-        Gdiplus::RectF locRc(badgeX, curCardY + 2.0f, locW, 18.0f);
-        Gdiplus::GraphicsPath locPath;
-        AddRoundedRect(locPath, locRc, 4.0f);
+        g.MeasureString(e.location.c_str(), -1, &fontBadge, Gdiplus::PointF(0, 0), &sfCenter, &locBounds);
+        float locW = locBounds.Width + 18.0f;
+        checkWrapBadge(locW);
 
-        Gdiplus::SolidBrush locBg(m_isDarkMode ? Gdiplus::Color(30, 255, 255, 255) : Gdiplus::Color(20, 0, 0, 0));
-        Gdiplus::Pen locPen(m_isDarkMode ? Gdiplus::Color(60, 255, 255, 255) : Gdiplus::Color(40, 0, 0, 0), 1.0f);
+        Gdiplus::RectF locRc(badgeX, curCardY, locW, 22.0f);
+        Gdiplus::GraphicsPath locPath;
+        AddRoundedRect(locPath, locRc, 4.5f);
+
+        Gdiplus::SolidBrush locBg(m_isDarkMode ? Gdiplus::Color(255, 38, 44, 56) : Gdiplus::Color(255, 235, 240, 248));
+        Gdiplus::Pen locPen(m_isDarkMode ? Gdiplus::Color(255, 60, 70, 88) : Gdiplus::Color(255, 205, 215, 228), 1.0f);
         g.FillPath(&locBg, &locPath);
         g.DrawPath(&locPen, &locPath);
 
-        g.DrawString(e.location.c_str(), -1, &fontBadge, Gdiplus::PointF(badgeX + 6.0f, curCardY + 4.0f), &textSecBr);
+        g.DrawString(e.location.c_str(), -1, &fontBadge, locRc, &sfCenter, &textSecBr);
         badgeX += locW + 8.0f;
     }
 
-    // Active badge [Активен]
+    // Active badge [Текущий DNS в системе]
     if (e.is_active) {
-        Gdiplus::SolidBrush activeBadgeBr(Gdiplus::Color(255, 34, 197, 94));
-        g.DrawString(L"[Текущий DNS в системе]", -1, &fontBadge, Gdiplus::PointF(badgeX, curCardY + 4.0f), &activeBadgeBr);
+        Gdiplus::RectF actBounds;
+        g.MeasureString(L"Активен в системе", -1, &fontBadge, Gdiplus::PointF(0, 0), &sfCenter, &actBounds);
+        float actW = actBounds.Width + 18.0f;
+        checkWrapBadge(actW);
+
+        Gdiplus::RectF actRc(badgeX, curCardY, actW, 22.0f);
+        Gdiplus::GraphicsPath actPath;
+        AddRoundedRect(actPath, actRc, 4.5f);
+        Gdiplus::SolidBrush actBg(Gdiplus::Color(45, 34, 197, 94));
+        Gdiplus::Pen actPen(Gdiplus::Color(140, 34, 197, 94), 1.0f);
+        g.FillPath(&actBg, &actPath);
+        g.DrawPath(&actPen, &actPath);
+
+        Gdiplus::SolidBrush actText(Gdiplus::Color(255, 34, 197, 94));
+        g.DrawString(L"Активен в системе", -1, &fontBadge, actRc, &sfCenter, &actText);
     }
 
-    // Right side: Website Link indicator
-    float rightLinkX = static_cast<float>(width) - 180.0f;
-    Gdiplus::Font fontLink(&fontFamily, 8.5f, Gdiplus::FontStyleUnderline, Gdiplus::UnitPoint);
-    Gdiplus::SolidBrush linkBr(Gdiplus::Color(255, GetRValue(pal.accentBlue), GetGValue(pal.accentBlue), GetBValue(pal.accentBlue)));
-    g.DrawString(L"Открыть сайт провайдера ->", -1, &fontLink, Gdiplus::PointF(rightLinkX, curCardY + 3.0f), &linkBr);
-
-    curCardY += 24.0f;
+    curCardY += 26.0f;
 
     // 3. Addresses: IPv4, DoH, Website
     std::wstring addrStr = L"IPv4: " + e.primary_ipv4;
     if (!e.secondary_ipv4.empty()) addrStr += L", " + e.secondary_ipv4;
     if (!e.doh_template.empty()) addrStr += L"   |   DoH: " + e.doh_template;
     g.DrawString(addrStr.c_str(), -1, &fontSub, Gdiplus::PointF(curCardX, curCardY), &textSecBr);
-    curCardY += 19.0f;
+    curCardY += 20.0f;
 
     if (e.is_verified) {
         std::wstring statStr = L"Статус: UDP " + (e.ping_ms > 0 ? std::to_wstring(e.ping_ms) + L" ms" : L"тайм-аут");
@@ -1134,7 +1209,7 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
         }
         Gdiplus::SolidBrush statBr(e.ping_ms > 0 ? Gdiplus::Color(255, 34, 197, 94) : Gdiplus::Color(255, 239, 68, 68));
         g.DrawString(statStr.c_str(), -1, &fontBadge, Gdiplus::PointF(curCardX, curCardY), &statBr);
-        curCardY += 16.0f;
+        curCardY += 18.0f;
     }
 
     // Description line (multi-line word wrap)
@@ -1146,14 +1221,14 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
     float descH = std::max(18.0f, descMeasured.Height);
     Gdiplus::RectF descRect(curCardX, curCardY, maxDescW, descH);
     g.DrawString(e.description.c_str(), -1, &fontSub, descRect, &sfDesc, &textMutedBr);
-    curCardY += descH + 6.0f;
+    curCardY += descH + 8.0f;
 
     // Separator line inside card
     Gdiplus::Pen sepPen(Gdiplus::Color(70, GetRValue(pal.separator), GetGValue(pal.separator), GetBValue(pal.separator)), 1.0f);
     g.DrawLine(&sepPen, curCardX, curCardY, static_cast<float>(width) - 16.0f, curCardY);
-    curCardY += 8.0f;
+    curCardY += 10.0f;
 
-    // 4. Categorized Service Tags (Flow Layout)
+    // 4. Categorized Service Tags (Flow Layout with centered chips)
     std::wstring searchLower = m_searchQuery;
     std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::towlower);
 
@@ -1164,11 +1239,11 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
 
         // Category title (e.g. "Нейросети и AI:")
         std::wstring catTitle = cat.name + L":";
-        g.DrawString(catTitle.c_str(), -1, &fontCatHeader, Gdiplus::PointF(curCardX, curCardY + 2.0f), &textPriBr);
+        g.DrawString(catTitle.c_str(), -1, &fontCatHeader, Gdiplus::PointF(curCardX, curCardY + 3.0f), &textPriBr);
 
         Gdiplus::RectF catTitleBounds;
         g.MeasureString(catTitle.c_str(), -1, &fontCatHeader, Gdiplus::PointF(0, 0), &catTitleBounds);
-        float indentX = curCardX + 142.0f;
+        float indentX = curCardX + 152.0f;
         if (curCardX + catTitleBounds.Width + 10.0f > indentX) {
             indentX = curCardX + catTitleBounds.Width + 10.0f;
         }
@@ -1176,15 +1251,15 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
         float chipX = indentX;
         float chipY = curCardY;
 
-        // Render chips with flowing wrap
+        // Render chips with flowing wrap & perfect centering
         for (const auto& svc : cat.services) {
             Gdiplus::RectF svcBounds;
-            g.MeasureString(svc.c_str(), -1, &fontTag, Gdiplus::PointF(0, 0), &svcBounds);
-            float chipW = svcBounds.Width + 12.0f;
+            g.MeasureString(svc.c_str(), -1, &fontTag, Gdiplus::PointF(0, 0), &sfCenter, &svcBounds);
+            float chipW = svcBounds.Width + 20.0f;
 
             if (chipX + chipW > maxRowW) {
                 chipX = indentX;
-                chipY += 21.0f;
+                chipY += 27.0f;
             }
 
             // Check if matches search
@@ -1197,19 +1272,19 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
                 }
             }
 
-            Gdiplus::RectF chipRc(chipX, chipY + 1.0f, chipW, 16.0f);
+            Gdiplus::RectF chipRc(chipX, chipY, chipW, 22.0f);
             Gdiplus::GraphicsPath chipPath;
-            AddRoundedRect(chipPath, chipRc, 3.5f);
+            AddRoundedRect(chipPath, chipRc, 4.0f);
 
             Gdiplus::Color chipBg = isMatched 
                 ? Gdiplus::Color(60, 34, 197, 94)
-                : (m_isDarkMode ? Gdiplus::Color(25, 255, 255, 255) : Gdiplus::Color(18, 0, 0, 0));
+                : (m_isDarkMode ? Gdiplus::Color(255, 34, 40, 52) : Gdiplus::Color(255, 240, 244, 250));
             Gdiplus::Color chipBorder = isMatched
                 ? Gdiplus::Color(160, 34, 197, 94)
-                : (m_isDarkMode ? Gdiplus::Color(45, 255, 255, 255) : Gdiplus::Color(35, 0, 0, 0));
+                : (m_isDarkMode ? Gdiplus::Color(255, 55, 65, 82) : Gdiplus::Color(255, 210, 220, 232));
             Gdiplus::Color chipTextColor = isMatched
                 ? Gdiplus::Color(255, 34, 197, 94)
-                : Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary));
+                : Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary));
 
             Gdiplus::SolidBrush chipBgBr(chipBg);
             Gdiplus::Pen chipPen(chipBorder, 1.0f);
@@ -1217,12 +1292,12 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
             g.DrawPath(&chipPen, &chipPath);
 
             Gdiplus::SolidBrush chipTextBr(chipTextColor);
-            g.DrawString(svc.c_str(), -1, &fontTag, Gdiplus::PointF(chipX + 5.0f, chipY + 2.5f), &chipTextBr);
+            g.DrawString(svc.c_str(), -1, &fontTag, chipRc, &sfCenter, &chipTextBr);
 
-            chipX += chipW + 5.0f;
+            chipX += chipW + 6.0f;
         }
 
-        curCardY = chipY + 22.0f;
+        curCardY = chipY + 29.0f;
     }
 }
 
@@ -1378,16 +1453,16 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
             Gdiplus::StringFormat sfSub;
             sfSub.SetTrimming(Gdiplus::StringTrimmingWord);
-            Gdiplus::RectF rcSub(20.0f, 40.0f, static_cast<float>(w - 40), 28.0f);
+            Gdiplus::RectF rcSub(20.0f, 40.0f, static_cast<float>(w - 40), 38.0f);
             g.DrawString(L"Серверы с автоматическим проксированием для доступа к зарубежным нейросетям, музыке и сайтам без VPN.", -1, &fontSub, rcSub, &sfSub, &brSec);
 
             // 2. Search label
-            g.DrawString(L"Поиск сервиса:", -1, &fontLbl, Gdiplus::PointF(20.0f, 76.0f), &brPri);
+            g.DrawString(L"Поиск сервиса:", -1, &fontLbl, Gdiplus::PointF(20.0f, 88.0f), &brPri);
 
             // 3. Search edit container card
-            int searchBoxX = 20 + 115;
-            int searchBoxY = 70;
-            int searchBoxW = (w - 40) - 115;
+            int searchBoxX = 20 + 120;
+            int searchBoxY = 82;
+            int searchBoxW = (w - 40) - 120;
             int searchBoxH = 32;
 
             Gdiplus::GraphicsPath sbPath;
@@ -1404,7 +1479,7 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             g.DrawPath(&sbBorderPen, &sbPath);
 
             // 4. Status text
-            g.DrawString(m_statusText.c_str(), -1, &fontStatus, Gdiplus::PointF(20.0f, 108.0f), &brMuted);
+            g.DrawString(m_statusText.c_str(), -1, &fontStatus, Gdiplus::PointF(20.0f, 122.0f), &brMuted);
         }
 
         BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
@@ -1669,8 +1744,9 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
             InvalidateRect(hWnd, nullptr, FALSE);
 
             // Check if clicked the website link area in top right of card
-            int rightLinkX = w - 180;
-            if (mx >= rightLinkX && my >= cardY + 5 && my <= cardY + 30) {
+            int rightLinkW = 150;
+            int rightLinkX = w - rightLinkW - 16;
+            if (mx >= rightLinkX && mx <= rightLinkX + rightLinkW && my >= cardY + 7 && my <= cardY + 35) {
                 on_open_website(static_cast<size_t>(idx));
             }
         }

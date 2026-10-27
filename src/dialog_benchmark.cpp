@@ -529,26 +529,29 @@ void BenchmarkDialog::reposition_controls() {
     int contentWidth = clientWidth - (marginX * 2);
     if (contentWidth < 300) return;
 
-    // Row 1 (Y = 64): Domain Edit + AI Presets Button + Filter Chips
+    // Row 1 (Y = 64): Domain Edit + AI Presets Button + Filter Chips (Adaptive Layout)
     int row1Y = 64;
-    int editDomX = marginX + 54;
-    int editDomW = std::clamp(contentWidth - 600, 160, 260);
+    int chipFilterSmartW = 125;
+    int chipFilterAllW = 85;
+    int filterLabelW = 55;
+
+    int chipFilterSmartX = marginX + contentWidth - chipFilterSmartW;
+    int chipFilterAllX = chipFilterSmartX - chipFilterAllW - 6;
+    int filterGroupLeftX = chipFilterAllX - filterLabelW - 8;
+
+    int editDomX = marginX + 48;
+    int btnAiW = 145;
+    int availableEditW = (filterGroupLeftX - 16) - (editDomX + btnAiW + 8);
+    int editDomW = std::clamp(availableEditW, 110, 240);
     int editDomH = 26;
 
     if (m_hEditDomain) {
         SetWindowPos(m_hEditDomain, nullptr, editDomX, row1Y, editDomW, editDomH, SWP_NOZORDER);
     }
     int btnAiX = editDomX + editDomW + 8;
-    int btnAiW = 165;
     if (m_hBtnAiPresets) {
         SetWindowPos(m_hBtnAiPresets, nullptr, btnAiX, row1Y - 1, btnAiW, 28, SWP_NOZORDER);
     }
-
-    // Filter Chips pinned to the right of Row 1
-    int chipFilterSmartW = 145;
-    int chipFilterAllW = 100;
-    int chipFilterSmartX = marginX + contentWidth - chipFilterSmartW;
-    int chipFilterAllX = chipFilterSmartX - chipFilterAllW - 6;
 
     if (m_hBtnFilterAll) {
         SetWindowPos(m_hBtnFilterAll, nullptr, chipFilterAllX, row1Y - 1, chipFilterAllW, 28, SWP_NOZORDER);
@@ -557,25 +560,25 @@ void BenchmarkDialog::reposition_controls() {
         SetWindowPos(m_hBtnFilterSmart, nullptr, chipFilterSmartX, row1Y - 1, chipFilterSmartW, 28, SWP_NOZORDER);
     }
 
-    // Row 2 (Y = 108): Duration Chips + Start/Stop + Reset
+    // Row 2 (Y = 108): Duration Chips + Start/Stop + Reset (Adaptive Layout)
     int row2Y = 108;
-    int chipDur10W = 75;
-    int chipDur30W = 75;
-    int chipDur60W = 75;
-    int chipDurContW = 110;
+    int chipDur10W = 58;
+    int chipDur30W = 58;
+    int chipDur60W = 58;
+    int chipDurContW = 95;
 
-    int dur10X = marginX + 54;
-    int dur30X = dur10X + chipDur10W + 5;
-    int dur60X = dur30X + chipDur30W + 5;
-    int durContX = dur60X + chipDur60W + 5;
+    int dur10X = marginX + 48;
+    int dur30X = dur10X + chipDur10W + 4;
+    int dur60X = dur30X + chipDur30W + 4;
+    int durContX = dur60X + chipDur60W + 4;
 
     if (m_hBtnDur10) SetWindowPos(m_hBtnDur10, nullptr, dur10X, row2Y, chipDur10W, 28, SWP_NOZORDER);
     if (m_hBtnDur30) SetWindowPos(m_hBtnDur30, nullptr, dur30X, row2Y, chipDur30W, 28, SWP_NOZORDER);
     if (m_hBtnDur60) SetWindowPos(m_hBtnDur60, nullptr, dur60X, row2Y, chipDur60W, 28, SWP_NOZORDER);
     if (m_hBtnDurCont) SetWindowPos(m_hBtnDurCont, nullptr, durContX, row2Y, chipDurContW, 28, SWP_NOZORDER);
 
-    int btnResetW = 145;
-    int btnStartW = 165;
+    int btnResetW = 110;
+    int btnStartW = 150;
     int btnResetX = marginX + contentWidth - btnResetW;
     int btnStartX = btnResetX - btnStartW - 8;
 
@@ -594,15 +597,17 @@ void BenchmarkDialog::reposition_controls() {
 
     int curY = listTop + listHeight + 14;
 
-    // Bottom Action Buttons
-    int btnApplyW = 210;
-    int btnApplySmartW = 230;
-    int btnPauseW = 120;
-    int btnCloseW = 110;
+    // Bottom Action Buttons (Adaptive proportions)
+    int btnCloseW = 100;
+    int btnPauseW = 105;
+    int gap = 8;
+    int remainingActionW = std::max(200, contentWidth - btnCloseW - btnPauseW - (3 * gap));
+    int btnApplyW = remainingActionW / 2;
+    int btnApplySmartW = remainingActionW - btnApplyW;
 
     if (m_hBtnApply) SetWindowPos(m_hBtnApply, nullptr, marginX, curY, btnApplyW, bottomButtonsH, SWP_NOZORDER);
-    if (m_hBtnApplySmart) SetWindowPos(m_hBtnApplySmart, nullptr, marginX + btnApplyW + 8, curY, btnApplySmartW, bottomButtonsH, SWP_NOZORDER);
-    if (m_hBtnPauseResume) SetWindowPos(m_hBtnPauseResume, nullptr, marginX + btnApplyW + btnApplySmartW + 16, curY, btnPauseW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnApplySmart) SetWindowPos(m_hBtnApplySmart, nullptr, marginX + btnApplyW + gap, curY, btnApplySmartW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnPauseResume) SetWindowPos(m_hBtnPauseResume, nullptr, marginX + btnApplyW + gap + btnApplySmartW + gap, curY, btnPauseW, bottomButtonsH, SWP_NOZORDER);
     if (m_hBtnClose) SetWindowPos(m_hBtnClose, nullptr, marginX + contentWidth - btnCloseW, curY, btnCloseW, bottomButtonsH, SWP_NOZORDER);
 
     InvalidateRect(m_hWnd, nullptr, FALSE);
@@ -1165,35 +1170,42 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, size_t filteredIdx, i
     g.MeasureString(pName.c_str(), -1, m_gpFontTitle.get(), Gdiplus::PointF(0, 0), &nameBounds);
     float badgeX = 34.0f + nameBounds.Width + 8.0f;
 
-    if (it.profile.is_smart_dns) {
+    float pingColX = static_cast<float>(width) - 275.0f;
+    float maxBadgeX = pingColX - 12.0f;
+
+    auto canDrawBadge = [&](float w) {
+        return (badgeX + w <= maxBadgeX);
+    };
+
+    if (it.profile.is_smart_dns && canDrawBadge(68.0f)) {
         Gdiplus::SolidBrush smartBadgeBr(Gdiplus::Color(255, 34, 197, 94));
         g.DrawString(L"[SmartDNS]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &smartBadgeBr);
         badgeX += 68.0f;
     }
 
-    if (it.profile.id == m_currentActiveId) {
+    if (it.profile.id == m_currentActiveId && canDrawBadge(62.0f)) {
         Gdiplus::SolidBrush activeBadgeBr(Gdiplus::Color(255, GetRValue(pal.accentBlue), GetGValue(pal.accentBlue), GetBValue(pal.accentBlue)));
         g.DrawString(L"[Текущий]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &activeBadgeBr);
         badgeX += 62.0f;
     }
 
-    if (it.is_fastest_smart) {
+    if (it.is_fastest_smart && canDrawBadge(96.0f)) {
         Gdiplus::SolidBrush sFastBadgeBr(Gdiplus::Color(255, 34, 197, 94));
         g.DrawString(L"[Быстрый Smart]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &sFastBadgeBr);
         badgeX += 96.0f;
     }
-    if (it.is_most_stable_smart) {
+    if (it.is_most_stable_smart && canDrawBadge(114.0f)) {
         Gdiplus::SolidBrush sStabBadgeBr(Gdiplus::Color(255, 59, 130, 246));
         g.DrawString(L"[Стабильный Smart]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &sStabBadgeBr);
         badgeX += 114.0f;
     }
 
-    if (it.is_fastest && !it.is_fastest_smart) {
+    if (it.is_fastest && !it.is_fastest_smart && canDrawBadge(105.0f)) {
         Gdiplus::SolidBrush fastBadgeBr(Gdiplus::Color(255, 34, 197, 94));
         g.DrawString(L"[Самый быстрый]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &fastBadgeBr);
         badgeX += 105.0f;
     }
-    if (it.is_most_stable && !it.is_most_stable_smart) {
+    if (it.is_most_stable && !it.is_most_stable_smart && canDrawBadge(115.0f)) {
         Gdiplus::SolidBrush stableBadgeBr(Gdiplus::Color(255, 59, 130, 246));
         g.DrawString(L"[Самый стабильный]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &stableBadgeBr);
     }
@@ -1212,7 +1224,6 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, size_t filteredIdx, i
             subInfo += L"  •  " + utf8_to_wide(it.profile.unblocked_summary);
         }
     }
-    float pingColX = static_cast<float>(width) - 275.0f;
     Gdiplus::StringFormat fmtSub;
     fmtSub.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
     fmtSub.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
@@ -1394,8 +1405,8 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             g.FillPath(&barCardBr, &bar1Path);
             g.DrawPath(&barPen, &bar1Path);
 
-            g.DrawString(L"Сайт:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 12), 68.0f), &textPriBr);
-            int filterLabelX = marginX + contentW - 250 - 58;
+            g.DrawString(L"Сайт:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 10), 68.0f), &textPriBr);
+            int filterLabelX = marginX + contentW - 125 - 6 - 85 - 55 - 8;
             g.DrawString(L"Фильтр:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(filterLabelX), 68.0f), &textPriBr);
 
             // Row 2 Bar Background
@@ -1405,7 +1416,7 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             g.FillPath(&barCardBr, &bar2Path);
             g.DrawPath(&barPen, &bar2Path);
 
-            g.DrawString(L"Тест:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 12), 113.0f), &textPriBr);
+            g.DrawString(L"Тест:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 10), 113.0f), &textPriBr);
 
             // Row 3 Status & Dual Verdict Card
             Gdiplus::RectF rcVerdict(static_cast<float>(marginX), 148.0f, static_cast<float>(contentW), 66.0f);
