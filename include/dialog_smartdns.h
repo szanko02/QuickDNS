@@ -82,7 +82,10 @@ private:
     LRESULT handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
+    void reposition_controls();
+    void recalculate_item_layouts();
     int calculate_item_height(const SmartDnsEntry& entry, int cardWidth) const;
+    int get_item_at_point(int mouseY, int& outItemY) const;
     void draw_card_item(Gdiplus::Graphics& g, size_t index, int y, int width, int height, bool isSelected, bool isHovered);
     void draw_custom_button(DRAWITEMSTRUCT* pDis);
     void attach_button_effects(HWND hBtn, UINT_PTR subclassId);
@@ -117,6 +120,9 @@ private:
 
     std::vector<SmartDnsEntry> m_allEntries;
     std::vector<size_t> m_filteredIndices; // indices into m_allEntries
+    std::vector<int> m_itemHeights;
+    std::vector<int> m_itemYPositions;
+    int m_totalContentHeight = 0;
     std::string m_currentActiveId;
     std::wstring m_searchQuery;
 

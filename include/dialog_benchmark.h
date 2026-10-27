@@ -115,6 +115,7 @@ private:
     void toggle_pause();
     void on_apply();
     void on_close();
+    void reposition_controls();
 
     void start_timed_test();
     void stop_timed_test(bool finishedNaturally = false);

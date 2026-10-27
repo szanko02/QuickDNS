@@ -41,6 +41,7 @@ private:
     // Initialization helpers
     void register_window_class();
     void create_controls();
+    void reposition_controls();
     void apply_modern_theme();
     void setup_fonts();
     void setup_tray_icon();
@@ -101,13 +102,19 @@ private:
     bool m_isDarkMode = true;
 
     // Controls
+    HWND m_hTitleLabel = nullptr;
     HWND m_hComboAdapter = nullptr;
     HWND m_hComboProfile = nullptr;
     HWND m_hBtnThemeToggle = nullptr;
     HWND m_hToolTip = nullptr;
 
+    HWND m_hSepLine = nullptr;
+    HWND m_hLblAdapter = nullptr;
+    HWND m_hLblProfile = nullptr;
+    HWND m_hLblIp = nullptr;
     HWND m_hEditProfileIp = nullptr;
     HWND m_hBtnCopyIp = nullptr;
+    HWND m_hLblDoh = nullptr;
     HWND m_hEditProfileDoh = nullptr;
     HWND m_hBtnCopyDoh = nullptr;
 

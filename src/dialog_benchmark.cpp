@@ -23,8 +23,8 @@ namespace {
     constexpr const wchar_t* DIALOG_CLASS_NAME = L"QuickDNS_BenchmarkDialogClass";
     constexpr const wchar_t* LIST_CLASS_NAME   = L"QuickDNS_BenchmarkListClass";
 
-    constexpr int DIALOG_CLIENT_WIDTH  = 780;
-    constexpr int DIALOG_CLIENT_HEIGHT = 710;
+    constexpr int DIALOG_CLIENT_WIDTH  = 900;
+    constexpr int DIALOG_CLIENT_HEIGHT = 720;
 
     constexpr UINT WM_APP_BENCHMARK_PING_UPDATE = WM_APP + 20;
 
@@ -326,7 +326,7 @@ bool BenchmarkDialog::create_dialog_window() {
     lwc.lpszClassName = LIST_CLASS_NAME;
     RegisterClassExW(&lwc);
 
-    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
+    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_VISIBLE;
     RECT wr = { 0, 0, DIALOG_CLIENT_WIDTH, DIALOG_CLIENT_HEIGHT };
     AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
     int winWidth = wr.right - wr.left;
@@ -517,6 +517,96 @@ void BenchmarkDialog::create_controls() {
     attach_button_effects(m_hBtnClose, 104);
 
     start_timed_test();
+}
+
+void BenchmarkDialog::reposition_controls() {
+    RECT rcClient = {};
+    GetClientRect(m_hWnd, &rcClient);
+    int clientWidth = rcClient.right - rcClient.left;
+    int clientHeight = rcClient.bottom - rcClient.top;
+
+    int marginX = 20;
+    int contentWidth = clientWidth - (marginX * 2);
+    if (contentWidth < 300) return;
+
+    // Row 1 (Y = 64): Domain Edit + AI Presets Button + Filter Chips
+    int row1Y = 64;
+    int editDomX = marginX + 54;
+    int editDomW = std::clamp(contentWidth - 600, 160, 260);
+    int editDomH = 26;
+
+    if (m_hEditDomain) {
+        SetWindowPos(m_hEditDomain, nullptr, editDomX, row1Y, editDomW, editDomH, SWP_NOZORDER);
+    }
+    int btnAiX = editDomX + editDomW + 8;
+    int btnAiW = 165;
+    if (m_hBtnAiPresets) {
+        SetWindowPos(m_hBtnAiPresets, nullptr, btnAiX, row1Y - 1, btnAiW, 28, SWP_NOZORDER);
+    }
+
+    // Filter Chips pinned to the right of Row 1
+    int chipFilterSmartW = 145;
+    int chipFilterAllW = 100;
+    int chipFilterSmartX = marginX + contentWidth - chipFilterSmartW;
+    int chipFilterAllX = chipFilterSmartX - chipFilterAllW - 6;
+
+    if (m_hBtnFilterAll) {
+        SetWindowPos(m_hBtnFilterAll, nullptr, chipFilterAllX, row1Y - 1, chipFilterAllW, 28, SWP_NOZORDER);
+    }
+    if (m_hBtnFilterSmart) {
+        SetWindowPos(m_hBtnFilterSmart, nullptr, chipFilterSmartX, row1Y - 1, chipFilterSmartW, 28, SWP_NOZORDER);
+    }
+
+    // Row 2 (Y = 108): Duration Chips + Start/Stop + Reset
+    int row2Y = 108;
+    int chipDur10W = 75;
+    int chipDur30W = 75;
+    int chipDur60W = 75;
+    int chipDurContW = 110;
+
+    int dur10X = marginX + 54;
+    int dur30X = dur10X + chipDur10W + 5;
+    int dur60X = dur30X + chipDur30W + 5;
+    int durContX = dur60X + chipDur60W + 5;
+
+    if (m_hBtnDur10) SetWindowPos(m_hBtnDur10, nullptr, dur10X, row2Y, chipDur10W, 28, SWP_NOZORDER);
+    if (m_hBtnDur30) SetWindowPos(m_hBtnDur30, nullptr, dur30X, row2Y, chipDur30W, 28, SWP_NOZORDER);
+    if (m_hBtnDur60) SetWindowPos(m_hBtnDur60, nullptr, dur60X, row2Y, chipDur60W, 28, SWP_NOZORDER);
+    if (m_hBtnDurCont) SetWindowPos(m_hBtnDurCont, nullptr, durContX, row2Y, chipDurContW, 28, SWP_NOZORDER);
+
+    int btnResetW = 145;
+    int btnStartW = 165;
+    int btnResetX = marginX + contentWidth - btnResetW;
+    int btnStartX = btnResetX - btnStartW - 8;
+
+    if (m_hBtnStartStop) SetWindowPos(m_hBtnStartStop, nullptr, btnStartX, row2Y - 1, btnStartW, 30, SWP_NOZORDER);
+    if (m_hBtnReset) SetWindowPos(m_hBtnReset, nullptr, btnResetX, row2Y - 1, btnResetW, 30, SWP_NOZORDER);
+
+    // List Control (Y = 222)
+    int listTop = 222;
+    int bottomButtonsH = 38;
+    int listBottomMargin = 16;
+    int listHeight = std::max(100, clientHeight - listTop - bottomButtonsH - listBottomMargin - 14);
+
+    if (m_hListWnd) {
+        SetWindowPos(m_hListWnd, nullptr, marginX, listTop, contentWidth, listHeight, SWP_NOZORDER);
+    }
+
+    int curY = listTop + listHeight + 14;
+
+    // Bottom Action Buttons
+    int btnApplyW = 210;
+    int btnApplySmartW = 230;
+    int btnPauseW = 120;
+    int btnCloseW = 110;
+
+    if (m_hBtnApply) SetWindowPos(m_hBtnApply, nullptr, marginX, curY, btnApplyW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnApplySmart) SetWindowPos(m_hBtnApplySmart, nullptr, marginX + btnApplyW + 8, curY, btnApplySmartW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnPauseResume) SetWindowPos(m_hBtnPauseResume, nullptr, marginX + btnApplyW + btnApplySmartW + 16, curY, btnPauseW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnClose) SetWindowPos(m_hBtnClose, nullptr, marginX + contentWidth - btnCloseW, curY, btnCloseW, bottomButtonsH, SWP_NOZORDER);
+
+    InvalidateRect(m_hWnd, nullptr, FALSE);
+    if (m_hListWnd) InvalidateRect(m_hListWnd, nullptr, TRUE);
 }
 
 void BenchmarkDialog::reset_all_stats() {
@@ -1236,6 +1326,22 @@ LRESULT CALLBACK BenchmarkDialog::dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARAM
 
 LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+    case WM_GETMINMAXINFO: {
+        auto* pMMI = reinterpret_cast<MINMAXINFO*>(lParam);
+        RECT rcMin = { 0, 0, 740, 540 };
+        AdjustWindowRectEx(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE));
+        pMMI->ptMinTrackSize.x = rcMin.right - rcMin.left;
+        pMMI->ptMinTrackSize.y = rcMin.bottom - rcMin.top;
+        return 0;
+    }
+
+    case WM_SIZE: {
+        if (wParam != SIZE_MINIMIZED) {
+            reposition_controls();
+        }
+        return 0;
+    }
+
     case WM_ERASEBKGND:
         return 1;
 
@@ -1367,7 +1473,9 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
     }
 
     case WM_APP_BENCHMARK_PING_UPDATE: {
-        RECT rcVerdict = { 20, 148, DIALOG_CLIENT_WIDTH - 20, 216 };
+        RECT rcClient = {};
+        GetClientRect(hWnd, &rcClient);
+        RECT rcVerdict = { 20, 148, rcClient.right - 20, 216 };
         InvalidateRect(hWnd, &rcVerdict, FALSE);
         if (m_hListWnd && IsWindow(m_hListWnd)) {
             InvalidateRect(m_hListWnd, nullptr, FALSE);

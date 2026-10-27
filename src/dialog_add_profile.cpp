@@ -11,8 +11,8 @@ using QuickDns::Encoding::wide_to_utf8;
 
 namespace {
     constexpr const wchar_t* DIALOG_CLASS_NAME = L"QuickDNS_AddProfileDialogClass";
-    constexpr int DIALOG_WIDTH = 520;
-    constexpr int DIALOG_HEIGHT = 600;
+    constexpr int DIALOG_WIDTH = 580;
+    constexpr int DIALOG_HEIGHT = 620;
 
     constexpr int ID_EDIT_NAME = 3001;
     constexpr int ID_EDIT_PRI  = 3002;
@@ -179,7 +179,7 @@ bool AddProfileDialog::create_dialog_window() {
     RegisterClassExW(&wc);
 
     RECT wr = { 0, 0, DIALOG_WIDTH, DIALOG_HEIGHT };
-    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
+    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_VISIBLE;
     AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
     int winWidth = wr.right - wr.left;
     int winHeight = wr.bottom - wr.top;
@@ -301,6 +301,49 @@ void AddProfileDialog::create_controls() {
 
     attach_button_effects(m_hBtnSave, 301);
     attach_button_effects(m_hBtnCancel, 302);
+}
+
+void AddProfileDialog::reposition_controls() {
+    RECT rcClient = {};
+    GetClientRect(m_hWnd, &rcClient);
+    int clientWidth = rcClient.right - rcClient.left;
+    int clientHeight = rcClient.bottom - rcClient.top;
+
+    int marginX = 24;
+    int contentWidth = clientWidth - (2 * marginX);
+    if (contentWidth < 200) return;
+
+    int fieldH = 36;
+    int innerEditH = 20;
+    int innerOffset = 8;
+    int editW = contentWidth - 20;
+
+    int yName = 76;
+    if (m_hEditName) SetWindowPos(m_hEditName, nullptr, marginX + 10, yName + innerOffset, editW, innerEditH, SWP_NOZORDER);
+
+    int yPri = 144;
+    if (m_hEditPri) SetWindowPos(m_hEditPri, nullptr, marginX + 10, yPri + innerOffset, editW, innerEditH, SWP_NOZORDER);
+
+    int ySec = 212;
+    if (m_hEditSec) SetWindowPos(m_hEditSec, nullptr, marginX + 10, ySec + innerOffset, editW, innerEditH, SWP_NOZORDER);
+
+    int yDesc = 280;
+    if (m_hEditDesc) SetWindowPos(m_hEditDesc, nullptr, marginX + 10, yDesc + innerOffset, editW, innerEditH, SWP_NOZORDER);
+
+    int yDoh = 348;
+    if (m_hEditDoh) SetWindowPos(m_hEditDoh, nullptr, marginX + 10, yDoh + innerOffset, editW, innerEditH, SWP_NOZORDER);
+
+    int ySmart = 416;
+    if (m_hCheckSmartDns) SetWindowPos(m_hCheckSmartDns, nullptr, marginX + 14, ySmart + 10, contentWidth - 28, 22, SWP_NOZORDER);
+
+    int yButtons = 492;
+    int btnWidth = (contentWidth - 14) / 2;
+    int btnHeight = 38;
+
+    if (m_hBtnSave) SetWindowPos(m_hBtnSave, nullptr, marginX, yButtons, btnWidth, btnHeight, SWP_NOZORDER);
+    if (m_hBtnCancel) SetWindowPos(m_hBtnCancel, nullptr, marginX + btnWidth + 14, yButtons, btnWidth, btnHeight, SWP_NOZORDER);
+
+    InvalidateRect(m_hWnd, nullptr, TRUE);
 }
 
 void AddProfileDialog::attach_button_effects(HWND hBtn, UINT_PTR subclassId) {
@@ -479,6 +522,22 @@ LRESULT CALLBACK AddProfileDialog::dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARA
 
 LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+    case WM_GETMINMAXINFO: {
+        auto* pMMI = reinterpret_cast<MINMAXINFO*>(lParam);
+        RECT rcMin = { 0, 0, 480, 560 };
+        AdjustWindowRectEx(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE));
+        pMMI->ptMinTrackSize.x = rcMin.right - rcMin.left;
+        pMMI->ptMinTrackSize.y = rcMin.bottom - rcMin.top;
+        return 0;
+    }
+
+    case WM_SIZE: {
+        if (wParam != SIZE_MINIMIZED) {
+            reposition_controls();
+        }
+        return 0;
+    }
+
     case WM_ERASEBKGND:
         return 1; // Double buffered paint
 

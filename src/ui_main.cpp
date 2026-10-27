@@ -33,8 +33,8 @@ namespace {
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
     constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v1.7.0 — Быстрая смена DNS в 1 клик";
 
-    constexpr int WINDOW_CLIENT_WIDTH  = 560;
-    constexpr int WINDOW_CLIENT_HEIGHT = 754;
+    constexpr int WINDOW_CLIENT_WIDTH  = 580;
+    constexpr int WINDOW_CLIENT_HEIGHT = 760;
 
     struct ButtonAnimationState {
         float hover = 0.0f;
@@ -281,7 +281,7 @@ bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
     m_hInstance = hInstance;
     register_window_class();
 
-    DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
     RECT wr = { 0, 0, WINDOW_CLIENT_WIDTH, WINDOW_CLIENT_HEIGHT };
     AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
     int winWidth = wr.right - wr.left;
@@ -435,6 +435,22 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     switch (uMsg) {
+    case WM_GETMINMAXINFO: {
+        auto* pMMI = reinterpret_cast<MINMAXINFO*>(lParam);
+        RECT rcMin = { 0, 0, 520, 720 };
+        AdjustWindowRectEx(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE));
+        pMMI->ptMinTrackSize.x = rcMin.right - rcMin.left;
+        pMMI->ptMinTrackSize.y = rcMin.bottom - rcMin.top;
+        return 0;
+    }
+
+    case WM_SIZE: {
+        if (wParam != SIZE_MINIMIZED) {
+            reposition_controls();
+        }
+        return 0;
+    }
+
     case WM_APP_RESTORE_INSTANCE: {
         restore_from_tray();
         return 0;
@@ -852,11 +868,11 @@ void MainWindow::create_controls() {
     int startY = 14;
 
     // 1. Status Card Header
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.7.0 — Менеджер DNS",
+    m_hTitleLabel = CreateWindowExW(0, L"STATIC", L"QuickDNS v1.7.0 — Менеджер DNS",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth - 44, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hTitle, WM_SETFONT, (WPARAM)m_hFontHeader, TRUE);
+    SendMessageW(m_hTitleLabel, WM_SETFONT, (WPARAM)m_hFontHeader, TRUE);
 
     // Theme Switcher button in top-right corner
     m_hBtnThemeToggle = CreateWindowExW(0, WC_BUTTONW, L"",
@@ -928,18 +944,18 @@ void MainWindow::create_controls() {
     startY += 114 + 14; // Past Card -> 172
 
     // Separator Line
-    CreateWindowExW(0, L"STATIC", L"",
+    m_hSepLine = CreateWindowExW(0, L"STATIC", L"",
         WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
         marginX, startY, contentWidth, 2,
         m_hWnd, nullptr, m_hInstance, nullptr);
     startY += 14;
 
     // 2. Network Adapter Selector
-    HWND hLblAdapter = CreateWindowExW(0, L"STATIC", L"Сетевой адаптер:",
+    m_hLblAdapter = CreateWindowExW(0, L"STATIC", L"Сетевой адаптер:",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblAdapter, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+    SendMessageW(m_hLblAdapter, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     startY += 24;
 
     m_hComboAdapter = CreateWindowExW(0, WC_COMBOBOXW, L"",
@@ -953,11 +969,11 @@ void MainWindow::create_controls() {
     startY += 46;
 
     // 3. DNS Profile Selector
-    HWND hLblProfile = CreateWindowExW(0, L"STATIC", L"Выберите DNS профиль (Comss, GeoHide, Без межаў и др.):",
+    m_hLblProfile = CreateWindowExW(0, L"STATIC", L"Выберите DNS профиль (Comss, GeoHide, Без межаў и др.):",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblProfile, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+    SendMessageW(m_hLblProfile, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     startY += 24;
 
     m_hComboProfile = CreateWindowExW(0, WC_COMBOBOXW, L"",
@@ -975,11 +991,11 @@ void MainWindow::create_controls() {
     int copyX = marginX + editW + 10;
 
     // IP Address (Copyable)
-    HWND hLblIp = CreateWindowExW(0, L"STATIC", L"IP-адреса DNS серверов:",
+    m_hLblIp = CreateWindowExW(0, L"STATIC", L"IP-адреса DNS серверов:",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth, 16,
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblIp, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
+    SendMessageW(m_hLblIp, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
     startY += 22;
 
     m_hEditProfileIp = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
@@ -995,11 +1011,11 @@ void MainWindow::create_controls() {
     startY += 40;
 
     // DoH Template (Copyable, Read-Only)
-    HWND hLblDoh = CreateWindowExW(0, L"STATIC", L"Шаблон DNS over HTTPS (DoH):",
+    m_hLblDoh = CreateWindowExW(0, L"STATIC", L"Шаблон DNS over HTTPS (DoH):",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth, 16,
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(hLblDoh, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
+    SendMessageW(m_hLblDoh, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
     startY += 22;
 
     m_hEditProfileDoh = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
@@ -1089,6 +1105,115 @@ void MainWindow::create_controls() {
     attach_button_effects(m_hBtnCopyIp, 8);
     attach_button_effects(m_hBtnCopyDoh, 9);
     attach_button_effects(m_hBtnThemeToggle, 10);
+}
+
+void MainWindow::reposition_controls() {
+    RECT rcClient = {};
+    GetClientRect(m_hWnd, &rcClient);
+    int clientWidth = rcClient.right - rcClient.left;
+    int clientHeight = rcClient.bottom - rcClient.top;
+
+    int marginX = 20;
+    int contentWidth = clientWidth - (marginX * 2);
+    if (contentWidth < 200) return;
+
+    int startY = 14;
+
+    // 1. Status Card Header
+    if (m_hTitleLabel) {
+        SetWindowPos(m_hTitleLabel, nullptr, marginX, startY, contentWidth - 44, 24, SWP_NOZORDER);
+    }
+    if (m_hBtnThemeToggle) {
+        SetWindowPos(m_hBtnThemeToggle, nullptr, marginX + contentWidth - 36, startY - 3, 36, 28, SWP_NOZORDER);
+    }
+    startY += 30; // 44
+
+    // Inside Status Card:
+    int graphW = std::clamp(contentWidth / 3, 140, 260);
+    int graphH = 94;
+    int graphX = marginX + contentWidth - graphW - 10;
+    int leftInfoW = graphX - (marginX + 14) - 8;
+    int insideCardY = startY + 10;
+
+    if (m_hStatusAdapterName) SetWindowPos(m_hStatusAdapterName, nullptr, marginX + 14, insideCardY, leftInfoW, 20, SWP_NOZORDER);
+    insideCardY += 24;
+    if (m_hStatusDnsList) SetWindowPos(m_hStatusDnsList, nullptr, marginX + 14, insideCardY, leftInfoW, 20, SWP_NOZORDER);
+    insideCardY += 24;
+    if (m_hStatusBadge) SetWindowPos(m_hStatusBadge, nullptr, marginX + 14, insideCardY, leftInfoW, 20, SWP_NOZORDER);
+    insideCardY += 24;
+    if (m_hStatusPing) SetWindowPos(m_hStatusPing, nullptr, marginX + 14, insideCardY, leftInfoW, 20, SWP_NOZORDER);
+
+    if (m_hGraphWnd) {
+        SetWindowPos(m_hGraphWnd, nullptr, graphX, startY + 10, graphW, graphH, SWP_NOZORDER);
+        InvalidateRect(m_hGraphWnd, nullptr, TRUE);
+    }
+
+    startY += 114 + 14; // 172
+
+    // Separator line
+    if (m_hSepLine) SetWindowPos(m_hSepLine, nullptr, marginX, startY, contentWidth, 2, SWP_NOZORDER);
+    startY += 14;
+
+    // 2. Network Adapter Selector
+    if (m_hLblAdapter) SetWindowPos(m_hLblAdapter, nullptr, marginX, startY, contentWidth, 18, SWP_NOZORDER);
+    startY += 24;
+    if (m_hComboAdapter) SetWindowPos(m_hComboAdapter, nullptr, marginX, startY, contentWidth, 240, SWP_NOZORDER);
+    startY += 46;
+
+    // 3. DNS Profile Selector
+    if (m_hLblProfile) SetWindowPos(m_hLblProfile, nullptr, marginX, startY, contentWidth, 18, SWP_NOZORDER);
+    startY += 24;
+    if (m_hComboProfile) SetWindowPos(m_hComboProfile, nullptr, marginX, startY, contentWidth, 240, SWP_NOZORDER);
+    startY += 48;
+
+    int btnCopyW = 120;
+    int editW = std::max(100, contentWidth - btnCopyW - 10);
+    int copyX = marginX + editW + 10;
+
+    // IP Address (Copyable)
+    if (m_hLblIp) SetWindowPos(m_hLblIp, nullptr, marginX, startY, contentWidth, 16, SWP_NOZORDER);
+    startY += 22;
+    if (m_hEditProfileIp) SetWindowPos(m_hEditProfileIp, nullptr, marginX, startY, editW, 26, SWP_NOZORDER);
+    if (m_hBtnCopyIp) SetWindowPos(m_hBtnCopyIp, nullptr, copyX, startY, btnCopyW, 26, SWP_NOZORDER);
+    startY += 40;
+
+    // DoH Template (Copyable, Read-Only)
+    if (m_hLblDoh) SetWindowPos(m_hLblDoh, nullptr, marginX, startY, contentWidth, 16, SWP_NOZORDER);
+    startY += 22;
+    if (m_hEditProfileDoh) SetWindowPos(m_hEditProfileDoh, nullptr, marginX, startY, editW, 26, SWP_NOZORDER);
+    if (m_hBtnCopyDoh) SetWindowPos(m_hBtnCopyDoh, nullptr, copyX, startY, btnCopyW, 26, SWP_NOZORDER);
+    startY += 38;
+
+    // Profile Details
+    if (m_hProfileDetails) SetWindowPos(m_hProfileDetails, nullptr, marginX, startY, contentWidth, 24, SWP_NOZORDER);
+    startY += 40;
+
+    // 4. Action Buttons
+    if (m_hBtnApply) SetWindowPos(m_hBtnApply, nullptr, marginX, startY, contentWidth, 38, SWP_NOZORDER);
+    startY += 38 + 10;
+
+    int halfWidth = (contentWidth - 12) / 2;
+    int col2X = marginX + halfWidth + 12;
+
+    if (m_hBtnBenchmark) SetWindowPos(m_hBtnBenchmark, nullptr, marginX, startY, halfWidth, 34, SWP_NOZORDER);
+    if (m_hBtnSmartDnsCatalog) SetWindowPos(m_hBtnSmartDnsCatalog, nullptr, col2X, startY, halfWidth, 34, SWP_NOZORDER);
+    startY += 34 + 10;
+
+    if (m_hBtnResetDhcp) SetWindowPos(m_hBtnResetDhcp, nullptr, marginX, startY, halfWidth, 34, SWP_NOZORDER);
+    if (m_hBtnWinNetwork) SetWindowPos(m_hBtnWinNetwork, nullptr, col2X, startY, halfWidth, 34, SWP_NOZORDER);
+    startY += 34 + 10;
+
+    if (m_hBtnFlushDns) SetWindowPos(m_hBtnFlushDns, nullptr, marginX, startY, halfWidth, 34, SWP_NOZORDER);
+    if (m_hBtnAddProfile) SetWindowPos(m_hBtnAddProfile, nullptr, col2X, startY, halfWidth, 34, SWP_NOZORDER);
+    startY += 34 + 10;
+
+    if (m_hBtnDeleteProfile) SetWindowPos(m_hBtnDeleteProfile, nullptr, marginX, startY, contentWidth, 30, SWP_NOZORDER);
+    startY += 30 + 14;
+
+    // 5. Footer Version Badge
+    if (m_hFooterVersion) SetWindowPos(m_hFooterVersion, nullptr, marginX, startY, contentWidth, 18, SWP_NOZORDER);
+
+    InvalidateRect(m_hWnd, nullptr, TRUE);
 }
 
 void MainWindow::draw_theme_toggle_button(DRAWITEMSTRUCT* pDis) {

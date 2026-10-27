@@ -17,6 +17,7 @@ private:
     bool create_dialog_window();
     void apply_theme();
     void create_controls();
+    void reposition_controls();
     void on_save();
     void on_cancel();
 
