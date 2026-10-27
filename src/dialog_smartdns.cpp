@@ -680,9 +680,9 @@ void SmartDnsDialog::create_controls() {
     int contentWidth = clientWidth - (marginX * 2);
 
     // Modern Search Edit Control inset inside the GDI+ rounded container card
-    int searchBoxX = marginX + 142;
+    int searchBoxX = marginX + 154;
     int searchBoxY = 82;
-    int searchBoxW = contentWidth - 142;
+    int searchBoxW = contentWidth - 154;
     int searchBoxH = 32;
 
     // Create EDIT control WITHOUT WS_EX_CLIENTEDGE (use 0) so no harsh 3D borders appear!
@@ -755,9 +755,9 @@ void SmartDnsDialog::reposition_controls() {
     int marginX = 20;
     int contentWidth = clientWidth - (marginX * 2);
 
-    int searchBoxX = marginX + 142;
+    int searchBoxX = marginX + 154;
     int searchBoxY = 82;
-    int searchBoxW = std::max(180, contentWidth - 142);
+    int searchBoxW = std::max(180, contentWidth - 154);
 
     if (m_hSearchEdit) {
         SetWindowPos(m_hSearchEdit, nullptr, searchBoxX + 10, searchBoxY + 6, searchBoxW - 20, 20, SWP_NOZORDER);
@@ -1484,9 +1484,9 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             g.DrawString(L"Поиск сервиса:", -1, &fontLbl, Gdiplus::PointF(20.0f, 88.0f), &brPri);
 
             // 3. Search edit container card
-            int searchBoxX = 20 + 142;
+            int searchBoxX = 20 + 154;
             int searchBoxY = 82;
-            int searchBoxW = (w - 40) - 142;
+            int searchBoxW = (w - 40) - 154;
             int searchBoxH = 32;
 
             Gdiplus::GraphicsPath sbPath;

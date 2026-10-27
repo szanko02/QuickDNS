@@ -378,13 +378,13 @@ void AddProfileDialog::create_controls() {
     int marginX = 24;
     int contentWidth = clientWidth - (2 * marginX);
 
-    int fieldH = 38;
-    int innerEditH = 24;
+    int fieldH = 36;
+    int innerEditH = 22;
     int innerOffset = 7;
     int editW = contentWidth - 20;
 
-    // 1. Name Edit Box (Y = 100)
-    int yName = 100;
+    // 1. Name Edit Box (Y = 104)
+    int yName = 104;
     m_hEditName = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX + 10, yName + innerOffset, editW, innerEditH,
@@ -392,8 +392,8 @@ void AddProfileDialog::create_controls() {
     SendMessageW(m_hEditName, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     SendMessageW(m_hEditName, EM_SETCUEBANNER, TRUE, (LPARAM)L"Например: AdGuard DNS, Мой DNS, Офисный сервер");
 
-    // 2. Primary IPv4 Edit Box (Y = 170)
-    int yPri = 170;
+    // 2. Primary IPv4 Edit Box (Y = 182)
+    int yPri = 182;
     m_hEditPri = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX + 10, yPri + innerOffset, editW, innerEditH,
@@ -401,8 +401,8 @@ void AddProfileDialog::create_controls() {
     SendMessageW(m_hEditPri, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     SendMessageW(m_hEditPri, EM_SETCUEBANNER, TRUE, (LPARAM)L"Например: 94.140.14.14 или 77.88.8.8");
 
-    // 3. Secondary IPv4 Edit Box (Y = 240)
-    int ySec = 240;
+    // 3. Secondary IPv4 Edit Box (Y = 260)
+    int ySec = 260;
     m_hEditSec = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX + 10, ySec + innerOffset, editW, innerEditH,
@@ -410,8 +410,8 @@ void AddProfileDialog::create_controls() {
     SendMessageW(m_hEditSec, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     SendMessageW(m_hEditSec, EM_SETCUEBANNER, TRUE, (LPARAM)L"Например: 94.140.15.15 (необязательно)");
 
-    // 4. Description Edit Box (Y = 310)
-    int yDesc = 310;
+    // 4. Description Edit Box (Y = 338)
+    int yDesc = 338;
     m_hEditDesc = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX + 10, yDesc + innerOffset, editW, innerEditH,
@@ -419,8 +419,8 @@ void AddProfileDialog::create_controls() {
     SendMessageW(m_hEditDesc, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     SendMessageW(m_hEditDesc, EM_SETCUEBANNER, TRUE, (LPARAM)L"Краткое описание или назначение (необязательно)");
 
-    // 5. DoH URL Edit Box (Y = 380)
-    int yDoh = 380;
+    // 5. DoH URL Edit Box (Y = 416)
+    int yDoh = 416;
     m_hEditDoh = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         marginX + 10, yDoh + innerOffset, editW, innerEditH,
@@ -428,8 +428,8 @@ void AddProfileDialog::create_controls() {
     SendMessageW(m_hEditDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     SendMessageW(m_hEditDoh, EM_SETCUEBANNER, TRUE, (LPARAM)L"https://dns.adguard-dns.com/dns-query (необязательно)");
 
-    // 6. SmartDNS Option Checkbox inside Card (Y = 448, H = 74)
-    int ySmart = 448;
+    // 6. SmartDNS Option Checkbox inside Card (Y = 472, H = 70)
+    int ySmart = 472;
     m_hCheckSmartDns = CreateWindowExW(0, WC_BUTTONW, L"Профиль SmartDNS (разблокировка сервисов и медиа)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + 14, ySmart + 8, contentWidth - 28, 26,
@@ -440,8 +440,8 @@ void AddProfileDialog::create_controls() {
     SetPropW(m_hCheckSmartDns, L"QuickDnsCheckAnim", reinterpret_cast<HANDLE>(chkState));
     SetWindowSubclass(m_hCheckSmartDns, CustomCheckboxSubclassProc, 401, reinterpret_cast<DWORD_PTR>(chkState));
 
-    // 7. Action Buttons (Y = 538)
-    int yButtons = 538;
+    // 7. Action Buttons (Y = 556)
+    int yButtons = 556;
     int btnWidth = (contentWidth - 14) / 2;
     int btnHeight = 40;
 
@@ -457,6 +457,8 @@ void AddProfileDialog::create_controls() {
 
     attach_button_effects(m_hBtnSave, 301);
     attach_button_effects(m_hBtnCancel, 302);
+
+    reposition_controls();
 }
 
 void AddProfileDialog::reposition_controls() {
@@ -467,29 +469,30 @@ void AddProfileDialog::reposition_controls() {
     int contentWidth = clientWidth - (2 * marginX);
     if (contentWidth < 200) return;
 
-    int innerEditH = 24;
+    int fieldH = 36;
+    int innerEditH = 22;
     int innerOffset = 7;
     int editW = contentWidth - 20;
 
-    int yName = 100;
+    int yName = 104;
     if (m_hEditName) SetWindowPos(m_hEditName, nullptr, marginX + 10, yName + innerOffset, editW, innerEditH, SWP_NOZORDER);
 
-    int yPri = 170;
+    int yPri = 182;
     if (m_hEditPri) SetWindowPos(m_hEditPri, nullptr, marginX + 10, yPri + innerOffset, editW, innerEditH, SWP_NOZORDER);
 
-    int ySec = 240;
+    int ySec = 260;
     if (m_hEditSec) SetWindowPos(m_hEditSec, nullptr, marginX + 10, ySec + innerOffset, editW, innerEditH, SWP_NOZORDER);
 
-    int yDesc = 310;
+    int yDesc = 338;
     if (m_hEditDesc) SetWindowPos(m_hEditDesc, nullptr, marginX + 10, yDesc + innerOffset, editW, innerEditH, SWP_NOZORDER);
 
-    int yDoh = 380;
+    int yDoh = 416;
     if (m_hEditDoh) SetWindowPos(m_hEditDoh, nullptr, marginX + 10, yDoh + innerOffset, editW, innerEditH, SWP_NOZORDER);
 
-    int ySmart = 448;
+    int ySmart = 472;
     if (m_hCheckSmartDns) SetWindowPos(m_hCheckSmartDns, nullptr, marginX + 14, ySmart + 8, contentWidth - 28, 26, SWP_NOZORDER);
 
-    int yButtons = 538;
+    int yButtons = 556;
     int btnWidth = (contentWidth - 14) / 2;
     int btnHeight = 40;
 
@@ -677,7 +680,7 @@ LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
     switch (uMsg) {
     case WM_GETMINMAXINFO: {
         auto* pMMI = reinterpret_cast<MINMAXINFO*>(lParam);
-        RECT rcMin = { 0, 0, 500, 600 };
+        RECT rcMin = { 0, 0, 500, 660 };
         AdjustWindowRectEx(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE));
         pMMI->ptMinTrackSize.x = rcMin.right - rcMin.left;
         pMMI->ptMinTrackSize.y = rcMin.bottom - rcMin.top;
@@ -741,26 +744,26 @@ LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 
             // Helper lambda to draw rounded input field container card and its label
             auto drawFieldCard = [&](const wchar_t* label, int y, int fieldH) {
-                g.DrawString(label, -1, &fontLabel, Gdiplus::PointF(static_cast<float>(marginX + 8), static_cast<float>(y - 22)), &textPriBr);
+                g.DrawString(label, -1, &fontLabel, Gdiplus::PointF(static_cast<float>(marginX + 8), static_cast<float>(y - 25)), &textPriBr);
                 Gdiplus::GraphicsPath p;
                 quickdns::AddRoundedRect(p, Gdiplus::RectF(static_cast<float>(marginX), static_cast<float>(y), static_cast<float>(contentW), static_cast<float>(fieldH)), 6.0f);
                 g.FillPath(&cardBgBr, &p);
                 g.DrawPath(&cardBorderPen, &p);
             };
 
-            drawFieldCard(L"Название профиля (обязательно):", 100, 38);
-            drawFieldCard(L"Основной DNS IPv4 (обязательно):", 170, 38);
-            drawFieldCard(L"Дополнительный DNS IPv4 (необязательно):", 240, 38);
-            drawFieldCard(L"Описание / заметка (необязательно):", 310, 38);
-            drawFieldCard(L"DNS over HTTPS (DoH) URL (необязательно):", 380, 38);
+            drawFieldCard(L"Название профиля (обязательно):", 104, 36);
+            drawFieldCard(L"Основной DNS IPv4 (обязательно):", 182, 36);
+            drawFieldCard(L"Дополнительный DNS IPv4 (необязательно):", 260, 36);
+            drawFieldCard(L"Описание / заметка (необязательно):", 338, 36);
+            drawFieldCard(L"DNS over HTTPS (DoH) URL (необязательно):", 416, 36);
 
-            // SmartDNS card container (Y = 448, H = 74)
+            // SmartDNS card container (Y = 472, H = 70)
             Gdiplus::GraphicsPath smartCardPath;
-            quickdns::AddRoundedRect(smartCardPath, Gdiplus::RectF(static_cast<float>(marginX), 448.0f, static_cast<float>(contentW), 74.0f), 8.0f);
+            quickdns::AddRoundedRect(smartCardPath, Gdiplus::RectF(static_cast<float>(marginX), 472.0f, static_cast<float>(contentW), 70.0f), 8.0f);
             g.FillPath(&cardBgBr, &smartCardPath);
             g.DrawPath(&cardBorderPen, &smartCardPath);
 
-            Gdiplus::RectF rcSmartSub(static_cast<float>(marginX + 14), 484.0f, static_cast<float>(contentW - 24), 32.0f);
+            Gdiplus::RectF rcSmartSub(static_cast<float>(marginX + 14), 508.0f, static_cast<float>(contentW - 28), 28.0f);
             Gdiplus::StringFormat sfSmartSub;
             sfSmartSub.SetTrimming(Gdiplus::StringTrimmingWord);
             g.DrawString(L"Отметьте, если сервер предоставляет функцию обхода блокировок и стриминга",

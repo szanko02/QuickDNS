@@ -378,7 +378,7 @@ void BenchmarkDialog::create_controls() {
 
     // Row 1 (Y = 60..94): Domain Edit + AI Presets Button + Filter Chips
     int row1Y = 64;
-    int editDomX = marginX + 54;
+    int editDomX = marginX + 46;
     int editDomW = 190;
     int editDomH = 26;
 
@@ -389,8 +389,8 @@ void BenchmarkDialog::create_controls() {
     SendMessageW(m_hEditDomain, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     SendMessageW(m_hEditDomain, EM_SETCUEBANNER, TRUE, (LPARAM)L"Введите домен...");
 
-    int btnAiX = editDomX + editDomW + 8;
-    int btnAiW = 165;
+    int btnAiX = editDomX + editDomW + 6;
+    int btnAiW = 145;
     m_hBtnAiPresets = CreateWindowExW(0, WC_BUTTONW, L"Нейросети и сайты ▾",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         btnAiX, row1Y - 1, btnAiW, 28,
@@ -417,12 +417,12 @@ void BenchmarkDialog::create_controls() {
 
     // Row 2 (Y = 104..140): Duration Chips + Start/Stop + Reset
     int row2Y = 108;
-    int chipDur10W = 58;
-    int chipDur30W = 58;
-    int chipDur60W = 58;
+    int chipDur10W = 55;
+    int chipDur30W = 55;
+    int chipDur60W = 55;
     int chipDurContW = 95;
 
-    int dur10X = marginX + 48;
+    int dur10X = marginX + 46;
     int dur30X = dur10X + chipDur10W + 4;
     int dur60X = dur30X + chipDur30W + 4;
     int durContX = dur60X + chipDur60W + 4;
@@ -451,10 +451,10 @@ void BenchmarkDialog::create_controls() {
         m_hWnd, (HMENU)IDC_BTN_DUR_CONT, m_hInstance, nullptr);
     attach_button_effects(m_hBtnDurCont, 217);
 
-    int btnStartW = 150;
-    int btnResetW = 110;
+    int btnStartW = 145;
+    int btnResetW = 105;
     int btnResetX = marginX + contentWidth - btnResetW;
-    int btnStartX = btnResetX - btnStartW - 8;
+    int btnStartX = btnResetX - btnStartW - 6;
 
     m_hBtnStartStop = CreateWindowExW(0, WC_BUTTONW, L"Старт (30 сек)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
@@ -534,22 +534,20 @@ void BenchmarkDialog::reposition_controls() {
     int row1Y = 64;
     int chipFilterSmartW = 125;
     int chipFilterAllW = 85;
-    int filterLabelW = 55;
 
     int chipFilterSmartX = marginX + contentWidth - chipFilterSmartW;
     int chipFilterAllX = chipFilterSmartX - chipFilterAllW - 6;
-    int filterGroupLeftX = chipFilterAllX - filterLabelW - 8;
 
-    int editDomX = marginX + 48;
+    int editDomX = marginX + 46;
     int btnAiW = 145;
-    int availableEditW = (filterGroupLeftX - 16) - (editDomX + btnAiW + 8);
-    int editDomW = std::clamp(availableEditW, 110, 240);
+    int availableEditW = (chipFilterAllX - 12) - (editDomX + btnAiW + 6);
+    int editDomW = std::clamp(availableEditW, 140, 260);
     int editDomH = 26;
 
     if (m_hEditDomain) {
         SetWindowPos(m_hEditDomain, nullptr, editDomX, row1Y, editDomW, editDomH, SWP_NOZORDER);
     }
-    int btnAiX = editDomX + editDomW + 8;
+    int btnAiX = editDomX + editDomW + 6;
     if (m_hBtnAiPresets) {
         SetWindowPos(m_hBtnAiPresets, nullptr, btnAiX, row1Y - 1, btnAiW, 28, SWP_NOZORDER);
     }
@@ -563,12 +561,12 @@ void BenchmarkDialog::reposition_controls() {
 
     // Row 2 (Y = 108): Duration Chips + Start/Stop + Reset (Adaptive Layout)
     int row2Y = 108;
-    int chipDur10W = 58;
-    int chipDur30W = 58;
-    int chipDur60W = 58;
+    int chipDur10W = 55;
+    int chipDur30W = 55;
+    int chipDur60W = 55;
     int chipDurContW = 95;
 
-    int dur10X = marginX + 48;
+    int dur10X = marginX + 46;
     int dur30X = dur10X + chipDur10W + 4;
     int dur60X = dur30X + chipDur30W + 4;
     int durContX = dur60X + chipDur60W + 4;
@@ -578,10 +576,10 @@ void BenchmarkDialog::reposition_controls() {
     if (m_hBtnDur60) SetWindowPos(m_hBtnDur60, nullptr, dur60X, row2Y, chipDur60W, 28, SWP_NOZORDER);
     if (m_hBtnDurCont) SetWindowPos(m_hBtnDurCont, nullptr, durContX, row2Y, chipDurContW, 28, SWP_NOZORDER);
 
-    int btnResetW = 110;
-    int btnStartW = 150;
+    int btnResetW = 105;
+    int btnStartW = 145;
     int btnResetX = marginX + contentWidth - btnResetW;
-    int btnStartX = btnResetX - btnStartW - 8;
+    int btnStartX = btnResetX - btnStartW - 6;
 
     if (m_hBtnStartStop) SetWindowPos(m_hBtnStartStop, nullptr, btnStartX, row2Y - 1, btnStartW, 30, SWP_NOZORDER);
     if (m_hBtnReset) SetWindowPos(m_hBtnReset, nullptr, btnResetX, row2Y - 1, btnResetW, 30, SWP_NOZORDER);
@@ -599,9 +597,9 @@ void BenchmarkDialog::reposition_controls() {
     int curY = listTop + listHeight + 14;
 
     // Bottom Action Buttons (Adaptive proportions)
-    int btnCloseW = 100;
-    int btnPauseW = 105;
-    int gap = 8;
+    int btnCloseW = 95;
+    int btnPauseW = 95;
+    int gap = 6;
     int remainingActionW = std::max(200, contentWidth - btnCloseW - btnPauseW - (3 * gap));
     int btnApplyW = remainingActionW / 2;
     int btnApplySmartW = remainingActionW - btnApplyW;
@@ -1407,8 +1405,6 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             g.DrawPath(&barPen, &bar1Path);
 
             g.DrawString(L"Сайт:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 10), 68.0f), &textPriBr);
-            int filterLabelX = marginX + contentW - 125 - 6 - 85 - 55 - 8;
-            g.DrawString(L"Фильтр:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(filterLabelX), 68.0f), &textPriBr);
 
             // Row 2 Bar Background
             Gdiplus::RectF rcBar2(static_cast<float>(marginX), 102.0f, static_cast<float>(contentW), 40.0f);
