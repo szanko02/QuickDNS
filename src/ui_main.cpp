@@ -2,6 +2,7 @@
 #include "dialog_add_profile.h"
 #include "dialog_benchmark.h"
 #include "dialog_smartdns.h"
+#include "smartdns_verifier.h"
 #include "encoding_utils.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
@@ -531,6 +532,16 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             flush_dns_cache();
             return 0;
         }
+        if (wmId == IDM_TRAY_VERIFY_SMARTDNS) {
+            std::thread([this]() {
+                auto profiles = m_configManager->get_all_profiles();
+                auto results = quickdns::SmartDnsVerifier::verify_profiles(profiles);
+                int updated = quickdns::SmartDnsVerifier::apply_best_ips(*m_configManager, results);
+                PostMessageW(m_hWnd, WM_APP_REFRESH_STATUS, 0, static_cast<LPARAM>(updated));
+            }).detach();
+            show_tray_notification(L"QuickDNS", L"Запущена проверка и обновление серверов SmartDNS...");
+            return 0;
+        }
         if (wmId == IDM_TRAY_EXIT) {
             DestroyWindow(m_hWnd);
             return 0;
@@ -567,9 +578,15 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_APP_REFRESH_STATUS: {
+        m_profiles = m_configManager->get_all_profiles();
+        populate_profiles_combobox();
         refresh_network_adapters();
         update_status_card();
         trigger_immediate_ping();
+        if (lParam > 0) {
+            std::wstring msg = L"Обновлены IP-адреса для " + std::to_wstring(lParam) + L" провайдеров SmartDNS.";
+            show_tray_notification(L"QuickDNS", msg);
+        }
         return 0;
     }
 
@@ -1914,7 +1931,9 @@ void MainWindow::open_benchmark_dialog() {
 }
 
 void MainWindow::open_smartdns_catalog_dialog() {
-    auto selectedId = SmartDnsDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id(), m_isDarkMode);
+    auto selectedId = SmartDnsDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id(), m_isDarkMode, m_configManager.get());
+    m_profiles = m_configManager->get_all_profiles();
+    populate_profiles_combobox();
     if (selectedId.has_value()) {
         std::string chosenId = selectedId.value();
         for (size_t i = 0; i < m_profiles.size(); ++i) {
@@ -1926,6 +1945,8 @@ void MainWindow::open_smartdns_catalog_dialog() {
                 break;
             }
         }
+    } else {
+        update_status_card();
     }
 }
 
@@ -2275,6 +2296,7 @@ void MainWindow::show_tray_context_menu() {
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_RESET_DHCP, L"Сброс на DHCP");
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_FLUSH_DNS, L"Сбросить DNS-кэш");
+    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_VERIFY_SMARTDNS, L"Проверить и обновить SmartDNS...");
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_EXIT, L"Выход");
 

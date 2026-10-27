@@ -24,6 +24,7 @@ if(MSVC)
         iphlpapi.lib
         dnsapi.lib
         ws2_32.lib
+        winhttp.lib
         comctl32.lib
         uxtheme.lib
         dwmapi.lib
@@ -41,6 +42,7 @@ else()
         iphlpapi
         dnsapi
         ws2_32
+        winhttp
         comctl32
         uxtheme
         dwmapi
@@ -60,6 +62,7 @@ add_library(quickdns_core STATIC
     src/dns_manager.cpp
     src/dns_benchmark.cpp
     src/config_manager.cpp
+    src/smartdns_verifier.cpp
 )
 target_link_libraries(quickdns_core PUBLIC ${WIN32_LIBS})
 
@@ -103,4 +106,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_benchmark.cpp")
     add_executable(test_benchmark tests/test_benchmark.cpp ${DIAG_RC})
     target_link_libraries(test_benchmark PRIVATE quickdns_core ${WIN32_LIBS})
     add_test(NAME TestBenchmark COMMAND test_benchmark)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_smartdns_verifier.cpp")
+    add_executable(test_smartdns_verifier tests/test_smartdns_verifier.cpp ${DIAG_RC})
+    target_link_libraries(test_smartdns_verifier PRIVATE quickdns_core ${WIN32_LIBS})
+    add_test(NAME TestSmartDnsVerifier COMMAND test_smartdns_verifier)
 endif()

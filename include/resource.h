@@ -50,11 +50,13 @@
 #define IDC_BTN_SMARTDNS_WEBSITE    1304
 #define IDC_BTN_SMARTDNS_CLOSE      1305
 #define IDC_STATUS_SMARTDNS         1306
+#define IDC_BTN_SMARTDNS_SCRAPE_VERIFY 1307
 
 // Tray Menu Commands
 #define IDM_TRAY_SHOW               2001
 #define IDM_TRAY_RESET_DHCP         2002
 #define IDM_TRAY_FLUSH_DNS          2003
 #define IDM_TRAY_EXIT               2004
+#define IDM_TRAY_VERIFY_SMARTDNS    2005
 #define IDM_TRAY_PRESET_FIRST       2100
 #define IDM_TRAY_PRESET_LAST        2199

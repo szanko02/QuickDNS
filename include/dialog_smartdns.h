@@ -27,6 +27,9 @@ struct SmartDnsEntry {
     std::wstring description;
     std::vector<SmartDnsCategory> categories;
     bool is_active = false;
+    std::wstring doh_status;
+    int ping_ms = -1;
+    bool is_verified = false;
 };
 
 class SmartDnsDialog {
@@ -38,6 +41,7 @@ public:
      * @param profiles Loaded DNS profiles.
      * @param currentActiveId ID of currently active profile.
      * @param isDarkMode Whether dark mode is enabled.
+     * @param pConfig Optional pointer to ConfigManager for dynamic IP updates.
      * @return Selected profile ID if user clicked "Apply", std::nullopt otherwise.
      */
     static std::optional<std::string> show(
@@ -45,7 +49,8 @@ public:
         HINSTANCE hInstance,
         const std::vector<DnsProfile>& profiles,
         const std::string& currentActiveId = "",
-        bool isDarkMode = true
+        bool isDarkMode = true,
+        ConfigManager* pConfig = nullptr
     );
 
 private:
@@ -54,7 +59,8 @@ private:
         HINSTANCE hInstance,
         const std::vector<DnsProfile>& profiles,
         const std::string& currentActiveId,
-        bool isDarkMode
+        bool isDarkMode,
+        ConfigManager* pConfig = nullptr
     );
     ~SmartDnsDialog();
 
@@ -66,6 +72,7 @@ private:
     void update_filtered_list();
     void on_apply_selected();
     void on_open_website(size_t index);
+    void on_verify_and_scrape_ips();
     void on_close();
 
     static LRESULT CALLBACK dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -87,7 +94,11 @@ private:
     HWND m_hSearchEdit = nullptr;
     HWND m_hBtnApply = nullptr;
     HWND m_hBtnWebsite = nullptr;
+    HWND m_hBtnVerify = nullptr;
     HWND m_hBtnClose = nullptr;
+
+    ConfigManager* m_pConfig = nullptr;
+    bool m_isVerifying = false;
 
     std::wstring m_statusText;
     bool m_searchEditFocused = false;

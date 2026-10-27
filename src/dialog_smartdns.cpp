@@ -1,4 +1,5 @@
 #include "dialog_smartdns.h"
+#include "smartdns_verifier.h"
 #include "encoding_utils.h"
 #include "resource.h"
 #include "ui_palette.h"
@@ -7,6 +8,7 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <algorithm>
+#include <thread>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -109,9 +111,10 @@ std::optional<std::string> SmartDnsDialog::show(
     HINSTANCE hInstance,
     const std::vector<DnsProfile>& profiles,
     const std::string& currentActiveId,
-    bool isDarkMode)
+    bool isDarkMode,
+    ConfigManager* pConfig)
 {
-    SmartDnsDialog dlg(hParent, hInstance, profiles, currentActiveId, isDarkMode);
+    SmartDnsDialog dlg(hParent, hInstance, profiles, currentActiveId, isDarkMode, pConfig);
     if (!dlg.create_dialog_window()) {
         return std::nullopt;
     }
@@ -142,11 +145,13 @@ SmartDnsDialog::SmartDnsDialog(
     HINSTANCE hInstance,
     const std::vector<DnsProfile>& profiles,
     const std::string& currentActiveId,
-    bool isDarkMode)
+    bool isDarkMode,
+    ConfigManager* pConfig)
     : m_hParent(hParent)
     , m_hInstance(hInstance)
     , m_currentActiveId(currentActiveId)
     , m_isDarkMode(isDarkMode)
+    , m_pConfig(pConfig)
 {
     auto pal = GetPalette(m_isDarkMode);
     m_hbrBg = CreateSolidBrush(pal.bg);
@@ -708,9 +713,11 @@ void SmartDnsDialog::create_controls() {
     int curY = listTop + listHeight + 16;
 
     // Bottom Action Buttons
-    int btnApplyW = 210;
-    int btnWebW = 180;
-    int btnCloseW = 110;
+    int btnApplyW = 175;
+    int btnWebW = 145;
+    int btnVerifyW = 200;
+    int btnCloseW = 95;
+    int gap = 10;
 
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить этот DNS",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
@@ -719,8 +726,13 @@ void SmartDnsDialog::create_controls() {
 
     m_hBtnWebsite = CreateWindowExW(0, WC_BUTTONW, L"Официальный сайт",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + btnApplyW + 12, curY, btnWebW, bottomButtonsH,
+        marginX + btnApplyW + gap, curY, btnWebW, bottomButtonsH,
         m_hWnd, (HMENU)IDC_BTN_SMARTDNS_WEBSITE, m_hInstance, nullptr);
+
+    m_hBtnVerify = CreateWindowExW(0, WC_BUTTONW, L"Обновить IP и DoH",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX + btnApplyW + gap + btnWebW + gap, curY, btnVerifyW, bottomButtonsH,
+        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_SCRAPE_VERIFY, m_hInstance, nullptr);
 
     m_hBtnClose = CreateWindowExW(0, WC_BUTTONW, L"Закрыть",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
@@ -729,6 +741,7 @@ void SmartDnsDialog::create_controls() {
 
     attach_button_effects(m_hBtnApply, 301);
     attach_button_effects(m_hBtnWebsite, 302);
+    attach_button_effects(m_hBtnVerify, 304);
     attach_button_effects(m_hBtnClose, 303);
 }
 
@@ -748,6 +761,43 @@ void SmartDnsDialog::on_open_website(size_t index) {
             ShellExecuteW(m_hWnd, L"open", entry.website_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         }
     }
+}
+
+void SmartDnsDialog::on_verify_and_scrape_ips() {
+    if (m_isVerifying) return;
+    m_isVerifying = true;
+    EnableWindow(m_hBtnVerify, FALSE);
+    SetWindowTextW(m_hBtnVerify, L"Проверка...");
+    m_statusText = L"Скрейпинг актуальных IP и тестирование DoH...";
+    InvalidateRect(m_hWnd, nullptr, FALSE);
+
+    HWND hWndDlg = m_hWnd;
+    auto entriesCopy = m_allEntries;
+    ConfigManager* pCfg = m_pConfig;
+
+    std::thread([hWndDlg, entriesCopy, pCfg]() mutable {
+        std::vector<DnsProfile> profilesToVerify;
+        profilesToVerify.reserve(entriesCopy.size());
+        for (const auto& e : entriesCopy) {
+            DnsProfile p;
+            p.id = e.profile_id;
+            p.name = QuickDns::Encoding::wide_to_utf8(e.name);
+            p.primary_ipv4 = QuickDns::Encoding::wide_to_utf8(e.primary_ipv4);
+            p.secondary_ipv4 = QuickDns::Encoding::wide_to_utf8(e.secondary_ipv4);
+            p.doh_template = QuickDns::Encoding::wide_to_utf8(e.doh_template);
+            p.website_url = QuickDns::Encoding::wide_to_utf8(e.website_url);
+            profilesToVerify.push_back(p);
+        }
+
+        auto results = SmartDnsVerifier::verify_profiles(profilesToVerify);
+
+        if (pCfg) {
+            SmartDnsVerifier::apply_best_ips(*pCfg, results);
+        }
+
+        auto* pAllocResults = new std::vector<SmartDnsVerificationResult>(std::move(results));
+        PostMessageW(hWndDlg, WM_APP + 55, reinterpret_cast<WPARAM>(pAllocResults), 0);
+    }).detach();
 }
 
 void SmartDnsDialog::on_close() {
@@ -945,6 +995,16 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
     g.DrawString(addrStr.c_str(), -1, &fontSub, Gdiplus::PointF(curCardX, curCardY), &textSecBr);
     curCardY += 19.0f;
 
+    if (e.is_verified) {
+        std::wstring statStr = L"Статус: UDP " + (e.ping_ms > 0 ? std::to_wstring(e.ping_ms) + L" ms" : L"тайм-аут");
+        if (!e.doh_status.empty()) {
+            statStr += L"   |   " + e.doh_status;
+        }
+        Gdiplus::SolidBrush statBr(e.ping_ms > 0 ? Gdiplus::Color(255, 34, 197, 94) : Gdiplus::Color(255, 239, 68, 68));
+        g.DrawString(statStr.c_str(), -1, &fontBadge, Gdiplus::PointF(curCardX, curCardY), &statBr);
+        curCardY += 16.0f;
+    }
+
     // Description line
     g.DrawString(e.description.c_str(), -1, &fontSub, Gdiplus::PointF(curCardX, curCardY), &textMutedBr);
     curCardY += 22.0f;
@@ -1072,7 +1132,44 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             on_close();
             return 0;
         }
+        if (id == IDC_BTN_SMARTDNS_SCRAPE_VERIFY) {
+            on_verify_and_scrape_ips();
+            return 0;
+        }
         break;
+    }
+
+    case WM_APP + 55: {
+        auto* pResults = reinterpret_cast<std::vector<SmartDnsVerificationResult>*>(wParam);
+        if (pResults) {
+            int updatedCount = 0;
+            for (const auto& r : *pResults) {
+                for (auto& e : m_allEntries) {
+                    if (e.profile_id == r.profile_id) {
+                        if (!r.best_primary_ip.empty()) {
+                            e.primary_ipv4 = QuickDns::Encoding::utf8_to_wide(r.best_primary_ip);
+                        }
+                        if (!r.best_secondary_ip.empty()) {
+                            e.secondary_ipv4 = QuickDns::Encoding::utf8_to_wide(r.best_secondary_ip);
+                        }
+                        e.doh_status = r.doh_result.status_text;
+                        e.ping_ms = r.best_primary_latency;
+                        e.is_verified = true;
+                        if (r.ip_updated) updatedCount++;
+                        break;
+                    }
+                }
+            }
+            delete pResults;
+
+            m_statusText = L"Проверка завершена. Обновлено IP провайдеров: " + std::to_wstring(updatedCount);
+        }
+        m_isVerifying = false;
+        EnableWindow(m_hBtnVerify, TRUE);
+        SetWindowTextW(m_hBtnVerify, L"Обновить IP и DoH");
+        InvalidateRect(m_hListWnd, nullptr, TRUE);
+        InvalidateRect(m_hWnd, nullptr, FALSE);
+        return 0;
     }
 
     case WM_DRAWITEM: {
