@@ -1838,13 +1838,64 @@ void MainWindow::update_status_card() {
     } else {
         std::wstring badge = L"Статус: Кастомный DNS";
         if (!adapter.dns_ipv4.empty()) {
-            std::string pri = wide_to_utf8(adapter.dns_ipv4[0]);
+            std::string adPri = wide_to_utf8(adapter.dns_ipv4[0]);
+            std::string adSec = adapter.dns_ipv4.size() > 1 ? wide_to_utf8(adapter.dns_ipv4[1]) : "";
+
+            const DnsProfile* matchedProfile = nullptr;
+
+            // 1. Exact match (primary == adPri and secondary matches or is empty)
             for (const auto& p : m_profiles) {
-                if (p.primary_ipv4 == pri) {
-                    std::wstring pName = utf8_to_wide(p.name);
-                    badge = L"Статус: Активен " + pName;
+                if (p.is_dhcp) continue;
+                if (p.primary_ipv4 == adPri && (adSec.empty() || p.secondary_ipv4 == adSec || p.secondary_ipv4.empty())) {
+                    matchedProfile = &p;
                     break;
                 }
+            }
+
+            // 2. Primary matches adPri
+            if (!matchedProfile) {
+                for (const auto& p : m_profiles) {
+                    if (p.is_dhcp) continue;
+                    if (p.primary_ipv4 == adPri) {
+                        matchedProfile = &p;
+                        break;
+                    }
+                }
+            }
+
+            // 3. Any IP match in adapter.dns_ipv4
+            if (!matchedProfile) {
+                for (const auto& adIpWide : adapter.dns_ipv4) {
+                    std::string adIp = wide_to_utf8(adIpWide);
+                    for (const auto& p : m_profiles) {
+                        if (p.is_dhcp) continue;
+                        if (p.primary_ipv4 == adIp || (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adIp)) {
+                            matchedProfile = &p;
+                            break;
+                        }
+                    }
+                    if (matchedProfile) break;
+                }
+            }
+
+            // 4. Check active_profile_id from config as a fallback if any IP is associated
+            if (!matchedProfile && m_configManager) {
+                std::string activeId = m_configManager->get_active_profile_id();
+                auto optP = m_configManager->get_profile_by_id(activeId);
+                if (optP && !optP->is_dhcp) {
+                    for (const auto& adIpWide : adapter.dns_ipv4) {
+                        std::string adIp = wide_to_utf8(adIpWide);
+                        if (optP->primary_ipv4 == adIp || optP->secondary_ipv4 == adIp) {
+                            matchedProfile = &(*optP);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (matchedProfile) {
+                std::wstring pName = utf8_to_wide(matchedProfile->name);
+                badge = L"Статус: Активен " + pName;
             }
         }
         SetWindowTextW(m_hStatusBadge, badge.c_str());
@@ -2071,6 +2122,9 @@ void MainWindow::open_smartdns_catalog_dialog() {
             }
         }
     } else {
+        if (m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profiles.size())) {
+            on_profile_selected();
+        }
         update_status_card();
     }
 }

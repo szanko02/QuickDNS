@@ -398,10 +398,10 @@ void BenchmarkDialog::create_controls() {
     attach_button_effects(m_hBtnAiPresets, 211);
 
     // Filter Chips
-    int chipFilterAllX = marginX + contentWidth - 250;
-    int chipFilterAllW = 100;
-    int chipFilterSmartW = 145;
-    int chipFilterSmartX = chipFilterAllX + chipFilterAllW + 5;
+    int chipFilterSmartW = 125;
+    int chipFilterAllW = 85;
+    int chipFilterSmartX = marginX + contentWidth - chipFilterSmartW;
+    int chipFilterAllX = chipFilterSmartX - chipFilterAllW - 6;
 
     m_hBtnFilterAll = CreateWindowExW(0, WC_BUTTONW, L"Все DNS",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
@@ -417,15 +417,15 @@ void BenchmarkDialog::create_controls() {
 
     // Row 2 (Y = 104..140): Duration Chips + Start/Stop + Reset
     int row2Y = 108;
-    int chipDur10W = 75;
-    int chipDur30W = 75;
-    int chipDur60W = 75;
-    int chipDurContW = 110;
+    int chipDur10W = 58;
+    int chipDur30W = 58;
+    int chipDur60W = 58;
+    int chipDurContW = 95;
 
-    int dur10X = marginX + 54;
-    int dur30X = dur10X + chipDur10W + 5;
-    int dur60X = dur30X + chipDur30W + 5;
-    int durContX = dur60X + chipDur60W + 5;
+    int dur10X = marginX + 48;
+    int dur30X = dur10X + chipDur10W + 4;
+    int dur60X = dur30X + chipDur30W + 4;
+    int durContX = dur60X + chipDur60W + 4;
 
     m_hBtnDur10 = CreateWindowExW(0, WC_BUTTONW, L"10 сек",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
@@ -451,8 +451,8 @@ void BenchmarkDialog::create_controls() {
         m_hWnd, (HMENU)IDC_BTN_DUR_CONT, m_hInstance, nullptr);
     attach_button_effects(m_hBtnDurCont, 217);
 
-    int btnStartW = 165;
-    int btnResetW = 145;
+    int btnStartW = 150;
+    int btnResetW = 110;
     int btnResetX = marginX + contentWidth - btnResetW;
     int btnStartX = btnResetX - btnStartW - 8;
 
@@ -462,7 +462,7 @@ void BenchmarkDialog::create_controls() {
         m_hWnd, (HMENU)IDC_BTN_BENCHMARK_START_STOP, m_hInstance, nullptr);
     attach_button_effects(m_hBtnStartStop, 218);
 
-    m_hBtnReset = CreateWindowExW(0, WC_BUTTONW, L"Сбросить историю",
+    m_hBtnReset = CreateWindowExW(0, WC_BUTTONW, L"Сбросить",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         btnResetX, row2Y - 1, btnResetW, 30,
         m_hWnd, (HMENU)IDC_BTN_BENCHMARK_RESET, m_hInstance, nullptr);
@@ -516,6 +516,7 @@ void BenchmarkDialog::create_controls() {
     attach_button_effects(m_hBtnPauseResume, 103);
     attach_button_effects(m_hBtnClose, 104);
 
+    reposition_controls();
     start_timed_test();
 }
 

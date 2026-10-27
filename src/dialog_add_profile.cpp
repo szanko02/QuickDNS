@@ -428,8 +428,8 @@ void AddProfileDialog::create_controls() {
     SendMessageW(m_hEditDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
     SendMessageW(m_hEditDoh, EM_SETCUEBANNER, TRUE, (LPARAM)L"https://dns.adguard-dns.com/dns-query (необязательно)");
 
-    // 6. SmartDNS Option Checkbox inside Card (Y = 450, H = 68)
-    int ySmart = 450;
+    // 6. SmartDNS Option Checkbox inside Card (Y = 448, H = 74)
+    int ySmart = 448;
     m_hCheckSmartDns = CreateWindowExW(0, WC_BUTTONW, L"Профиль SmartDNS (разблокировка сервисов и медиа)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + 14, ySmart + 8, contentWidth - 28, 26,
@@ -486,7 +486,7 @@ void AddProfileDialog::reposition_controls() {
     int yDoh = 380;
     if (m_hEditDoh) SetWindowPos(m_hEditDoh, nullptr, marginX + 10, yDoh + innerOffset, editW, innerEditH, SWP_NOZORDER);
 
-    int ySmart = 450;
+    int ySmart = 448;
     if (m_hCheckSmartDns) SetWindowPos(m_hCheckSmartDns, nullptr, marginX + 14, ySmart + 8, contentWidth - 28, 26, SWP_NOZORDER);
 
     int yButtons = 538;
@@ -741,7 +741,7 @@ LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 
             // Helper lambda to draw rounded input field container card and its label
             auto drawFieldCard = [&](const wchar_t* label, int y, int fieldH) {
-                g.DrawString(label, -1, &fontLabel, Gdiplus::PointF(static_cast<float>(marginX), static_cast<float>(y - 22)), &textPriBr);
+                g.DrawString(label, -1, &fontLabel, Gdiplus::PointF(static_cast<float>(marginX + 8), static_cast<float>(y - 22)), &textPriBr);
                 Gdiplus::GraphicsPath p;
                 quickdns::AddRoundedRect(p, Gdiplus::RectF(static_cast<float>(marginX), static_cast<float>(y), static_cast<float>(contentW), static_cast<float>(fieldH)), 6.0f);
                 g.FillPath(&cardBgBr, &p);
@@ -754,13 +754,13 @@ LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             drawFieldCard(L"Описание / заметка (необязательно):", 310, 38);
             drawFieldCard(L"DNS over HTTPS (DoH) URL (необязательно):", 380, 38);
 
-            // SmartDNS card container (Y = 450, H = 68)
+            // SmartDNS card container (Y = 448, H = 74)
             Gdiplus::GraphicsPath smartCardPath;
-            quickdns::AddRoundedRect(smartCardPath, Gdiplus::RectF(static_cast<float>(marginX), 450.0f, static_cast<float>(contentW), 68.0f), 8.0f);
+            quickdns::AddRoundedRect(smartCardPath, Gdiplus::RectF(static_cast<float>(marginX), 448.0f, static_cast<float>(contentW), 74.0f), 8.0f);
             g.FillPath(&cardBgBr, &smartCardPath);
             g.DrawPath(&cardBorderPen, &smartCardPath);
 
-            Gdiplus::RectF rcSmartSub(static_cast<float>(marginX + 16), 488.0f, static_cast<float>(contentW - 32), 22.0f);
+            Gdiplus::RectF rcSmartSub(static_cast<float>(marginX + 14), 484.0f, static_cast<float>(contentW - 24), 32.0f);
             Gdiplus::StringFormat sfSmartSub;
             sfSmartSub.SetTrimming(Gdiplus::StringTrimmingWord);
             g.DrawString(L"Отметьте, если сервер предоставляет функцию обхода блокировок и стриминга",

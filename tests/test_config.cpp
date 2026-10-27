@@ -37,7 +37,7 @@ int main() {
 
         auto bezmezhau = cfg.get_profile_by_id("bezmezhau");
         assert(bezmezhau.has_value());
-        assert(bezmezhau->primary_ipv4 == "143.20.64.55");
+        assert(bezmezhau->primary_ipv4 == "181.215.40.49");
         assert(bezmezhau->doh_template == "https://dns.bezmezhau.com/dns-query");
         assert(bezmezhau->is_smart_dns == true);
         std::cout << "[PASS] Bezmezhau preset verified: " << bezmezhau->primary_ipv4 << " (DoH: " << bezmezhau->doh_template << ")" << std::endl;

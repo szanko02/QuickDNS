@@ -245,8 +245,8 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
         e.profile_id = "bezmezhau";
         e.name = L"Без межаў DNS";
         e.website_url = L"https://bezmezhau.com/";
-        e.primary_ipv4 = L"143.20.64.55";
-        e.secondary_ipv4 = L"31.58.216.201";
+        e.primary_ipv4 = L"181.215.40.49";
+        e.secondary_ipv4 = L"143.20.64.55";
         e.doh_template = L"https://dns.bezmezhau.com/dns-query";
         e.location = L"Финляндия / Германия";
         e.description = L"Свободный независимый SmartDNS без цензуры со встроенной фильтрацией баннеров и рекламы.";
@@ -680,9 +680,9 @@ void SmartDnsDialog::create_controls() {
     int contentWidth = clientWidth - (marginX * 2);
 
     // Modern Search Edit Control inset inside the GDI+ rounded container card
-    int searchBoxX = marginX + 120;
+    int searchBoxX = marginX + 142;
     int searchBoxY = 82;
-    int searchBoxW = contentWidth - 120;
+    int searchBoxW = contentWidth - 142;
     int searchBoxH = 32;
 
     // Create EDIT control WITHOUT WS_EX_CLIENTEDGE (use 0) so no harsh 3D borders appear!
@@ -755,9 +755,9 @@ void SmartDnsDialog::reposition_controls() {
     int marginX = 20;
     int contentWidth = clientWidth - (marginX * 2);
 
-    int searchBoxX = marginX + 120;
+    int searchBoxX = marginX + 142;
     int searchBoxY = 82;
-    int searchBoxW = std::max(180, contentWidth - 120);
+    int searchBoxW = std::max(180, contentWidth - 142);
 
     if (m_hSearchEdit) {
         SetWindowPos(m_hSearchEdit, nullptr, searchBoxX + 10, searchBoxY + 6, searchBoxW - 20, 20, SWP_NOZORDER);
@@ -1371,10 +1371,34 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                         e.doh_status = r.doh_result.status_text;
                         e.ping_ms = r.best_primary_latency;
                         e.is_verified = true;
-                        if (r.ip_updated) updatedCount++;
+
+                        if (m_pConfig) {
+                            auto optProfile = m_pConfig->get_profile_by_id(r.profile_id);
+                            if (optProfile) {
+                                DnsProfile updated = *optProfile;
+                                bool changed = false;
+                                if (!r.best_primary_ip.empty() && updated.primary_ipv4 != r.best_primary_ip) {
+                                    updated.primary_ipv4 = r.best_primary_ip;
+                                    changed = true;
+                                }
+                                if (!r.best_secondary_ip.empty() && updated.secondary_ipv4 != r.best_secondary_ip) {
+                                    updated.secondary_ipv4 = r.best_secondary_ip;
+                                    changed = true;
+                                }
+                                if (changed) {
+                                    m_pConfig->update_profile(updated);
+                                    updatedCount++;
+                                }
+                            }
+                        } else if (r.ip_updated) {
+                            updatedCount++;
+                        }
                         break;
                     }
                 }
+            }
+            if (m_pConfig && updatedCount > 0) {
+                m_pConfig->save_to_file();
             }
             delete pResults;
 
@@ -1460,9 +1484,9 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             g.DrawString(L"Поиск сервиса:", -1, &fontLbl, Gdiplus::PointF(20.0f, 88.0f), &brPri);
 
             // 3. Search edit container card
-            int searchBoxX = 20 + 120;
+            int searchBoxX = 20 + 142;
             int searchBoxY = 82;
-            int searchBoxW = (w - 40) - 120;
+            int searchBoxW = (w - 40) - 142;
             int searchBoxH = 32;
 
             Gdiplus::GraphicsPath sbPath;
