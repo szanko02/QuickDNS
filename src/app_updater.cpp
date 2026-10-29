@@ -184,13 +184,16 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
     }
 
     if (assetPos != std::string::npos) {
-        size_t blockStart = (assetPos > 500) ? (assetPos - 500) : 0;
-        size_t blockEnd = std::min(responseBody.size(), assetPos + 1000);
-        std::string assetBlock = responseBody.substr(blockStart, blockEnd - blockStart);
-        info.download_url = extract_json_field(assetBlock, "browser_download_url");
-        std::string sizeStr = extract_json_field(assetBlock, "size");
-        if (!sizeStr.empty()) {
-            try { info.asset_size = std::stoull(sizeStr); } catch (...) {}
+        size_t urlKey = responseBody.find("\"browser_download_url\"", assetPos);
+        if (urlKey != std::string::npos) {
+            info.download_url = extract_json_field(responseBody.substr(urlKey, 400), "browser_download_url");
+        }
+        size_t sizeKey = responseBody.find("\"size\"", assetPos);
+        if (sizeKey != std::string::npos && (urlKey == std::string::npos || sizeKey < urlKey + 500)) {
+            std::string sizeStr = extract_json_field(responseBody.substr(sizeKey, 100), "size");
+            if (!sizeStr.empty()) {
+                try { info.asset_size = std::stoull(sizeStr); } catch (...) {}
+            }
         }
     }
 
@@ -198,10 +201,10 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
     if (info.download_url.empty()) {
         size_t zipPos = responseBody.find("Portable.zip");
         if (zipPos != std::string::npos) {
-            size_t blockStart = (zipPos > 500) ? (zipPos - 500) : 0;
-            size_t blockEnd = std::min(responseBody.size(), zipPos + 1000);
-            std::string assetBlock = responseBody.substr(blockStart, blockEnd - blockStart);
-            info.download_url = extract_json_field(assetBlock, "browser_download_url");
+            size_t urlKey = responseBody.find("\"browser_download_url\"", zipPos);
+            if (urlKey != std::string::npos) {
+                info.download_url = extract_json_field(responseBody.substr(urlKey, 400), "browser_download_url");
+            }
         }
     }
 
