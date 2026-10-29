@@ -13,7 +13,7 @@ using QuickDns::Encoding::wide_to_utf8;
 namespace {
     constexpr const wchar_t* DIALOG_CLASS_NAME = L"QuickDNS_AddProfileDialogClass";
     constexpr int DIALOG_WIDTH = 580;
-    constexpr int DIALOG_HEIGHT = 650;
+    constexpr int DIALOG_HEIGHT = 660;
 
     constexpr int ID_EDIT_NAME = 3001;
     constexpr int ID_EDIT_PRI  = 3002;
@@ -216,11 +216,11 @@ namespace {
                 }
             }
 
-            RECT rcText = { 28, 0, w, h };
+            RECT rcText = { 28, 0, w - 4, h };
             SetBkMode(hdcMem, TRANSPARENT);
             SetTextColor(hdcMem, pal.textPrimary);
             HGDIOBJ oldFont = SelectObject(hdcMem, state->pDlg->get_font_bold());
-            DrawTextW(hdcMem, L"Профиль SmartDNS (разблокировка сервисов и медиа)", -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(hdcMem, L"Профиль SmartDNS (разблокировка сервисов и медиа)", -1, &rcText, DT_LEFT | DT_VCENTER | DT_WORD_ELLIPSIS);
             SelectObject(hdcMem, oldFont);
 
             BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
@@ -492,7 +492,20 @@ void AddProfileDialog::reposition_controls() {
     int ySmart = 472;
     if (m_hCheckSmartDns) SetWindowPos(m_hCheckSmartDns, nullptr, marginX + 14, ySmart + 8, contentWidth - 28, 26, SWP_NOZORDER);
 
-    int yButtons = 556;
+    // Dynamic measurement for SmartDNS subtitle to align buttons accurately
+    HDC hdcDlg = GetDC(m_hWnd);
+    HFONT oldFont = (HFONT)SelectObject(hdcDlg, m_hFontSmall);
+    RECT rcCalc = { 0, 0, contentWidth - 28, 0 };
+    DrawTextW(hdcDlg, L"Отметьте, если сервер предоставляет функцию обхода блокировок и стриминга", -1, &rcCalc, DT_CALCRECT | DT_WORDBREAK);
+    SelectObject(hdcDlg, oldFont);
+    ReleaseDC(m_hWnd, hdcDlg);
+
+    int subTextH = rcCalc.bottom - rcCalc.top;
+    int textTopPadding = 38;
+    int textBottomPadding = 14;
+    int totalSmartH = textTopPadding + subTextH + textBottomPadding;
+
+    int yButtons = ySmart + totalSmartH + 16;
     int btnWidth = (contentWidth - 14) / 2;
     int btnHeight = 40;
 
@@ -736,7 +749,12 @@ LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 
             // Header Title and Subtitle with clear separation
             g.DrawString(L"Добавить свой DNS сервер", -1, &fontHeader, Gdiplus::PointF(static_cast<float>(marginX), 18.0f), &textPriBr);
-            g.DrawString(L"Создайте собственный профиль DNS с поддержкой IPv4, DoH и SmartDNS", -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX), 46.0f), &textSecBr);
+
+            Gdiplus::StringFormat sfSub;
+            sfSub.SetTrimming(Gdiplus::StringTrimmingWord);
+            sfSub.SetFormatFlags(Gdiplus::StringFormatFlagsLineLimit);
+            Gdiplus::RectF rcSub(static_cast<float>(marginX), 46.0f, static_cast<float>(contentW), 38.0f);
+            g.DrawString(L"Создайте собственный профиль DNS с поддержкой IPv4, DoH и SmartDNS", -1, &fontSub, rcSub, &sfSub, &textSecBr);
 
             // Container card brush & pen
             Gdiplus::SolidBrush cardBgBr(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
@@ -757,17 +775,29 @@ LRESULT AddProfileDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             drawFieldCard(L"Описание / заметка (необязательно):", 338, 36);
             drawFieldCard(L"DNS over HTTPS (DoH) URL (необязательно):", 416, 36);
 
-            // SmartDNS card container (Y = 472, H = 70)
+            // SmartDNS card container (Y = 472)
+            std::wstring subText = L"Отметьте, если сервер предоставляет функцию обхода блокировок и стриминга";
+            
+            Gdiplus::StringFormat sfSmartSub;
+            sfSmartSub.SetTrimming(Gdiplus::StringTrimmingWord);
+            sfSmartSub.SetFormatFlags(Gdiplus::StringFormatFlagsNoClip);
+
+            // Measure height dynamically
+            Gdiplus::RectF measuredBounds;
+            g.MeasureString(subText.c_str(), -1, &fontSub, Gdiplus::SizeF(static_cast<float>(contentW - 28), 0.0f), &sfSmartSub, &measuredBounds);
+            
+            float textH = measuredBounds.Height;
+            float textTopPadding = 38.0f;
+            float textBottomPadding = 14.0f;
+            float totalSmartH = textH + textTopPadding + textBottomPadding;
+
             Gdiplus::GraphicsPath smartCardPath;
-            quickdns::AddRoundedRect(smartCardPath, Gdiplus::RectF(static_cast<float>(marginX), 472.0f, static_cast<float>(contentW), 70.0f), 8.0f);
+            quickdns::AddRoundedRect(smartCardPath, Gdiplus::RectF(static_cast<float>(marginX), 472.0f, static_cast<float>(contentW), totalSmartH), 8.0f);
             g.FillPath(&cardBgBr, &smartCardPath);
             g.DrawPath(&cardBorderPen, &smartCardPath);
 
-            Gdiplus::RectF rcSmartSub(static_cast<float>(marginX + 14), 508.0f, static_cast<float>(contentW - 28), 28.0f);
-            Gdiplus::StringFormat sfSmartSub;
-            sfSmartSub.SetTrimming(Gdiplus::StringTrimmingWord);
-            g.DrawString(L"Отметьте, если сервер предоставляет функцию обхода блокировок и стриминга",
-                -1, &fontSub, rcSmartSub, &sfSmartSub, &textSecBr);
+            Gdiplus::RectF rcSmartSub(static_cast<float>(marginX + 14), 472.0f + textTopPadding, static_cast<float>(contentW - 28), textH + 5.0f);
+            g.DrawString(subText.c_str(), -1, &fontSub, rcSmartSub, &sfSmartSub, &textSecBr);
         }
 
         BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);

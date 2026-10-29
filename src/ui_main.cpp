@@ -1841,14 +1841,21 @@ void MainWindow::update_status_card() {
             std::string adPri = wide_to_utf8(adapter.dns_ipv4[0]);
             std::string adSec = adapter.dns_ipv4.size() > 1 ? wide_to_utf8(adapter.dns_ipv4[1]) : "";
 
+            enum class MatchQuality { None, Partial, PrimaryOnly, Exact };
+            MatchQuality bestQuality = MatchQuality::None;
             const DnsProfile* matchedProfile = nullptr;
 
             // 1. Exact match (primary == adPri and secondary matches or is empty)
             for (const auto& p : m_profiles) {
                 if (p.is_dhcp) continue;
-                if (p.primary_ipv4 == adPri && (adSec.empty() || p.secondary_ipv4 == adSec || p.secondary_ipv4.empty())) {
-                    matchedProfile = &p;
-                    break;
+                if (p.primary_ipv4 == adPri) {
+                    bool secMatches = (p.secondary_ipv4.empty() && adSec.empty()) ||
+                                      (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adSec);
+                    if (secMatches) {
+                        matchedProfile = &p;
+                        bestQuality = MatchQuality::Exact;
+                        break;
+                    }
                 }
             }
 
@@ -1858,6 +1865,7 @@ void MainWindow::update_status_card() {
                     if (p.is_dhcp) continue;
                     if (p.primary_ipv4 == adPri) {
                         matchedProfile = &p;
+                        bestQuality = MatchQuality::PrimaryOnly;
                         break;
                     }
                 }
@@ -1871,6 +1879,7 @@ void MainWindow::update_status_card() {
                         if (p.is_dhcp) continue;
                         if (p.primary_ipv4 == adIp || (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adIp)) {
                             matchedProfile = &p;
+                            bestQuality = MatchQuality::Partial;
                             break;
                         }
                     }
@@ -1887,6 +1896,7 @@ void MainWindow::update_status_card() {
                         std::string adIp = wide_to_utf8(adIpWide);
                         if (optP->primary_ipv4 == adIp || optP->secondary_ipv4 == adIp) {
                             matchedProfile = &(*optP);
+                            bestQuality = MatchQuality::Partial;
                             break;
                         }
                     }
@@ -1895,7 +1905,13 @@ void MainWindow::update_status_card() {
 
             if (matchedProfile) {
                 std::wstring pName = utf8_to_wide(matchedProfile->name);
-                badge = L"Статус: Активен " + pName;
+                if (bestQuality == MatchQuality::Exact) {
+                    badge = L"Статус: Активен " + pName;
+                } else if (bestQuality == MatchQuality::PrimaryOnly) {
+                    badge = L"Статус: Активен " + pName + L" (основной IP)";
+                } else {
+                    badge = L"Статус: Частичный / устаревший DNS (" + pName + L")";
+                }
             }
         }
         SetWindowTextW(m_hStatusBadge, badge.c_str());

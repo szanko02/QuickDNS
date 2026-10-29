@@ -840,7 +840,13 @@ int SmartDnsDialog::calculate_item_height(const SmartDnsEntry& entry, int cardWi
     curH += headerLineY + 28.0f;
 
     // 2. Addresses row (IPv4 + DoH)
-    curH += 22.0f;
+    std::wstring addrStr = L"IPv4: " + entry.primary_ipv4;
+    if (!entry.secondary_ipv4.empty()) addrStr += L", " + entry.secondary_ipv4;
+    if (!entry.doh_template.empty()) addrStr += L"   |   DoH: " + entry.doh_template;
+    float maxAddrW = static_cast<float>(std::max(200, cardWidth - 36));
+    int addrCharsPerLine = std::max(25, static_cast<int>(maxAddrW / 7.5f));
+    int addrLines = std::max(1, static_cast<int>((addrStr.length() + addrCharsPerLine - 1) / addrCharsPerLine));
+    curH += addrLines * 20.0f + 2.0f;
 
     // 3. Status row (UDP/DoH verified)
     if (entry.is_verified) {
@@ -1199,8 +1205,17 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
     std::wstring addrStr = L"IPv4: " + e.primary_ipv4;
     if (!e.secondary_ipv4.empty()) addrStr += L", " + e.secondary_ipv4;
     if (!e.doh_template.empty()) addrStr += L"   |   DoH: " + e.doh_template;
-    g.DrawString(addrStr.c_str(), -1, &fontSub, Gdiplus::PointF(curCardX, curCardY), &textSecBr);
-    curCardY += 20.0f;
+
+    Gdiplus::StringFormat sfAddr;
+    sfAddr.SetTrimming(Gdiplus::StringTrimmingWord);
+    sfAddr.SetFormatFlags(Gdiplus::StringFormatFlagsLineLimit);
+    float maxAddrW = static_cast<float>(width) - 36.0f;
+    Gdiplus::RectF addrMeasured;
+    g.MeasureString(addrStr.c_str(), -1, &fontSub, Gdiplus::SizeF(maxAddrW, 0.0f), &sfAddr, &addrMeasured);
+    float addrH = std::max(20.0f, addrMeasured.Height);
+    Gdiplus::RectF addrRect(curCardX, curCardY, maxAddrW, addrH);
+    g.DrawString(addrStr.c_str(), -1, &fontSub, addrRect, &sfAddr, &textSecBr);
+    curCardY += addrH + 2.0f;
 
     if (e.is_verified) {
         std::wstring statStr = L"Статус: UDP " + (e.ping_ms > 0 ? std::to_wstring(e.ping_ms) + L" ms" : L"тайм-аут");
