@@ -8,8 +8,13 @@
 
 namespace quickdns {
 
+#ifdef OVERRIDE_APP_VERSION
+constexpr const char* APP_VERSION = OVERRIDE_APP_VERSION;
+constexpr const wchar_t* APP_VERSION_W = OVERRIDE_APP_VERSION_W;
+#else
 constexpr const char* APP_VERSION = "2.0.1";
 constexpr const wchar_t* APP_VERSION_W = L"2.0.1";
+#endif
 
 struct ReleaseInfo {
     std::string tag_name;       // e.g. "v2.0.1"
