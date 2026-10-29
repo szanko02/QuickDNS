@@ -45,18 +45,18 @@ void test_version_comparison() {
 }
 
 void test_github_api_query() {
-    // Check against live repository for tag v2.0.0
+    // Check against live repository
     auto optInfo = AppUpdater::check_github_update("1.7.0");
     if (optInfo.has_value()) {
         const auto& info = optInfo.value();
         TEST_CHECK(!info.tag_name.empty(), "GitHub API returned release tag: " + info.tag_name);
-        TEST_CHECK(info.semver == "2.0.0" || info.tag_name == "v2.0.0", "GitHub API latest tag is 2.0.0");
+        TEST_CHECK(info.semver >= "2.0.0", "GitHub API latest tag is >= 2.0.0: " + info.semver);
         TEST_CHECK(!info.download_url.empty(), "Download URL found: " + info.download_url);
-        TEST_CHECK(info.is_newer, "v2.0.0 is correctly detected as newer than 1.7.0");
+        TEST_CHECK(info.is_newer, "v" + info.semver + " is correctly detected as newer than 1.7.0");
 
-        auto optSame = AppUpdater::check_github_update("2.0.0");
+        auto optSame = AppUpdater::check_github_update(info.semver);
         if (optSame.has_value()) {
-            TEST_CHECK(!optSame->is_newer, "v2.0.0 is correctly detected as not newer than 2.0.0");
+            TEST_CHECK(!optSame->is_newer, "Latest release is correctly detected as not newer than itself");
         }
     } else {
         std::cout << "[WARN] GitHub API unreachable (network offline?); skipping remote query." << std::endl;

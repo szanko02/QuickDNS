@@ -15,7 +15,7 @@
 
 <br/>
 
-### [Скачать релиз v2.0.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
+### [Скачать релиз v2.0.1 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
 > Не требует установки. Скачайте архив или файл `QuickDNS.exe` и запустите.
 
 </div>
@@ -85,7 +85,7 @@ QuickDNS автоматизирует этот процесс:
 
 ## Инструкция по использованию
 
-1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v2.0.0-Portable.zip`.
+1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v2.0.1-Portable.zip`.
 2. Запустите **`QuickDNS.exe`** (при первом запуске подтвердите стандартный запрос UAC для доступа к сетевым параметрам).
 3. Программа автоматически выберет ваш активный адаптер (Wi-Fi или Ethernet).
 4. Выберите нужный DNS-профиль из выпадающего списка.

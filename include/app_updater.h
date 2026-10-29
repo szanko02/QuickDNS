@@ -8,6 +8,9 @@
 
 namespace quickdns {
 
+constexpr const char* APP_VERSION = "2.0.1";
+constexpr const wchar_t* APP_VERSION_W = L"2.0.1";
+
 struct ReleaseInfo {
     std::string tag_name;       // e.g. "v2.0.1"
     std::string semver;         // e.g. "2.0.1"
@@ -25,7 +28,7 @@ public:
 
     // Queries GitHub Releases API for szanko02/QuickDNS/releases/latest
     static std::optional<ReleaseInfo> check_github_update(
-        const std::string& currentVersion = "2.0.0",
+        const std::string& currentVersion = APP_VERSION,
         const std::string& repoOwner = "szanko02",
         const std::string& repoName = "QuickDNS"
     );

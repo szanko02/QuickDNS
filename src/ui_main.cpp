@@ -31,7 +31,7 @@ using namespace quickdns;
 namespace {
     constexpr const wchar_t* WINDOW_CLASS_NAME = L"QuickDNS_MainWindowClass";
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
-    constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v2.0.0 — Быстрая смена DNS в 1 клик";
+    constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v2.0.1 — Быстрая смена DNS в 1 клик";
 
     constexpr int WINDOW_CLIENT_WIDTH  = 580;
     constexpr int WINDOW_CLIENT_HEIGHT = 760;
@@ -477,7 +477,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         delete pInfo;
 
         if (!info.is_newer) {
-            std::wstring msg = L"У вас установлена последняя версия QuickDNS (v2.0.0).\nОбновлений не требуется.";
+            std::wstring msg = L"У вас установлена последняя версия QuickDNS (v" + std::wstring(quickdns::APP_VERSION_W) + L").\nОбновлений не требуется.";
             MessageBoxW(hWnd, msg.c_str(), L"QuickDNS актуален", MB_OK | MB_ICONINFORMATION);
             return 0;
         }
@@ -907,7 +907,7 @@ void MainWindow::create_controls() {
     int updateBtnH = 28;
     int btnY = startY - 3;
 
-    m_hTitleLabel = CreateWindowExW(0, L"STATIC", L"QuickDNS v2.0.0 — Менеджер DNS",
+    m_hTitleLabel = CreateWindowExW(0, L"STATIC", L"QuickDNS v2.0.1 — Менеджер DNS",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth - themeBtnSize - updateBtnW - 16, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -1132,7 +1132,7 @@ void MainWindow::create_controls() {
     startY += 30 + 14;
 
     // 5. Footer Version Badge
-    m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v2.0.0 • Portable",
+    m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v2.0.1 • Portable",
         WS_CHILD | WS_VISIBLE | SS_CENTER,
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -1779,7 +1779,7 @@ void MainWindow::setup_tray_icon() {
     m_nid.uCallbackMessage = WM_APP_TRAYMSG;
     m_nid.hIcon = LoadIconW(m_hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     if (!m_nid.hIcon) m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(m_nid.szTip, L"QuickDNS v2.0.0 — Быстрая смена DNS");
+    wcscpy_s(m_nid.szTip, L"QuickDNS v2.0.1 — Быстрая смена DNS");
 
     Shell_NotifyIconW(NIM_ADD, &m_nid);
 }
@@ -2070,7 +2070,7 @@ void MainWindow::check_manual_update() {
 
     HWND hWnd = m_hWnd;
     std::thread([hWnd, this]() {
-        auto optInfo = quickdns::AppUpdater::check_github_update("2.0.0");
+        auto optInfo = quickdns::AppUpdater::check_github_update(quickdns::APP_VERSION);
         m_isCheckingUpdate = false;
 
         auto* pResult = optInfo ? new quickdns::ReleaseInfo(*optInfo) : nullptr;
