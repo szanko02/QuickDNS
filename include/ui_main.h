@@ -11,6 +11,7 @@
 #include <mutex>
 #include "dns_manager.h"
 #include "config_manager.h"
+#include "app_updater.h"
 #include "resource.h"
 
 // Custom window messages
@@ -19,6 +20,7 @@
 #define WM_APP_REFRESH_STATUS   (WM_APP + 3)
 #define WM_APP_PING_UPDATED     (WM_APP + 4)
 #define WM_APP_RESTORE_INSTANCE (WM_APP + 5)
+#define WM_APP_UPDATE_RESULT    (WM_APP + 6)
 
 class MainWindow {
 public:
@@ -56,9 +58,14 @@ private:
     // Data binding & UI updates
     void refresh_network_adapters();
     void populate_profiles_combobox();
+    void auto_sync_profile_with_adapter();
     void update_status_card();
     void on_adapter_changed();
     void on_profile_selected();
+
+    // App Update
+    void check_manual_update();
+    void prompt_and_install_update(const quickdns::ReleaseInfo& info);
 
     // Custom Graphical Rendering
     void draw_custom_button(DRAWITEMSTRUCT* pDis);
@@ -126,6 +133,7 @@ private:
     HWND m_hBtnWinNetwork = nullptr;
     HWND m_hBtnAddProfile = nullptr;
     HWND m_hBtnDeleteProfile = nullptr;
+    HWND m_hBtnCheckUpdate = nullptr;
 
     HWND m_hStatusAdapterName = nullptr;
     HWND m_hStatusDnsList = nullptr;
@@ -150,6 +158,7 @@ private:
     int m_selectedProfileIndex = -1;
 
     std::atomic<bool> m_isBusy = false;
+    std::atomic<bool> m_isCheckingUpdate{false};
 
     // Ping Monitor State
     std::thread m_pingWorker;

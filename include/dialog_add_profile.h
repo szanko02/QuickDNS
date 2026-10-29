@@ -8,13 +8,17 @@
 
 class AddProfileDialog {
 public:
-    static std::optional<DnsProfile> show(HWND hParent, HINSTANCE hInstance, bool isDarkMode = true);
+    static std::optional<DnsProfile> show(HWND hParent, HINSTANCE hInstance, bool isDarkMode = true,
+                                          const std::wstring& defaultPriIp = L"",
+                                          const std::wstring& defaultSecIp = L"");
 
     HFONT get_font_bold() const { return m_hFontBold; }
     bool is_dark_mode() const { return m_isDarkMode; }
 
 private:
-    AddProfileDialog(HWND hParent, HINSTANCE hInstance, bool isDarkMode);
+    AddProfileDialog(HWND hParent, HINSTANCE hInstance, bool isDarkMode,
+                     const std::wstring& defaultPriIp = L"",
+                     const std::wstring& defaultSecIp = L"");
     ~AddProfileDialog();
 
     bool create_dialog_window();
@@ -51,6 +55,9 @@ private:
     HWND m_hCheckSmartDns = nullptr;
     HWND m_hBtnSave = nullptr;
     HWND m_hBtnCancel = nullptr;
+
+    std::wstring m_defaultPriIp;
+    std::wstring m_defaultSecIp;
 
     std::optional<DnsProfile> m_result;
     bool m_finished = false;

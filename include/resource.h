@@ -27,6 +27,7 @@
 #define IDC_BTN_COPY_DOH            1024
 #define IDC_BTN_WIN_NETWORK         1025
 #define IDC_BTN_SMARTDNS_CATALOG    1026
+#define IDC_BTN_CHECK_UPDATE        1027
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101
@@ -58,5 +59,6 @@
 #define IDM_TRAY_FLUSH_DNS          2003
 #define IDM_TRAY_EXIT               2004
 #define IDM_TRAY_VERIFY_SMARTDNS    2005
+#define IDM_TRAY_CHECK_UPDATE       2006
 #define IDM_TRAY_PRESET_FIRST       2100
 #define IDM_TRAY_PRESET_LAST        2199

@@ -98,7 +98,7 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] Resource compilation failed. & exit /b 1 )
 "!RC!" -I include -I res res\resource_diag.rc -O coff -o build\resource_diag.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Diag resource compilation failed. & exit /b 1 )
 
-echo [2/6] Compiling DNS Network Engine, Verifier and Benchmark...
+echo [2/6] Compiling DNS Network Engine, Verifier, Updater and Benchmark...
 "!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -c src\dns_manager.cpp -o build\dns_manager.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] DNS manager compilation failed. & exit /b 1 )
 
@@ -107,6 +107,9 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] DNS benchmark compilation failed. & exit /b
 
 "!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -c src\smartdns_verifier.cpp -o build\smartdns_verifier.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] SmartDNS verifier compilation failed. & exit /b 1 )
+
+"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -c src\app_updater.cpp -o build\app_updater.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] App updater compilation failed. & exit /b 1 )
 
 echo [3/6] Compiling Config Manager...
 "!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -c src\config_manager.cpp -o build\config_manager.o
@@ -129,14 +132,14 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] UI compilation failed. & exit /b 1 )
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Main compilation failed. & exit /b 1 )
 
 echo [5/6] Linking QuickDNS.exe with embedded App Icon...
-"!CXX!" -std=c++20 -O2 -mwindows -municode -static -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dns_benchmark.o build\smartdns_verifier.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus
+"!CXX!" -std=c++20 -O2 -mwindows -municode -static -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dns_benchmark.o build\smartdns_verifier.o build\app_updater.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking QuickDNS.exe failed. & exit /b 1 )
 if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
 move /Y "%~dp0QuickDNS.exe" "%~dp0QuickDNS.exe.old" >nul 2>&1
 copy /Y build\QuickDNS.exe "%~dp0QuickDNS.exe" >nul
 if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
 
-echo [6/6] Linking Diagnostic tools [test_dns.exe, test_config.exe, test_benchmark.exe, test_smartdns_verifier.exe]...
+echo [6/6] Linking Diagnostic tools [test_dns.exe, test_config.exe, test_benchmark.exe, test_smartdns_verifier.exe, test_updater.exe]...
 "!CXX!" -std=c++20 -O2 -static -I include tests\test_dns.cpp build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_dns.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_dns.exe failed. & exit /b 1 )
 
@@ -149,11 +152,16 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_benchmark.exe failed. & exit /
 "!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_smartdns_verifier.cpp build\smartdns_verifier.o build\config_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -luuid -lole32 -o build\test_smartdns_verifier.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_smartdns_verifier.exe failed. & exit /b 1 )
 
+"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_updater.cpp build\app_updater.o build\resource_diag.o -lwinhttp -lshell32 -o build\test_updater.exe
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_updater.exe failed. & exit /b 1 )
+
 echo ===================================================
 echo [SUCCESS] All executables built successfully!
 echo  - Main App:   %~dp0QuickDNS.exe
 echo  - Tests:      %~dp0build\test_dns.exe
 echo                %~dp0build\test_config.exe
 echo                %~dp0build\test_benchmark.exe
+echo                %~dp0build\test_smartdns_verifier.exe
+echo                %~dp0build\test_updater.exe
 echo                %~dp0build\test_smartdns_verifier.exe
 echo ===================================================

@@ -310,6 +310,9 @@ bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
         return false;
     }
 
+    // Clean up .old executable from previous update
+    quickdns::AppUpdater::cleanup_previous_update();
+
     apply_modern_theme();
     setup_fonts();
     create_controls();
@@ -325,6 +328,7 @@ bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
     // Load initial network & profile data
     refresh_network_adapters();
     populate_profiles_combobox();
+    auto_sync_profile_with_adapter();
     update_status_card();
 
     // Start background ping worker (optimal interval: 3.0s = 60s history window)
@@ -456,6 +460,32 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         return 0;
     }
 
+    case WM_APP_UPDATE_RESULT: {
+        if (m_hBtnCheckUpdate) {
+            EnableWindow(m_hBtnCheckUpdate, TRUE);
+            SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
+        }
+
+        auto* pInfo = reinterpret_cast<quickdns::ReleaseInfo*>(lParam);
+        if (!pInfo) {
+            MessageBoxW(hWnd, L"Не удалось связаться с сервером GitHub Releases. Проверьте интернет-соединение.",
+                        L"Ошибка обновления", MB_OK | MB_ICONWARNING);
+            return 0;
+        }
+
+        quickdns::ReleaseInfo info = *pInfo;
+        delete pInfo;
+
+        if (!info.is_newer) {
+            std::wstring msg = L"У вас установлена последняя версия QuickDNS (v2.0.0).\nОбновлений не требуется.";
+            MessageBoxW(hWnd, msg.c_str(), L"QuickDNS актуален", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+
+        prompt_and_install_update(info);
+        return 0;
+    }
+
     case WM_COMMAND: {
         int wmId = LOWORD(wParam);
         int wmEvent = HIWORD(wParam);
@@ -470,6 +500,10 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         }
         if (wmId == IDC_BTN_APPLY) {
             apply_selected_dns();
+            return 0;
+        }
+        if (wmId == IDC_BTN_CHECK_UPDATE || wmId == IDM_TRAY_CHECK_UPDATE) {
+            check_manual_update();
             return 0;
         }
         if (wmId == IDC_BTN_BENCHMARK) {
@@ -868,16 +902,27 @@ void MainWindow::create_controls() {
     int startY = 14;
 
     // 1. Status Card Header
+    int themeBtnSize = 36;
+    int updateBtnW = 165;
+    int updateBtnH = 28;
+    int btnY = startY - 3;
+
     m_hTitleLabel = CreateWindowExW(0, L"STATIC", L"QuickDNS v2.0.0 — Менеджер DNS",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth - 44, 24,
+        marginX, startY, contentWidth - themeBtnSize - updateBtnW - 16, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
     SendMessageW(m_hTitleLabel, WM_SETFONT, (WPARAM)m_hFontHeader, TRUE);
+
+    // Update check button in top header
+    m_hBtnCheckUpdate = CreateWindowExW(0, WC_BUTTONW, L"Проверить обновления",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX + contentWidth - themeBtnSize - updateBtnW - 8, btnY, updateBtnW, updateBtnH,
+        m_hWnd, (HMENU)IDC_BTN_CHECK_UPDATE, m_hInstance, nullptr);
 
     // Theme Switcher button in top-right corner
     m_hBtnThemeToggle = CreateWindowExW(0, WC_BUTTONW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + contentWidth - 36, startY - 3, 36, 28,
+        marginX + contentWidth - themeBtnSize, btnY, themeBtnSize, updateBtnH,
         m_hWnd, (HMENU)IDC_BTN_THEME_TOGGLE, m_hInstance, nullptr);
 
     // Tooltip for Theme Switcher
@@ -1105,6 +1150,7 @@ void MainWindow::create_controls() {
     attach_button_effects(m_hBtnCopyIp, 8);
     attach_button_effects(m_hBtnCopyDoh, 9);
     attach_button_effects(m_hBtnThemeToggle, 10);
+    attach_button_effects(m_hBtnCheckUpdate, 15);
 }
 
 void MainWindow::reposition_controls() {
@@ -1120,11 +1166,21 @@ void MainWindow::reposition_controls() {
     int startY = 14;
 
     // 1. Status Card Header
-    if (m_hTitleLabel) {
-        SetWindowPos(m_hTitleLabel, nullptr, marginX, startY, contentWidth - 44, 24, SWP_NOZORDER);
-    }
+    int themeBtnSize = 36;
+    int updateBtnW = 165;
+    int updateBtnH = 28;
+    int btnY = startY - 3;
+
     if (m_hBtnThemeToggle) {
-        SetWindowPos(m_hBtnThemeToggle, nullptr, marginX + contentWidth - 36, startY - 3, 36, 28, SWP_NOZORDER);
+        SetWindowPos(m_hBtnThemeToggle, nullptr, marginX + contentWidth - themeBtnSize, btnY, themeBtnSize, updateBtnH, SWP_NOZORDER);
+    }
+    if (m_hBtnCheckUpdate) {
+        SetWindowPos(m_hBtnCheckUpdate, nullptr, marginX + contentWidth - themeBtnSize - updateBtnW - 8, btnY, updateBtnW, updateBtnH, SWP_NOZORDER);
+    }
+    if (m_hTitleLabel) {
+        int titleW = contentWidth - themeBtnSize - updateBtnW - 16;
+        if (titleW < 120) titleW = 120;
+        SetWindowPos(m_hTitleLabel, nullptr, marginX, startY, titleW, 24, SWP_NOZORDER);
     }
     startY += 30; // 44
 
@@ -1920,8 +1976,180 @@ void MainWindow::update_status_card() {
     trigger_immediate_ping();
 }
 
+void MainWindow::auto_sync_profile_with_adapter() {
+    if (m_selectedAdapterIndex < 0 || m_selectedAdapterIndex >= static_cast<int>(m_adapters.size())) {
+        return;
+    }
+
+    const auto& adapter = m_adapters[m_selectedAdapterIndex];
+
+    // 1. DHCP
+    if (adapter.is_dhcp_dns || adapter.dns_ipv4.empty()) {
+        for (size_t i = 0; i < m_profiles.size(); ++i) {
+            if (m_profiles[i].is_dhcp) {
+                m_selectedProfileIndex = static_cast<int>(i);
+                ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                on_profile_selected();
+                return;
+            }
+        }
+        return;
+    }
+
+    std::string adPri = wide_to_utf8(adapter.dns_ipv4[0]);
+    std::string adSec = adapter.dns_ipv4.size() > 1 ? wide_to_utf8(adapter.dns_ipv4[1]) : "";
+
+    // 2. Exact match (primary matches and secondary matches or is empty)
+    for (size_t i = 0; i < m_profiles.size(); ++i) {
+        const auto& p = m_profiles[i];
+        if (p.is_dhcp) continue;
+        if (p.primary_ipv4 == adPri) {
+            bool secMatches = (p.secondary_ipv4.empty() && adSec.empty()) ||
+                              (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adSec);
+            if (secMatches) {
+                m_selectedProfileIndex = static_cast<int>(i);
+                ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                on_profile_selected();
+                return;
+            }
+        }
+    }
+
+    // 3. Primary matches
+    for (size_t i = 0; i < m_profiles.size(); ++i) {
+        const auto& p = m_profiles[i];
+        if (p.is_dhcp) continue;
+        if (p.primary_ipv4 == adPri) {
+            m_selectedProfileIndex = static_cast<int>(i);
+            ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+            on_profile_selected();
+            return;
+        }
+    }
+
+    // 4. Any IP match in adapter.dns_ipv4
+    for (size_t i = 0; i < m_profiles.size(); ++i) {
+        const auto& p = m_profiles[i];
+        if (p.is_dhcp) continue;
+        for (const auto& adIpWide : adapter.dns_ipv4) {
+            std::string adIp = wide_to_utf8(adIpWide);
+            if (p.primary_ipv4 == adIp || (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adIp)) {
+                m_selectedProfileIndex = static_cast<int>(i);
+                ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                on_profile_selected();
+                return;
+            }
+        }
+    }
+
+    // 5. Custom / Unlisted DNS:
+    // Safely auto-populate the IP address fields directly with the adapter's active addresses
+    std::wstring combinedIps = adapter.dns_ipv4[0];
+    if (adapter.dns_ipv4.size() > 1 && !adapter.dns_ipv4[1].empty()) {
+        combinedIps += L", " + adapter.dns_ipv4[1];
+    }
+    if (m_hEditProfileIp) {
+        SetWindowTextW(m_hEditProfileIp, combinedIps.c_str());
+    }
+    if (m_hEditProfileDoh) {
+        SetWindowTextW(m_hEditProfileDoh, L"");
+    }
+    if (m_hProfileDetails) {
+        SetWindowTextW(m_hProfileDetails, L"Обнаружен активный DNS сетевого адаптера (кастомный).");
+    }
+}
+
+void MainWindow::check_manual_update() {
+    if (m_isCheckingUpdate) return;
+    m_isCheckingUpdate = true;
+
+    if (m_hBtnCheckUpdate) {
+        EnableWindow(m_hBtnCheckUpdate, FALSE);
+        SetWindowTextW(m_hBtnCheckUpdate, L"Проверка...");
+    }
+
+    HWND hWnd = m_hWnd;
+    std::thread([hWnd, this]() {
+        auto optInfo = quickdns::AppUpdater::check_github_update("2.0.0");
+        m_isCheckingUpdate = false;
+
+        auto* pResult = optInfo ? new quickdns::ReleaseInfo(*optInfo) : nullptr;
+        PostMessageW(hWnd, WM_APP_UPDATE_RESULT, 0, reinterpret_cast<LPARAM>(pResult));
+    }).detach();
+}
+
+void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
+    std::wstring titleWide = utf8_to_wide(info.title);
+    std::wstring verWide = utf8_to_wide(info.semver);
+    std::wstring notesWide = utf8_to_wide(info.notes);
+
+    std::wstring prompt = L"Доступна новая версия QuickDNS v" + verWide + L"!\n\n"
+                          L"Название: " + (titleWide.empty() ? (L"QuickDNS v" + verWide) : titleWide) + L"\n\n";
+
+    if (!notesWide.empty()) {
+        if (notesWide.length() > 500) {
+            notesWide = notesWide.substr(0, 500) + L"...";
+        }
+        prompt += L"Что нового:\n" + notesWide + L"\n\n";
+    }
+
+    prompt += L"Скачать и установить обновление прямо сейчас?";
+
+    int res = MessageBoxW(m_hWnd, prompt.c_str(), L"Доступно обновление QuickDNS", MB_YESNO | MB_ICONQUESTION);
+    if (res != IDYES) {
+        return;
+    }
+
+    if (info.download_url.empty()) {
+        MessageBoxW(m_hWnd, L"Не найден прямой файл обновления. Откройте страницу релиза на GitHub.",
+                    L"Ошибка", MB_OK | MB_ICONERROR);
+        ShellExecuteW(nullptr, L"open", L"https://github.com/szanko02/QuickDNS/releases/latest", nullptr, nullptr, SW_SHOW);
+        return;
+    }
+
+    wchar_t currentExe[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, currentExe, MAX_PATH);
+    std::wstring exeDir = currentExe;
+    size_t lastSlash = exeDir.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos) {
+        exeDir = exeDir.substr(0, lastSlash + 1);
+    } else {
+        exeDir = L".\\";
+    }
+
+    std::wstring tempExe = exeDir + L"QuickDNS_update.exe";
+
+    if (m_hBtnCheckUpdate) {
+        EnableWindow(m_hBtnCheckUpdate, FALSE);
+        SetWindowTextW(m_hBtnCheckUpdate, L"Скачивание...");
+    }
+
+    HWND hWnd = m_hWnd;
+    std::wstring dlUrl = utf8_to_wide(info.download_url);
+
+    std::thread([hWnd, dlUrl, tempExe, this]() {
+        bool ok = quickdns::AppUpdater::download_file(dlUrl, tempExe, nullptr);
+        if (ok) {
+            bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe);
+            if (!restarted) {
+                MessageBoxW(hWnd, L"Не удалось применить обновление автоматически. Запустите QuickDNS_update.exe вручную.",
+                            L"Ошибка обновления", MB_OK | MB_ICONERROR);
+            }
+        } else {
+            MessageBoxW(hWnd, L"Не удалось скачать файл обновления. Повторите попытку позже.",
+                        L"Ошибка скачивания", MB_OK | MB_ICONERROR);
+        }
+
+        if (m_hBtnCheckUpdate) {
+            EnableWindow(m_hBtnCheckUpdate, TRUE);
+            SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
+        }
+    }).detach();
+}
+
 void MainWindow::on_adapter_changed() {
     m_selectedAdapterIndex = ComboBox_GetCurSel(m_hComboAdapter);
+    auto_sync_profile_with_adapter();
     update_status_card();
 
     if (m_hBtnWinNetwork && m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
@@ -2095,7 +2323,19 @@ void MainWindow::flush_dns_cache() {
 }
 
 void MainWindow::open_add_profile_dialog() {
-    auto newProfile = AddProfileDialog::show(m_hWnd, m_hInstance, m_isDarkMode);
+    std::wstring prefillPri;
+    std::wstring prefillSec;
+    if (m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
+        const auto& adapter = m_adapters[m_selectedAdapterIndex];
+        if (!adapter.is_dhcp_dns && !adapter.dns_ipv4.empty()) {
+            prefillPri = adapter.dns_ipv4[0];
+            if (adapter.dns_ipv4.size() > 1) {
+                prefillSec = adapter.dns_ipv4[1];
+            }
+        }
+    }
+
+    auto newProfile = AddProfileDialog::show(m_hWnd, m_hInstance, m_isDarkMode, prefillPri, prefillSec);
     if (newProfile.has_value()) {
         m_configManager->add_profile(newProfile.value());
         m_configManager->set_active_profile_id(newProfile.value().id);
@@ -2492,6 +2732,7 @@ void MainWindow::show_tray_context_menu() {
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_RESET_DHCP, L"Сброс на DHCP");
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_FLUSH_DNS, L"Сбросить DNS-кэш");
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_VERIFY_SMARTDNS, L"Проверить и обновить SmartDNS...");
+    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_CHECK_UPDATE, L"Проверить обновления...");
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
     InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_EXIT, L"Выход");
 

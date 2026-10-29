@@ -63,6 +63,7 @@ add_library(quickdns_core STATIC
     src/dns_benchmark.cpp
     src/config_manager.cpp
     src/smartdns_verifier.cpp
+    src/app_updater.cpp
 )
 target_link_libraries(quickdns_core PUBLIC ${WIN32_LIBS})
 
@@ -112,4 +113,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_smartdns_verifier.cpp")
     add_executable(test_smartdns_verifier tests/test_smartdns_verifier.cpp ${DIAG_RC})
     target_link_libraries(test_smartdns_verifier PRIVATE quickdns_core ${WIN32_LIBS})
     add_test(NAME TestSmartDnsVerifier COMMAND test_smartdns_verifier)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_updater.cpp")
+    add_executable(test_updater tests/test_updater.cpp ${DIAG_RC})
+    target_link_libraries(test_updater PRIVATE quickdns_core ${WIN32_LIBS})
+    add_test(NAME TestUpdater COMMAND test_updater)
 endif()

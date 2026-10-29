@@ -241,8 +241,10 @@ namespace {
     }
 }
 
-std::optional<DnsProfile> AddProfileDialog::show(HWND hParent, HINSTANCE hInstance, bool isDarkMode) {
-    AddProfileDialog dlg(hParent, hInstance, isDarkMode);
+std::optional<DnsProfile> AddProfileDialog::show(HWND hParent, HINSTANCE hInstance, bool isDarkMode,
+                                                  const std::wstring& defaultPriIp,
+                                                  const std::wstring& defaultSecIp) {
+    AddProfileDialog dlg(hParent, hInstance, isDarkMode, defaultPriIp, defaultSecIp);
     if (!dlg.create_dialog_window()) {
         return std::nullopt;
     }
@@ -268,8 +270,11 @@ std::optional<DnsProfile> AddProfileDialog::show(HWND hParent, HINSTANCE hInstan
     return dlg.m_result;
 }
 
-AddProfileDialog::AddProfileDialog(HWND hParent, HINSTANCE hInstance, bool isDarkMode)
-    : m_hParent(hParent), m_hInstance(hInstance), m_isDarkMode(isDarkMode)
+AddProfileDialog::AddProfileDialog(HWND hParent, HINSTANCE hInstance, bool isDarkMode,
+                                   const std::wstring& defaultPriIp,
+                                   const std::wstring& defaultSecIp)
+    : m_hParent(hParent), m_hInstance(hInstance), m_isDarkMode(isDarkMode),
+      m_defaultPriIp(defaultPriIp), m_defaultSecIp(defaultSecIp)
 {
     auto pal = quickdns::GetPalette(m_isDarkMode);
     m_hbrBg = CreateSolidBrush(pal.bg);
@@ -457,6 +462,14 @@ void AddProfileDialog::create_controls() {
 
     attach_button_effects(m_hBtnSave, 301);
     attach_button_effects(m_hBtnCancel, 302);
+
+    if (!m_defaultPriIp.empty()) {
+        SetWindowTextW(m_hEditPri, m_defaultPriIp.c_str());
+        SetWindowTextW(m_hEditName, L"DNS Адаптера");
+    }
+    if (!m_defaultSecIp.empty()) {
+        SetWindowTextW(m_hEditSec, m_defaultSecIp.c_str());
+    }
 
     reposition_controls();
 }
