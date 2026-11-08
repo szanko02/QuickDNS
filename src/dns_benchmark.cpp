@@ -4,6 +4,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <future>
@@ -53,8 +54,64 @@ std::string DnsBenchmark::sanitize_domain(const std::string& input_domain) {
 
     for (char& c : domain) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
 
-    if (domain.empty()) domain = "google.com";
-    return domain;
+    while (!domain.empty() && domain.back() == '.') {
+        domain.pop_back();
+    }
+
+    std::string result;
+    size_t start = 0;
+    while (start < domain.size()) {
+        size_t dot = domain.find('.', start);
+        if (dot == std::string::npos) dot = domain.size();
+        size_t len = dot - start;
+        if (len > 0) {
+            if (len > 63) {
+                len = 63;
+            }
+            if (!result.empty()) {
+                result.push_back('.');
+            }
+            result.append(domain, start, len);
+        }
+        start = dot + 1;
+    }
+
+    if (result.size() > 253) {
+        result.resize(253);
+        while (!result.empty() && result.back() == '.') {
+            result.pop_back();
+        }
+    }
+
+    if (result.empty()) {
+        result = "google.com";
+    }
+    return result;
+}
+
+bool DnsBenchmark::validate_dns_response(const uint8_t* buf, size_t len, uint16_t expected_txid) {
+    if (!buf || len < 12) {
+        return false;
+    }
+
+    uint16_t txid = (static_cast<uint16_t>(buf[0]) << 8) | static_cast<uint16_t>(buf[1]);
+    if (txid != expected_txid) {
+        return false;
+    }
+
+    // QR bit is bit 7 of byte 2: must be 1 for DNS response
+    bool qr_bit = (buf[2] & 0x80) != 0;
+    if (!qr_bit) {
+        return false;
+    }
+
+    // RCODE is low 4 bits of byte 3: must be 0 (NOERROR) or 3 (NXDOMAIN)
+    uint8_t rcode = buf[3] & 0x0F;
+    if (rcode != 0 && rcode != 3) {
+        return false;
+    }
+
+    return true;
 }
 
 int DnsBenchmark::ping_dns_server_domain(const std::string& ip_str, const std::string& target_domain, int timeout_ms) {
@@ -81,12 +138,23 @@ int DnsBenchmark::ping_dns_server_domain(const std::string& ip_str, const std::s
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&to), sizeof(to));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&to), sizeof(to));
 
+    const sockaddr* p_sa = nullptr;
+    int sa_len = 0;
     if (is_v4) {
         sa4.sin_family = AF_INET;
         sa4.sin_port = htons(53);
+        p_sa = reinterpret_cast<const sockaddr*>(&sa4);
+        sa_len = sizeof(sa4);
     } else {
         sa6.sin6_family = AF_INET6;
         sa6.sin6_port = htons(53);
+        p_sa = reinterpret_cast<const sockaddr*>(&sa6);
+        sa_len = sizeof(sa6);
+    }
+
+    if (connect(sock, p_sa, sa_len) == SOCKET_ERROR) {
+        closesocket(sock);
+        return -1;
     }
 
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -110,9 +178,9 @@ int DnsBenchmark::ping_dns_server_domain(const std::string& ip_str, const std::s
         size_t dot = domain.find('.', start);
         if (dot == std::string::npos) dot = domain.size();
         size_t len = dot - start;
-        if (len > 0) {
+        if (len > 0 && len <= 63) {
             packet.push_back(static_cast<uint8_t>(len));
-            for (size_t i = start; i < dot; ++i) {
+            for (size_t i = start; i < start + len; ++i) {
                 packet.push_back(static_cast<uint8_t>(domain[i]));
             }
         }
@@ -124,28 +192,17 @@ int DnsBenchmark::ping_dns_server_domain(const std::string& ip_str, const std::s
     packet.push_back(0x00); packet.push_back(0x01); // Class: IN
 
     auto t0 = std::chrono::steady_clock::now();
-    int sent = 0;
-    if (is_v4) {
-        sent = sendto(sock, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
-                      reinterpret_cast<const sockaddr*>(&sa4), sizeof(sa4));
-    } else {
-        sent = sendto(sock, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
-                      reinterpret_cast<const sockaddr*>(&sa6), sizeof(sa6));
-    }
+    int sent = send(sock, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0);
 
     int measured_lat = -1;
     if (sent > 0) {
         char recv_buf[512] = {};
-        sockaddr_storage from{};
-        int from_len = sizeof(from);
-        int received = recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
-                                reinterpret_cast<sockaddr*>(&from), &from_len);
-        if (received >= 12) {
-            uint16_t r_txid = (static_cast<uint8_t>(recv_buf[0]) << 8) | static_cast<uint8_t>(recv_buf[1]);
-            if (r_txid == txid) {
-                auto t1 = std::chrono::steady_clock::now();
-                measured_lat = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
-            }
+        int received = recv(sock, recv_buf, sizeof(recv_buf), 0);
+        if (received >= 12 && validate_dns_response(reinterpret_cast<const uint8_t*>(recv_buf), static_cast<size_t>(received), txid)) {
+            auto t1 = std::chrono::steady_clock::now();
+            auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+            int lat_ms = static_cast<int>((elapsed_us + 999) / 1000);
+            measured_lat = std::max(1, lat_ms);
         }
     }
 
@@ -161,7 +218,7 @@ int DnsBenchmark::ping_dns_server(const std::string& ip_str, int timeout_ms, boo
     std::vector<int> measured_latencies;
     for (const auto& domain : BENCHMARK_DOMAINS) {
         int lat = ping_dns_server_domain(ip_str, domain, timeout_ms);
-        if (lat > 0) {
+        if (lat >= 0) {
             measured_latencies.push_back(lat);
         }
     }
@@ -182,7 +239,6 @@ std::vector<DnsBenchmarkResult> DnsBenchmark::run_benchmark(
     std::vector<DnsBenchmarkResult> results;
     results.reserve(profiles.size());
 
-    std::mutex mtx;
     std::atomic<size_t> completed_count{0};
     const size_t total_count = profiles.size();
 
@@ -196,6 +252,7 @@ std::vector<DnsBenchmarkResult> DnsBenchmark::run_benchmark(
             r.profile_name = utf8_to_wide(p.name);
             r.primary_ip = utf8_to_wide(p.primary_ipv4);
             r.doh_template = utf8_to_wide(p.doh_template);
+            r.is_dhcp = p.is_dhcp;
 
             if (p.is_dhcp) {
                 r.latency_ms = 0;
@@ -249,9 +306,9 @@ std::vector<DnsBenchmarkResult> DnsBenchmark::run_benchmark(
     // 5. Down / Timeout (-1)
     std::sort(results.begin(), results.end(), [](const DnsBenchmarkResult& a, const DnsBenchmarkResult& b) {
         auto score = [](const DnsBenchmarkResult& r) -> int {
-            if (r.latency_ms > 0 && r.latency_ms < 150) return 1000 + r.latency_ms;
+            if (r.is_dhcp) return 3000; // DHCP
+            if (r.latency_ms >= 0 && r.latency_ms < 150) return 1000 + r.latency_ms;
             if (r.latency_ms >= 150 && r.latency_ms <= 350) return 2000 + r.latency_ms;
-            if (r.latency_ms == 0) return 3000; // DHCP
             if (r.latency_ms > 350) return 4000 + r.latency_ms;
             return 99999; // Down / Timeout
         };

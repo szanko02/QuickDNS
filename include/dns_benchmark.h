@@ -20,6 +20,7 @@ struct DnsBenchmarkResult {
     std::wstring primary_ip;
     std::wstring doh_template;
     int latency_ms = -1; // -1 if failed/timed out
+    bool is_dhcp = false;
     DnsQuality quality = DnsQuality::SlowOrDown;
     std::wstring status_text;
     std::wstring quality_label;
@@ -33,6 +34,15 @@ public:
      * @return Clean lower-case domain name, e.g. "youtube.com".
      */
     static std::string sanitize_domain(const std::string& input_domain);
+
+    /**
+     * @brief Validates DNS response header and format.
+     * @param buf Pointer to DNS response packet.
+     * @param len Packet length in bytes.
+     * @param expected_txid Transaction ID from the original query.
+     * @return true if response is valid (len >= 12, txid matches, QR=1, RCODE is 0 or 3), false otherwise.
+     */
+    static bool validate_dns_response(const uint8_t* buf, size_t len, uint16_t expected_txid);
 
     /**
      * @brief Measures DNS query latency against a target DNS IP address in milliseconds for a specific domain.

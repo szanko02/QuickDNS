@@ -185,6 +185,7 @@ private:
     std::vector<size_t> m_filteredIndices;
     std::string m_currentActiveId;
     std::mutex m_itemsMutex;
+    std::mutex m_domainMutex;
 
     int m_selectedIndex = 0;
     int m_hoveredIndex = -1;

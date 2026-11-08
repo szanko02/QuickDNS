@@ -27,6 +27,7 @@ namespace {
     constexpr int DIALOG_CLIENT_HEIGHT = 720;
 
     constexpr UINT WM_APP_BENCHMARK_PING_UPDATE = WM_APP + 20;
+    constexpr UINT WM_APP_BENCHMARK_TIMED_FINISH = WM_APP + 21;
 
     constexpr int IDC_EDIT_BENCHMARK_DOMAIN       = 1210;
     constexpr int IDC_BTN_BENCHMARK_AI_PRESETS    = 1211;
@@ -695,7 +696,10 @@ void BenchmarkDialog::show_ai_presets_menu() {
         for (const auto& entry : AI_PRESETS) {
             if (entry.id == cmd && entry.domain) {
                 SetWindowTextW(m_hEditDomain, utf8_to_wide(entry.domain).c_str());
-                m_targetDomain = entry.domain;
+                {
+                    std::lock_guard<std::mutex> lock(m_domainMutex);
+                    m_targetDomain = entry.domain;
+                }
                 start_timed_test();
                 break;
             }
@@ -708,7 +712,10 @@ void BenchmarkDialog::start_timed_test() {
         wchar_t domBuf[256] = {};
         GetWindowTextW(m_hEditDomain, domBuf, _countof(domBuf));
         std::string rawDomain = wide_to_utf8(domBuf);
-        m_targetDomain = DnsBenchmark::sanitize_domain(rawDomain);
+        {
+            std::lock_guard<std::mutex> lock(m_domainMutex);
+            m_targetDomain = DnsBenchmark::sanitize_domain(rawDomain);
+        }
     }
 
     reset_all_stats();
@@ -862,7 +869,11 @@ void BenchmarkDialog::start_ping_worker() {
             }
 
             size_t count = 0;
-            std::string currentDomain = m_targetDomain;
+            std::string currentDomain;
+            {
+                std::lock_guard<std::mutex> lock(m_domainMutex);
+                currentDomain = m_targetDomain;
+            }
             {
                 std::lock_guard<std::mutex> lock(m_itemsMutex);
                 count = m_items.size();
@@ -940,7 +951,9 @@ void BenchmarkDialog::start_ping_worker() {
             if (m_isTimedRunning && m_targetDurationSec > 0) {
                 m_elapsedSec++;
                 if (m_elapsedSec >= m_targetDurationSec) {
-                    stop_timed_test(true);
+                    if (m_hWnd && IsWindow(m_hWnd)) {
+                        PostMessageW(m_hWnd, WM_APP_BENCHMARK_TIMED_FINISH, 0, 0);
+                    }
                 }
             }
 
@@ -1422,11 +1435,17 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             g.FillPath(&barCardBr, &vPath);
             g.DrawPath(&barPen, &vPath);
 
+            std::wstring currentDomainWide;
+            {
+                std::lock_guard<std::mutex> lock(m_domainMutex);
+                currentDomainWide = utf8_to_wide(m_targetDomain);
+            }
+
             if (m_isTimedRunning) {
                 int totalSec = m_targetDurationSec > 0 ? m_targetDurationSec : 30;
                 int remainSec = std::max(0, totalSec - m_elapsedSec);
 
-                std::wstring testMsg = L"Идет замер стабильности для \"" + utf8_to_wide(m_targetDomain) + 
+                std::wstring testMsg = L"Идет замер стабильности для \"" + currentDomainWide + 
                     L"\" • Осталось: " + std::to_wstring(remainSec) + L" сек (секунда " + std::to_wstring(m_elapsedSec) + L" из " + std::to_wstring(totalSec) + L")";
                 g.DrawString(testMsg.c_str(), -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 16), 158.0f), &textPriBr);
 
@@ -1463,7 +1482,7 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
                 g.DrawString(L"Самый быстрый среди всех:", -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 14 + halfW), 156.0f), &blueTextBr);
                 g.DrawString(m_verdictFastest.c_str(), -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX + 14 + halfW), 178.0f), &textPriBr);
             } else {
-                std::wstring readyMsg = L"Целевой сайт: " + utf8_to_wide(m_targetDomain) + L"  •  " +
+                std::wstring readyMsg = L"Целевой сайт: " + currentDomainWide + L"  •  " +
                     (m_isPaused ? L"Мониторинг приостановлен" : L"Автомониторинг активен (опрос каждые 1.0 сек)");
                 g.DrawString(readyMsg.c_str(), -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 16), 158.0f), &textPriBr);
 
@@ -1488,6 +1507,11 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
         if (m_hListWnd && IsWindow(m_hListWnd)) {
             InvalidateRect(m_hListWnd, nullptr, FALSE);
         }
+        return 0;
+    }
+
+    case WM_APP_BENCHMARK_TIMED_FINISH: {
+        stop_timed_test(true);
         return 0;
     }
 
@@ -1547,7 +1571,10 @@ LRESULT BenchmarkDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
         if (id == IDC_EDIT_BENCHMARK_DOMAIN && code == EN_CHANGE) {
             wchar_t buf[256] = {};
             GetWindowTextW(m_hEditDomain, buf, _countof(buf));
-            m_targetDomain = DnsBenchmark::sanitize_domain(wide_to_utf8(buf));
+            {
+                std::lock_guard<std::mutex> lock(m_domainMutex);
+                m_targetDomain = DnsBenchmark::sanitize_domain(wide_to_utf8(buf));
+            }
             return 0;
         }
 
