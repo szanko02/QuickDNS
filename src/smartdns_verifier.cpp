@@ -105,15 +105,21 @@ bool SmartDnsVerifier::is_valid_public_ipv4(const std::string& ip_str) {
     }
     if (a > 255 || b > 255 || c > 255 || d > 255) return false;
 
-    // Filter non-routable, private, multicast, loopback addresses
-    if (a == 0) return false;                           // 0.0.0.0/8
-    if (a == 10) return false;                          // 10.0.0.0/8 Private
-    if (a == 127) return false;                         // 127.0.0.0/8 Loopback
-    if (a == 169 && b == 254) return false;             // 169.254.0.0/16 Link-local
-    if (a == 172 && (b >= 16 && b <= 31)) return false; // 172.16.0.0/12 Private
-    if (a == 192 && b == 168) return false;             // 192.168.0.0/16 Private
-    if (a >= 224 && a <= 239) return false;             // Multicast
-    if (a >= 240) return false;                         // Reserved / 255.255.255.255
+    // Filter non-routable, private, multicast, reserved and test addresses
+    if (a == 0) return false;                                // 0.0.0.0/8 Current network
+    if (a == 10) return false;                               // 10.0.0.0/8 Private
+    if (a == 100 && (b >= 64 && b <= 127)) return false;     // 100.64.0.0/10 Shared Address Space (CGNAT)
+    if (a == 127) return false;                              // 127.0.0.0/8 Loopback
+    if (a == 169 && b == 254) return false;                  // 169.254.0.0/16 Link-local
+    if (a == 172 && (b >= 16 && b <= 31)) return false;      // 172.16.0.0/12 Private
+    if (a == 192 && b == 0 && c == 0) return false;          // 192.0.0.0/24 IETF Protocol Assignments
+    if (a == 192 && b == 0 && c == 2) return false;          // 192.0.2.0/24 TEST-NET-1
+    if (a == 192 && b == 168) return false;                  // 192.168.0.0/16 Private
+    if (a == 198 && (b == 18 || b == 19)) return false;      // 198.18.0.0/15 Network benchmark tests
+    if (a == 198 && b == 51 && c == 100) return false;       // 198.51.100.0/24 TEST-NET-2
+    if (a == 203 && b == 0 && c == 113) return false;        // 203.0.113.0/24 TEST-NET-3
+    if (a >= 224 && a <= 239) return false;                  // 224.0.0.0/4 Multicast
+    if (a >= 240) return false;                              // 240.0.0.0/4 Reserved / Broadcast
 
     return true;
 }
@@ -208,12 +214,6 @@ std::vector<std::string> SmartDnsVerifier::scrape_ips_from_webpage(const std::st
         return found_ips;
     }
 
-    DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
-                     SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
-                     SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
-                     SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
-    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
-
     BOOL sent = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0);
     if (sent && WinHttpReceiveResponse(hRequest, nullptr)) {
         std::string html_body;
@@ -295,7 +295,14 @@ std::vector<std::string> SmartDnsVerifier::discover_candidate_ips(const DnsProfi
     // 5. Web scraping from provider webpage if available
     if (!profile.website_url.empty()) {
         auto scraped = scrape_ips_from_webpage(profile.website_url, 2500);
-        for (const auto& ip : scraped) add_candidate(ip);
+        for (const auto& ip : scraped) {
+            if (is_valid_public_ipv4(ip)) {
+                auto verified = verify_ip(ip, "google.com", 1500);
+                if (verified.is_alive && verified.latency_ms > 0) {
+                    add_candidate(ip);
+                }
+            }
+        }
     }
 
     return candidates;
@@ -340,12 +347,14 @@ DnsIpCandidate SmartDnsVerifier::verify_ip(const std::string& ip, const std::str
         int from_len = sizeof(from);
         int received = recvfrom(sock, recv_buf, sizeof(recv_buf), 0,
                                 reinterpret_cast<sockaddr*>(&from), &from_len);
-        if (received >= 12) {
+        if (received >= 12 && from.sin_addr.s_addr == sa4.sin_addr.s_addr) {
             uint16_t r_txid = (static_cast<uint8_t>(recv_buf[0]) << 8) | static_cast<uint8_t>(recv_buf[1]);
             uint8_t flags_hi = static_cast<uint8_t>(recv_buf[2]);
+            uint8_t flags_lo = static_cast<uint8_t>(recv_buf[3]);
             bool is_response = (flags_hi & 0x80) != 0;
+            uint8_t rcode = flags_lo & 0x0F;
 
-            if (r_txid == txid && is_response) {
+            if (r_txid == txid && is_response && rcode == 0) {
                 auto t1 = std::chrono::steady_clock::now();
                 int lat = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
                 candidate.latency_ms = std::max(1, lat);
@@ -410,11 +419,7 @@ DohVerificationResult SmartDnsVerifier::verify_doh(const std::string& doh_url, i
 
     DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
     auto query = build_dns_query_packet(0x3456, "google.com");
-
-    DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
-                     SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
-                     SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
-                     SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+    DWORD lastErr = 0;
 
     // 1. Try HTTP POST (standard RFC 8484)
     HINTERNET hReqPost = WinHttpOpenRequest(
@@ -423,7 +428,6 @@ DohVerificationResult SmartDnsVerifier::verify_doh(const std::string& doh_url, i
     );
 
     if (hReqPost) {
-        WinHttpSetOption(hReqPost, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
         std::wstring headers = L"Content-Type: application/dns-message\r\nAccept: application/dns-message\r\n";
 
         auto t0 = std::chrono::steady_clock::now();
@@ -450,6 +454,8 @@ DohVerificationResult SmartDnsVerifier::verify_doh(const std::string& doh_url, i
                 WinHttpCloseHandle(hSession);
                 return result;
             }
+        } else {
+            lastErr = GetLastError();
         }
         WinHttpCloseHandle(hReqPost);
     }
@@ -469,7 +475,6 @@ DohVerificationResult SmartDnsVerifier::verify_doh(const std::string& doh_url, i
     );
 
     if (hReqGet) {
-        WinHttpSetOption(hReqGet, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
         std::wstring headers = L"Accept: application/dns-message\r\n";
 
         auto t0 = std::chrono::steady_clock::now();
@@ -495,6 +500,8 @@ DohVerificationResult SmartDnsVerifier::verify_doh(const std::string& doh_url, i
                 WinHttpCloseHandle(hSession);
                 return result;
             }
+        } else {
+            lastErr = GetLastError();
         }
         WinHttpCloseHandle(hReqGet);
     }
@@ -502,7 +509,9 @@ DohVerificationResult SmartDnsVerifier::verify_doh(const std::string& doh_url, i
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
 
-    if (result.http_status > 0) {
+    if (lastErr == ERROR_WINHTTP_SECURE_FAILURE || lastErr == ERROR_WINHTTP_CLIENT_AUTH_CERT_NEEDED) {
+        result.status_text = L"Ошибка TLS-сертификата";
+    } else if (result.http_status > 0) {
         result.status_text = L"DoH Ошибка (HTTP " + std::to_wstring(result.http_status) + L")";
     } else {
         result.status_text = L"DoH Недоступен (тайм-аут/сбой)";

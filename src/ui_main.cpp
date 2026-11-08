@@ -586,10 +586,21 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             std::thread([this]() {
                 auto profiles = m_configManager->get_all_profiles();
                 auto results = quickdns::SmartDnsVerifier::verify_profiles(profiles);
-                int updated = quickdns::SmartDnsVerifier::apply_best_ips(*m_configManager, results);
-                PostMessageW(m_hWnd, WM_APP_REFRESH_STATUS, 0, static_cast<LPARAM>(updated));
+                int found_new = 0;
+                for (const auto& r : results) {
+                    if (r.ip_updated && !r.best_primary_ip.empty()) {
+                        found_new++;
+                    }
+                }
+                if (found_new > 0) {
+                    std::wstring msg = L"Найдены новые IP для " + std::to_wstring(found_new) + L" профилей, откройте окно SmartDNS для подтверждения";
+                    show_tray_notification(L"QuickDNS SmartDNS", msg.c_str());
+                } else {
+                    show_tray_notification(L"QuickDNS SmartDNS", L"Проверка завершена. Все IP-адреса SmartDNS актуальны.");
+                }
+                PostMessageW(m_hWnd, WM_APP_REFRESH_STATUS, 0, 0);
             }).detach();
-            show_tray_notification(L"QuickDNS", L"Запущена проверка и обновление серверов SmartDNS...");
+            show_tray_notification(L"QuickDNS", L"Запущена проверка серверов SmartDNS...");
             return 0;
         }
         if (wmId == IDM_TRAY_EXIT) {

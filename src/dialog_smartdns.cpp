@@ -950,10 +950,6 @@ void SmartDnsDialog::on_verify_and_scrape_ips() {
 
         auto results = SmartDnsVerifier::verify_profiles(profilesToVerify);
 
-        if (pCfg) {
-            SmartDnsVerifier::apply_best_ips(*pCfg, results);
-        }
-
         auto* pAllocResults = new std::vector<SmartDnsVerificationResult>(std::move(results));
         PostMessageW(hWndDlg, WM_APP + 55, reinterpret_cast<WPARAM>(pAllocResults), 0);
     }).detach();
@@ -1373,51 +1369,68 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
     case WM_APP + 55: {
         auto* pResults = reinterpret_cast<std::vector<SmartDnsVerificationResult>*>(wParam);
         if (pResults) {
-            int updatedCount = 0;
+            std::wstring changesMsg;
+            std::vector<std::pair<DnsProfile, SmartDnsVerificationResult>> pendingChanges;
+
             for (const auto& r : *pResults) {
                 for (auto& e : m_allEntries) {
                     if (e.profile_id == r.profile_id) {
-                        if (!r.best_primary_ip.empty()) {
-                            e.primary_ipv4 = QuickDns::Encoding::utf8_to_wide(r.best_primary_ip);
-                        }
-                        if (!r.best_secondary_ip.empty()) {
-                            e.secondary_ipv4 = QuickDns::Encoding::utf8_to_wide(r.best_secondary_ip);
-                        }
                         e.doh_status = r.doh_result.status_text;
                         e.ping_ms = r.best_primary_latency;
                         e.is_verified = true;
 
-                        if (m_pConfig) {
+                        if (m_pConfig && r.ip_updated && !r.best_primary_ip.empty()) {
                             auto optProfile = m_pConfig->get_profile_by_id(r.profile_id);
                             if (optProfile) {
-                                DnsProfile updated = *optProfile;
-                                bool changed = false;
-                                if (!r.best_primary_ip.empty() && updated.primary_ipv4 != r.best_primary_ip) {
-                                    updated.primary_ipv4 = r.best_primary_ip;
-                                    changed = true;
-                                }
-                                if (!r.best_secondary_ip.empty() && updated.secondary_ipv4 != r.best_secondary_ip) {
-                                    updated.secondary_ipv4 = r.best_secondary_ip;
-                                    changed = true;
-                                }
-                                if (changed) {
-                                    m_pConfig->update_profile(updated);
-                                    updatedCount++;
+                                std::string oldPri = optProfile->primary_ipv4;
+                                std::string newPri = r.best_primary_ip;
+                                if (oldPri != newPri) {
+                                    pendingChanges.push_back({*optProfile, r});
+                                    changesMsg += e.name + L": " + QuickDns::Encoding::utf8_to_wide(oldPri) +
+                                                  L" -> " + QuickDns::Encoding::utf8_to_wide(newPri) + L"\n";
                                 }
                             }
-                        } else if (r.ip_updated) {
-                            updatedCount++;
                         }
                         break;
                     }
                 }
             }
-            if (m_pConfig && updatedCount > 0) {
-                m_pConfig->save_to_file();
+
+            int appliedCount = 0;
+            if (!pendingChanges.empty()) {
+                std::wstring confirmMsg = L"Найдены обновленные IP-адреса для следующих профилей:\n\n" +
+                                          changesMsg +
+                                          L"\nПрименить эти изменения к профилям?";
+                int res = MessageBoxW(m_hWnd, confirmMsg.c_str(), L"Подтверждение обновления SmartDNS", MB_YESNO | MB_ICONQUESTION);
+                if (res == IDYES) {
+                    for (const auto& item : pendingChanges) {
+                        DnsProfile p = item.first;
+                        p.primary_ipv4 = item.second.best_primary_ip;
+                        if (!item.second.best_secondary_ip.empty()) {
+                            p.secondary_ipv4 = item.second.best_secondary_ip;
+                        }
+                        m_pConfig->update_profile(p);
+                        appliedCount++;
+
+                        for (auto& e : m_allEntries) {
+                            if (e.profile_id == p.id) {
+                                e.primary_ipv4 = QuickDns::Encoding::utf8_to_wide(p.primary_ipv4);
+                                if (!p.secondary_ipv4.empty()) {
+                                    e.secondary_ipv4 = QuickDns::Encoding::utf8_to_wide(p.secondary_ipv4);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    if (appliedCount > 0) {
+                        m_pConfig->save_to_file();
+                    }
+                }
             }
+
             delete pResults;
 
-            m_statusText = L"Проверка завершена. Обновлено IP провайдеров: " + std::to_wstring(updatedCount);
+            m_statusText = L"Проверка завершена. Обновлено IP провайдеров: " + std::to_wstring(appliedCount);
         }
         m_isVerifying = false;
         EnableWindow(m_hBtnVerify, TRUE);
