@@ -81,6 +81,57 @@ bool test_ip_validation() {
     return all_passed;
 }
 
+bool test_doh_validation() {
+    print_double_separator();
+    std::wcout << L"[TEST SUITE 1.5] DoH Template URL Validation Functions\n";
+    print_separator();
+
+    struct DohTestCase {
+        std::wstring t;
+        bool expected;
+    };
+
+    std::wstring long_valid = L"https://example.com/dns-query?" + std::wstring(100, L'a');
+    std::wstring too_long = L"https://example.com/dns-query?" + std::wstring(2050, L'a');
+
+    std::vector<DohTestCase> cases = {
+        // Valid
+        { L"https://dns.google/dns-query", true },
+        { L"https://cloudflare-dns.com/dns-query{?dns}", true },
+        { L"https://example.com:8443/q", true },
+        { long_valid, true },
+
+        // Invalid
+        { L"", false },
+        { L"http://a.b/q", false },
+        { L"https://", false },
+        { L"https://:8443/q", false },
+        { L"https:///dns-query", false },
+        { L"https://{?dns}", false },
+        { L"https://a.b/q' ; calc", false },
+        { L"https://a.b/q\"x", false },
+        { L"https://a.b/$(x)", false },
+        { L"https://a.b/q`x", false },
+        { L"https://dns.google/dns query", false },
+        { too_long, false }
+    };
+
+    bool all_passed = true;
+    for (const auto& tc : cases) {
+        bool res = quickdns::DnsManager::is_valid_doh_template(tc.t);
+        bool pass = (res == tc.expected);
+        if (!pass) all_passed = false;
+        std::wstring display = tc.t;
+        if (display.length() > 40) display = display.substr(0, 37) + L"...";
+        std::wcout << L"  DoH: " << std::left << std::setw(42) << (display.empty() ? L"\"\" (empty)" : display)
+                   << L" | Valid: " << (res ? L"YES" : L"NO ")
+                   << L" | Status: " << (pass ? L"PASS" : L"FAIL") << L"\n";
+    }
+
+    std::wcout << L"\nResult: " << (all_passed ? L"ALL DOH VALIDATION TESTS PASSED" : L"SOME DOH TESTS FAILED") << L"\n\n";
+    return all_passed;
+}
+
 void print_adapter(size_t index, const quickdns::NetworkAdapterInfo& adapter, bool is_primary = false) {
     print_separator();
     std::wcout << L"[" << index << L"] " << adapter.name 
@@ -132,8 +183,17 @@ int main() {
     std::wcout << L"Process Elevation (Administrator): " 
                << (quickdns::DnsManager::is_elevated() ? L"YES (Elevated)" : L"NO (Standard User)") << L"\n\n";
 
+    bool suite_ok = true;
+
     // Test 1: IP Validation
-    test_ip_validation();
+    if (!test_ip_validation()) {
+        suite_ok = false;
+    }
+
+    // Test 1.5: DoH Template Validation
+    if (!test_doh_validation()) {
+        suite_ok = false;
+    }
 
     // Test 2: Network Adapter Enumeration
     print_double_separator();
@@ -216,5 +276,5 @@ int main() {
     std::wcout << L"All diagnostic tests completed.\n";
     print_double_separator();
 
-    return 0;
+    return suite_ok ? 0 : 1;
 }

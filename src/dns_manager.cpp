@@ -379,6 +379,45 @@ bool DnsManager::is_valid_ip(const std::wstring& ip) {
     return is_valid_ipv4(ip) || is_valid_ipv6(ip);
 }
 
+bool DnsManager::is_valid_doh_template(const std::wstring& t) {
+    if (t.length() < 12 || t.length() > 2048) {
+        return false;
+    }
+
+    const std::wstring prefix = L"https://";
+    if (t.length() < prefix.length()) return false;
+    for (size_t i = 0; i < prefix.length(); ++i) {
+        if (towlower(t[i]) != prefix[i]) {
+            return false;
+        }
+    }
+
+    // Host check: after "https://" and before first '/', ':', or '{'
+    size_t host_start = prefix.length();
+    size_t host_end = t.find_first_of(L"/:{", host_start);
+    if (host_end == std::wstring::npos) {
+        host_end = t.length();
+    }
+    if (host_end <= host_start) {
+        return false;
+    }
+
+    // Allowed characters: A-Z a-z 0-9 - . _ ~ : / ? = & % { }
+    // Strictly forbidden: spaces, quotes, ;, $, |, <, >, ^, (, ), comma, control chars, non-ASCII
+    for (wchar_t ch : t) {
+        if (ch > 127 || ch < 32) return false;
+        if (iswalnum(ch)) continue;
+        if (ch == L'-' || ch == L'.' || ch == L'_' || ch == L'~' ||
+            ch == L':' || ch == L'/' || ch == L'?' || ch == L'=' ||
+            ch == L'&' || ch == L'%' || ch == L'{' || ch == L'}') {
+            continue;
+        }
+        return false;
+    }
+
+    return true;
+}
+
 std::vector<NetworkAdapterInfo> DnsManager::get_network_adapters() {
     std::vector<PrioritizedAdapter> adapter_candidates;
 
@@ -613,6 +652,11 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
         return false;
     }
 
+    if (!doh_template.empty() && !is_valid_doh_template(doh_template)) {
+        set_last_error(L"Некорректный DoH-шаблон");
+        return false;
+    }
+
     if (!is_elevated()) {
         set_last_error(L"Для изменения параметров DNS требуются права Администратора.");
         return false;
@@ -678,7 +722,7 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
     }
 
     // Fallback to adapter friendly name if numeric index did not succeed
-    if (!netsh_ok && !adapter.name.empty()) {
+    if (!netsh_ok && !adapter.name.empty() && adapter.name.find(L'"') == std::wstring::npos) {
         std::wstring cmd_pri = netsh_path + L" interface " + ip_family + 
             L" set dnsservers name=\"" + adapter.name + 
             L"\" source=static address=" + primary_dns + 
@@ -745,6 +789,11 @@ void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::
         return;
     }
 
+    if (!is_valid_ip(server_ip) || !is_valid_doh_template(doh_template)) {
+        log_error(L"configure_doh_server: invalid server_ip or doh_template rejected");
+        return;
+    }
+
     log_info(L"Configuring DoH encryption for server: " + server_ip + L" -> " + doh_template);
 
     // 1. Direct Windows Registry configuration
@@ -785,21 +834,17 @@ void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::
         log_info(L"Executing netsh add encryption fallback: " + cmd_add);
         execute_hidden_process(cmd_add);
     }
-
-    // 3. PowerShell Add/Set-DnsClientDohServerAddress fallback for Windows 11
-    std::wstring ps_path = get_system32_path() + L"\\WindowsPowerShell\\v1.0\\powershell.exe";
-    std::wstring ps_cmd = ps_path + L" -NoProfile -ExecutionPolicy Bypass -Command \""
-        L"if (Get-Command Add-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { "
-        L"  Add-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; "
-        L"  Set-DnsClientDohServerAddress -ServerAddress '" + server_ip + L"' -DohTemplate '" + doh_template + L"' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue "
-        L"}\"";
-    execute_hidden_process(ps_cmd);
 }
 
 void DnsManager::configure_interface_doh(const std::wstring& adapter_id, 
                                          const std::vector<std::wstring>& servers, 
                                          const std::wstring& doh_template) {
     if (adapter_id.empty()) {
+        return;
+    }
+
+    if (!doh_template.empty() && !is_valid_doh_template(doh_template)) {
+        log_error(L"configure_interface_doh: invalid doh_template rejected");
         return;
     }
 
@@ -890,7 +935,7 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
         execute_hidden_process(cmd_ipv6);
     }
 
-    if (!netsh_ok && !adapter.name.empty()) {
+    if (!netsh_ok && !adapter.name.empty() && adapter.name.find(L'"') == std::wstring::npos) {
         std::wstring cmd_ipv4 = netsh_path + L" interface ipv4 set dnsservers name=\"" + 
             adapter.name + L"\" source=dhcp";
         if (execute_hidden_process(cmd_ipv4)) {

@@ -83,6 +83,8 @@ target_link_libraries(QuickDNS PRIVATE quickdns_core ${WIN32_LIBS})
 if(MSVC)
     # Avoid duplicate manifest embedding conflict between resource.rc and MSVC default manifest
     set_target_properties(QuickDNS PROPERTIES LINK_FLAGS "/MANIFEST:NO")
+else()
+    target_link_options(QuickDNS PRIVATE -municode)
 endif()
 
 # Diagnostic resources for test tools

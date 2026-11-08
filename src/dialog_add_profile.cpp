@@ -658,6 +658,12 @@ void AddProfileDialog::on_save() {
         return;
     }
 
+    if (!dohStr.empty() && !quickdns::DnsManager::is_valid_doh_template(dohStr)) {
+        MessageBoxW(m_hWnd, L"Некорректный адрес DoH-шаблона. Шаблон должен начинаться с https:// и содержать корректный URL.", L"Ошибка ввода", MB_OK | MB_ICONWARNING);
+        SetFocus(m_hEditDoh);
+        return;
+    }
+
     bool isSmart = (Button_GetCheck(m_hCheckSmartDns) == BST_CHECKED);
 
     DnsProfile profile;

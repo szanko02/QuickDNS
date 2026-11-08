@@ -1,8 +1,11 @@
 #include "config_manager.h"
+#include "dns_manager.h"
+#include "encoding_utils.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <cstdlib>
+#include <iostream>
 
 namespace {
 
@@ -199,21 +202,38 @@ bool ConfigManager::add_profile(const DnsProfile& profile) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (profile.id.empty()) return false;
 
+    DnsProfile clean_profile = profile;
+    if (!clean_profile.doh_template.empty()) {
+        std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(clean_profile.doh_template);
+        if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
+            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid doh_template in add_profile cleared: " << w_doh << L"\n";
+            clean_profile.doh_template.clear();
+        }
+    }
+
     for (const auto& p : m_profiles) {
-        if (p.id == profile.id) {
+        if (p.id == clean_profile.id) {
             return false;
         }
     }
 
-    m_profiles.push_back(profile);
+    m_profiles.push_back(clean_profile);
     return true;
 }
 
 bool ConfigManager::update_profile(const DnsProfile& profile) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DnsProfile clean_profile = profile;
+    if (!clean_profile.doh_template.empty()) {
+        std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(clean_profile.doh_template);
+        if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
+            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid doh_template in update_profile cleared: " << w_doh << L"\n";
+            clean_profile.doh_template.clear();
+        }
+    }
     for (auto& p : m_profiles) {
-        if (p.id == profile.id) {
-            p = profile;
+        if (p.id == clean_profile.id) {
+            p = clean_profile;
             return true;
         }
     }
@@ -588,6 +608,14 @@ bool ConfigManager::load_from_file() {
                 p.primary_ipv6 = extract_json_value(objStr, "primary_ipv6");
                 p.secondary_ipv6 = extract_json_value(objStr, "secondary_ipv6");
                 p.doh_template = extract_json_value(objStr, "doh_template");
+                if (!p.doh_template.empty()) {
+                    std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(p.doh_template);
+                    if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
+                        std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid doh_template in profile '" 
+                                   << QuickDns::Encoding::utf8_to_wide(p.name) << L"' cleared: " << w_doh << L"\n";
+                        p.doh_template.clear();
+                    }
+                }
                 p.is_builtin = (extract_json_value(objStr, "is_builtin") == "true");
                 p.is_dhcp = (extract_json_value(objStr, "is_dhcp") == "true");
                 p.is_smart_dns = (extract_json_value(objStr, "is_smart_dns") == "true");

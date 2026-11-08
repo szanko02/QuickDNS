@@ -122,6 +122,12 @@ public:
     static bool is_valid_ip(const std::wstring& ip);
 
     /**
+     * @brief Validates if a DoH template URL is syntactically valid and safe.
+     * Must start with https://, length 12-2048, have non-empty host, and contain only safe chars.
+     */
+    static bool is_valid_doh_template(const std::wstring& t);
+
+    /**
      * @brief Converts a GUID to its standard string representation: {XXXXXXXX-XXXX-...}.
      */
     static std::wstring guid_to_string(const GUID& guid);
