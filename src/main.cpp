@@ -4,13 +4,15 @@
 #include <gdiplus.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <string_view>
 #include "ui_main.h"
 #include "dns_manager.h"
 
 #pragma comment(lib, "gdiplus.lib")
 
 namespace {
-    constexpr const wchar_t* SINGLE_INSTANCE_MUTEX_NAME = L"Local\\QuickDNS_SingleInstance_Mutex_szanko02";
+    constexpr const wchar_t* SINGLE_INSTANCE_MUTEX_NAME = L"Local\\QuickDNS_SingleInstance_Mutex";
     constexpr const wchar_t* RESTORE_MESSAGE_NAME        = L"QuickDNS_RestoreExistingInstanceMessage";
     constexpr const wchar_t* MAIN_WINDOW_CLASS_NAME     = L"QuickDNS_MainWindowClass";
 
@@ -60,54 +62,46 @@ int WINAPI wWinMain(
     _In_ int nCmdShow)
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
+    UNREFERENCED_PARAMETER(lpCmdLine);
 
-    // Determine initial show state
-    LPWSTR fullCmdLine = GetCommandLineW();
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR);
+
+    // Determine initial show state and flags from command line
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     int showCmd = nCmdShow;
     bool isMinimizedLaunch = false;
-    if (fullCmdLine != nullptr && wcsstr(fullCmdLine, L"--minimized") != nullptr) {
-        showCmd = SW_HIDE;
-        isMinimizedLaunch = true;
+    bool noElevate = false;
+    if (argv) {
+        for (int i = 1; i < argc; ++i) {
+            std::wstring_view arg(argv[i]);
+            if (arg == L"--minimized" || arg == L"-m" || arg == L"/minimized") {
+                showCmd = SW_HIDE;
+                isMinimizedLaunch = true;
+            } else if (arg == L"--no-elevate") {
+                noElevate = true;
+            }
+        }
+        LocalFree(argv);
     }
-
-    bool noElevate = (fullCmdLine != nullptr && wcsstr(fullCmdLine, L"--no-elevate") != nullptr);
 
     // 1. Single Instance check:
     // If an instance of QuickDNS is already running, activate it and exit immediately.
-    // Doing this before UAC elevation avoids prompting the user when the app is already in the tray.
     if (restore_existing_instance(isMinimizedLaunch)) {
         return 0;
     }
 
-    // 2. Ensure elevated Administrator privileges.
+    // 2. Ensure elevated Administrator privileges:
     // Changing Windows network adapter IP/DNS settings requires elevation.
-    if (!noElevate && !quickdns::DnsManager::is_elevated()) {
-        wchar_t szExePath[MAX_PATH];
-        if (GetModuleFileNameW(nullptr, szExePath, MAX_PATH)) {
-            SHELLEXECUTEINFOW sei = {};
-            sei.cbSize = sizeof(sei);
-            sei.lpVerb = L"runas";
-            sei.lpFile = szExePath;
-            sei.lpParameters = lpCmdLine;
-            sei.hwnd = nullptr;
-            sei.nShow = showCmd;
-            if (ShellExecuteExW(&sei)) {
-                return 0; // Elevated instance launched successfully; exit this process.
-            }
-        }
+    if (!noElevate && !IsUserAnAdmin()) {
+        MessageBoxW(nullptr,
+                    L"Для изменения параметров DNS требуются права администратора.\nЗапустите приложение от имени администратора.",
+                    L"QuickDNS — Ошибка доступа", MB_OK | MB_ICONERROR);
+        return 1;
     }
 
-    // 3. Create a named single-instance mutex with a permissive DACL
-    // so any subsequent non-elevated launch can detect it immediately.
-    SECURITY_DESCRIPTOR sd;
-    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
-    SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE);
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = &sd;
-    sa.bInheritHandle = FALSE;
-
-    HANDLE hSingleInstanceMutex = CreateMutexW(&sa, TRUE, SINGLE_INSTANCE_MUTEX_NAME);
+    // 3. Create a named single-instance mutex
+    HANDLE hSingleInstanceMutex = CreateMutexW(nullptr, TRUE, SINGLE_INSTANCE_MUTEX_NAME);
     if (hSingleInstanceMutex == nullptr || GetLastError() == ERROR_ALREADY_EXISTS) {
         restore_existing_instance(isMinimizedLaunch);
         if (hSingleInstanceMutex != nullptr) {
@@ -126,10 +120,20 @@ int WINAPI wWinMain(
         return 1;
     }
 
-    // Initialize GDI+ for high-quality anti-aliased rendering (smooth buttons, curves and cards)
+    // Initialize GDI+ for high-quality anti-aliased rendering
     ULONG_PTR gdiplusToken = 0;
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
-    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
+    Gdiplus::Status gdiStatus = Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
+    if (gdiStatus != Gdiplus::Ok) {
+        MessageBoxW(nullptr, L"Не удалось инициализировать графическую подсистему GDI+.",
+                    L"QuickDNS — Критическая ошибка", MB_OK | MB_ICONERROR);
+        CoUninitialize();
+        if (hSingleInstanceMutex != nullptr) {
+            ReleaseMutex(hSingleInstanceMutex);
+            CloseHandle(hSingleInstanceMutex);
+        }
+        return 1;
+    }
 
     // Enable Common Controls v6 (Visual Styles, modern buttons, combos)
     INITCOMMONCONTROLSEX icex;
@@ -137,11 +141,15 @@ int WINAPI wWinMain(
     icex.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icex);
 
-    // Run Application
-    MainWindow app;
+    // Run Application within isolated lifetime scope before subsystem shutdowns
     int exitCode = 0;
-    if (app.initialize(hInstance, showCmd)) {
-        exitCode = app.run_message_loop();
+    {
+        MainWindow app;
+        if (app.initialize(hInstance, showCmd)) {
+            exitCode = app.run_message_loop();
+        } else {
+            exitCode = 1;
+        }
     }
 
     if (gdiplusToken) {
