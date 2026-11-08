@@ -132,7 +132,7 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] UI compilation failed. & exit /b 1 )
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Main compilation failed. & exit /b 1 )
 
 echo [5/6] Linking QuickDNS.exe with embedded App Icon...
-"!CXX!" -std=c++20 -O2 -mwindows -municode -static -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dns_benchmark.o build\smartdns_verifier.o build\app_updater.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus
+"!CXX!" -std=c++20 -O2 -mwindows -municode -static -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dns_benchmark.o build\smartdns_verifier.o build\app_updater.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus -lbcrypt
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking QuickDNS.exe failed. & exit /b 1 )
 if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
 move /Y "%~dp0QuickDNS.exe" "%~dp0QuickDNS.exe.old" >nul 2>&1
@@ -152,7 +152,7 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_benchmark.exe failed. & exit /
 "!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_smartdns_verifier.cpp build\smartdns_verifier.o build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -luuid -lole32 -o build\test_smartdns_verifier.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_smartdns_verifier.exe failed. & exit /b 1 )
 
-"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_updater.cpp build\app_updater.o build\resource_diag.o -lwinhttp -lshell32 -o build\test_updater.exe
+"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_updater.cpp build\app_updater.o build\resource_diag.o -lwinhttp -lshell32 -lbcrypt -o build\test_updater.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_updater.exe failed. & exit /b 1 )
 
 echo ===================================================

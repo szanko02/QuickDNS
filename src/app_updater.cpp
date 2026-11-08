@@ -1,12 +1,15 @@
 #include "app_updater.h"
 #include <winhttp.h>
 #include <shellapi.h>
+#include <bcrypt.h>
 #include <sstream>
 #include <algorithm>
 #include <iostream>
+#include <cctype>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 namespace quickdns {
 
@@ -118,8 +121,8 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
     DWORD to = 10000;
     WinHttpSetTimeouts(hSession, to, to, to, to);
 
-    // Follow redirects automatically
-    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    // Follow redirects automatically, disallowing downgrade to HTTP
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
     WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
 
     HINTERNET hConnect = WinHttpConnect(hSession, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -197,14 +200,15 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
         }
     }
 
-    // Fallback: look for portable zip if QuickDNS.exe direct link not found
-    if (info.download_url.empty()) {
-        size_t zipPos = responseBody.find("Portable.zip");
-        if (zipPos != std::string::npos) {
-            size_t urlKey = responseBody.find("\"browser_download_url\"", zipPos);
-            if (urlKey != std::string::npos) {
-                info.download_url = extract_json_field(responseBody.substr(urlKey, 400), "browser_download_url");
-            }
+    // Look for QuickDNS.exe.sha256 checksum asset URL
+    size_t shaPos = responseBody.find("\"name\":\"QuickDNS.exe.sha256\"");
+    if (shaPos == std::string::npos) {
+        shaPos = responseBody.find("\"name\": \"QuickDNS.exe.sha256\"");
+    }
+    if (shaPos != std::string::npos) {
+        size_t urlKey = responseBody.find("\"browser_download_url\"", shaPos);
+        if (urlKey != std::string::npos) {
+            info.sha256_url = extract_json_field(responseBody.substr(urlKey, 400), "browser_download_url");
         }
     }
 
@@ -212,11 +216,233 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
     return info;
 }
 
+bool AppUpdater::is_allowed_update_url(const std::wstring& url) {
+    if (url.empty()) return false;
+    URL_COMPONENTS urlComp = {};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t host[256] = {};
+    urlComp.lpszHostName = host;
+    urlComp.dwHostNameLength = _countof(host);
+
+    if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.length()), 0, &urlComp)) {
+        return false;
+    }
+
+    if (urlComp.nScheme != INTERNET_SCHEME_HTTPS) {
+        return false;
+    }
+
+    std::wstring hostStr(host, urlComp.dwHostNameLength);
+    std::transform(hostStr.begin(), hostStr.end(), hostStr.begin(), ::towlower);
+
+    return (hostStr == L"github.com" ||
+            hostStr == L"api.github.com" ||
+            hostStr == L"objects.githubusercontent.com" ||
+            hostStr == L"release-assets.githubusercontent.com");
+}
+
+std::string AppUpdater::download_sha256(const std::wstring& sha256Url) {
+    if (sha256Url.empty() || !is_allowed_update_url(sha256Url)) {
+        return "";
+    }
+
+    URL_COMPONENTS urlComp = {};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t host[256] = {};
+    wchar_t path[2048] = {};
+    urlComp.lpszHostName = host;
+    urlComp.dwHostNameLength = _countof(host);
+    urlComp.lpszUrlPath = path;
+    urlComp.dwUrlPathLength = _countof(path);
+
+    if (!WinHttpCrackUrl(sha256Url.c_str(), static_cast<DWORD>(sha256Url.length()), 0, &urlComp)) {
+        return "";
+    }
+
+    HINTERNET hSession = WinHttpOpen(
+        L"QuickDNS-Downloader/2.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS, 0
+    );
+    if (!hSession) return "";
+
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+
+    DWORD to = 15000;
+    WinHttpSetTimeouts(hSession, to, to, to, to);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, urlComp.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        return "";
+    }
+
+    DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(
+        hConnect, L"GET", path, nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags
+    );
+
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return "";
+    }
+
+    std::wstring headers = L"User-Agent: QuickDNS-Downloader\r\nAccept: text/plain, */*\r\n";
+    BOOL sent = WinHttpSendRequest(hRequest, headers.c_str(), static_cast<DWORD>(headers.length()), nullptr, 0, 0, 0);
+
+    std::string content;
+    if (sent && WinHttpReceiveResponse(hRequest, nullptr)) {
+        DWORD statusCode = 0;
+        DWORD sz = sizeof(statusCode);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &sz, WINHTTP_NO_HEADER_INDEX);
+
+        if (statusCode == 200) {
+            char buf[1024] = {};
+            DWORD bytesRead = 0;
+            if (WinHttpReadData(hRequest, buf, sizeof(buf), &bytesRead) && bytesRead > 0) {
+                content.append(buf, bytesRead);
+            }
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+
+    // Extract 64-char hex string
+    std::string hexHash;
+    for (char c : content) {
+        if (std::isxdigit(static_cast<unsigned char>(c))) {
+            hexHash.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+            if (hexHash.length() == 64) break;
+        } else if (!hexHash.empty()) {
+            if (hexHash.length() == 64) break;
+            hexHash.clear();
+        }
+    }
+
+    return (hexHash.length() == 64) ? hexHash : "";
+}
+
+bool AppUpdater::compute_sha256(const std::wstring& filePath, std::string& outHashHex) {
+    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (status != 0) {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    BCRYPT_HASH_HANDLE hHash = nullptr;
+    status = BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+    if (status != 0) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        CloseHandle(hFile);
+        return false;
+    }
+
+    BYTE buffer[32768];
+    DWORD bytesRead = 0;
+    bool readOk = true;
+    while (ReadFile(hFile, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0) {
+        status = BCryptHashData(hHash, buffer, bytesRead, 0);
+        if (status != 0) {
+            readOk = false;
+            break;
+        }
+    }
+    CloseHandle(hFile);
+
+    if (!readOk) {
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return false;
+    }
+
+    BYTE hash[32] = {};
+    status = BCryptFinishHash(hHash, hash, sizeof(hash), 0);
+    BCryptDestroyHash(hHash);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+
+    if (status != 0) {
+        return false;
+    }
+
+    char hexBuf[65] = {};
+    for (int i = 0; i < 32; ++i) {
+        snprintf(&hexBuf[i * 2], 3, "%02x", hash[i]);
+    }
+    outHashHex = hexBuf;
+    return true;
+}
+
+bool AppUpdater::verify_downloaded_executable(const std::wstring& filePath, const std::string& expectedSha256) {
+    if (expectedSha256.length() != 64) {
+        return false;
+    }
+
+    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    LARGE_INTEGER fileSize = {};
+    if (!GetFileSizeEx(hFile, &fileSize)) {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    // Binary must be larger than 100 KB
+    if (fileSize.QuadPart <= 102400) {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    // Must start with DOS MZ header
+    char magic[2] = {};
+    DWORD readBytes = 0;
+    if (!ReadFile(hFile, magic, 2, &readBytes, nullptr) || readBytes < 2) {
+        CloseHandle(hFile);
+        return false;
+    }
+    CloseHandle(hFile);
+
+    if (magic[0] != 'M' || magic[1] != 'Z') {
+        return false;
+    }
+
+    std::string actualHash;
+    if (!compute_sha256(filePath, actualHash)) {
+        return false;
+    }
+
+    std::string expectedLower = expectedSha256;
+    for (char& c : expectedLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char& c : actualHash) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    return (expectedLower == actualHash);
+}
+
 bool AppUpdater::download_file(
     const std::wstring& url,
     const std::wstring& destPath,
     std::function<void(DWORD downloaded, DWORD total)> onProgress)
 {
+    if (!is_allowed_update_url(url)) {
+        return false;
+    }
+
     URL_COMPONENTS urlComp = {};
     urlComp.dwStructSize = sizeof(urlComp);
     wchar_t host[256] = {};
@@ -238,7 +464,7 @@ bool AppUpdater::download_file(
     );
     if (!hSession) return false;
 
-    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
     WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
 
     DWORD to = 30000;

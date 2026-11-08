@@ -35,6 +35,7 @@ jobs:
       shell: pwsh
       run: |
         Copy-Item -Path build/Release/QuickDNS.exe -Destination QuickDNS.exe -Force
+        (Get-FileHash build/Release/QuickDNS.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline QuickDNS.exe.sha256
         ./scripts/package_release.ps1
 
     - name: Upload Artifact
@@ -43,6 +44,7 @@ jobs:
         name: QuickDNS-Release-x64
         path: |
           build/Release/QuickDNS.exe
+          QuickDNS.exe.sha256
           build/Release/test_dns.exe
           build/Release/test_config.exe
           build/Release/test_benchmark.exe
@@ -54,6 +56,7 @@ jobs:
       with:
         files: |
           build/Release/QuickDNS.exe
+          QuickDNS.exe.sha256
           dist/*.zip
         generate_release_notes: true
         append_body: false

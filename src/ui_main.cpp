@@ -2126,16 +2126,47 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
 
     HWND hWnd = m_hWnd;
     std::wstring dlUrl = utf8_to_wide(info.download_url);
+    std::wstring sha256Url = utf8_to_wide(info.sha256_url);
 
-    std::thread([hWnd, dlUrl, tempExe, this]() {
+    std::thread([hWnd, dlUrl, sha256Url, tempExe, this]() {
+        if (sha256Url.empty()) {
+            MessageBoxW(hWnd, L"Контрольная сумма SHA-256 релиза не найдена на GitHub. Установка отменена в целях безопасности.",
+                        L"Ошибка безопасности", MB_OK | MB_ICONERROR);
+            if (m_hBtnCheckUpdate) {
+                EnableWindow(m_hBtnCheckUpdate, TRUE);
+                SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
+            }
+            return;
+        }
+
+        std::string expectedSha256 = quickdns::AppUpdater::download_sha256(sha256Url);
+        if (expectedSha256.length() != 64) {
+            MessageBoxW(hWnd, L"Не удалось загрузить контрольную сумму SHA-256. Установка отменена в целях безопасности.",
+                        L"Ошибка безопасности", MB_OK | MB_ICONERROR);
+            if (m_hBtnCheckUpdate) {
+                EnableWindow(m_hBtnCheckUpdate, TRUE);
+                SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
+            }
+            return;
+        }
+
         bool ok = quickdns::AppUpdater::download_file(dlUrl, tempExe, nullptr);
         if (ok) {
-            bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe);
-            if (!restarted) {
-                MessageBoxW(hWnd, L"Не удалось применить обновление автоматически. Запустите QuickDNS_update.exe вручную.",
-                            L"Ошибка обновления", MB_OK | MB_ICONERROR);
+            bool verified = quickdns::AppUpdater::verify_downloaded_executable(tempExe, expectedSha256);
+            if (!verified) {
+                DeleteFileW(tempExe.c_str());
+                MessageBoxW(hWnd, L"Целостность файла обновления не подтверждена (неверный SHA-256 или поврежденный файл). Установка отменена.",
+                            L"Ошибка проверки целостности", MB_OK | MB_ICONERROR);
+            } else {
+                bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe);
+                if (!restarted) {
+                    DeleteFileW(tempExe.c_str());
+                    MessageBoxW(hWnd, L"Не удалось применить обновление автоматически.",
+                                L"Ошибка обновления", MB_OK | MB_ICONERROR);
+                }
             }
         } else {
+            DeleteFileW(tempExe.c_str());
             MessageBoxW(hWnd, L"Не удалось скачать файл обновления. Повторите попытку позже.",
                         L"Ошибка скачивания", MB_OK | MB_ICONERROR);
         }

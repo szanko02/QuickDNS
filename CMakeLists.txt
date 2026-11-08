@@ -36,6 +36,7 @@ if(MSVC)
         oleaut32.lib
         uuid.lib
         gdiplus.lib
+        bcrypt.lib
     )
 else()
     set(WIN32_LIBS
@@ -54,6 +55,7 @@ else()
         oleaut32
         uuid
         gdiplus
+        bcrypt
     )
 endif()
 

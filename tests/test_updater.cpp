@@ -63,6 +63,107 @@ void test_github_api_query() {
     }
 }
 
+void test_allowed_hosts() {
+    TEST_CHECK(AppUpdater::is_allowed_update_url(L"https://github.com/szanko02/QuickDNS/releases/download/v2.0.1/QuickDNS.exe"),
+               "Allow github.com https");
+    TEST_CHECK(AppUpdater::is_allowed_update_url(L"https://api.github.com/repos/szanko02/QuickDNS/releases/latest"),
+               "Allow api.github.com https");
+    TEST_CHECK(AppUpdater::is_allowed_update_url(L"https://objects.githubusercontent.com/github-production-release-asset-2e65be/123"),
+               "Allow objects.githubusercontent.com https");
+    TEST_CHECK(AppUpdater::is_allowed_update_url(L"https://release-assets.githubusercontent.com/123"),
+               "Allow release-assets.githubusercontent.com https");
+
+    TEST_CHECK(!AppUpdater::is_allowed_update_url(L"http://github.com/szanko02/QuickDNS/releases/download/v2.0.1/QuickDNS.exe"),
+               "Reject http url on github.com");
+    TEST_CHECK(!AppUpdater::is_allowed_update_url(L"https://evil.com/QuickDNS.exe"),
+               "Reject unauthorized domain evil.com");
+    TEST_CHECK(!AppUpdater::is_allowed_update_url(L"https://malicious-github.com/test"),
+               "Reject malicious domain");
+    TEST_CHECK(!AppUpdater::is_allowed_update_url(L"ftp://github.com/test"),
+               "Reject non-https scheme");
+    TEST_CHECK(!AppUpdater::is_allowed_update_url(L""),
+               "Reject empty url");
+}
+
+void test_integrity_verification() {
+    wchar_t tempPath[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempPath);
+    std::wstring dummyFile = std::wstring(tempPath) + L"quickdns_updater_test_binary.bin";
+
+    // 1. Create a dummy binary > 100 KB with MZ header
+    {
+        HANDLE hFile = CreateFileW(dummyFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        TEST_CHECK(hFile != INVALID_HANDLE_VALUE, "Create dummy test binary file");
+        if (hFile != INVALID_HANDLE_VALUE) {
+            char header[2] = {'M', 'Z'};
+            DWORD written = 0;
+            WriteFile(hFile, header, 2, &written, nullptr);
+
+            std::vector<char> padding(105000, 'A');
+            WriteFile(hFile, padding.data(), static_cast<DWORD>(padding.size()), &written, nullptr);
+            CloseHandle(hFile);
+        }
+    }
+
+    // 2. Compute SHA-256
+    std::string computedHash;
+    bool hashOk = AppUpdater::compute_sha256(dummyFile, computedHash);
+    TEST_CHECK(hashOk, "Compute SHA-256 via BCrypt");
+    TEST_CHECK(computedHash.length() == 64, "SHA-256 hash length is 64 hex chars: " + computedHash);
+
+    // 3. Verify valid binary and matching hash
+    TEST_CHECK(AppUpdater::verify_downloaded_executable(dummyFile, computedHash),
+               "Verify valid executable with matching hash");
+
+    // 4. Case-insensitivity check
+    std::string upperHash = computedHash;
+    for (char& c : upperHash) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    TEST_CHECK(AppUpdater::verify_downloaded_executable(dummyFile, upperHash),
+               "Verify hash comparison is case-insensitive");
+
+    // 5. Mismatched hash
+    std::string badHash = computedHash;
+    badHash[0] = (badHash[0] == 'a') ? 'b' : 'a';
+    TEST_CHECK(!AppUpdater::verify_downloaded_executable(dummyFile, badHash),
+               "Reject executable with mismatched hash");
+
+    // 6. Test file without MZ header
+    {
+        HANDLE hFile = CreateFileW(dummyFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            char header[2] = {'P', 'K'}; // ZIP header
+            DWORD written = 0;
+            WriteFile(hFile, header, 2, &written, nullptr);
+            std::vector<char> padding(105000, 'A');
+            WriteFile(hFile, padding.data(), static_cast<DWORD>(padding.size()), &written, nullptr);
+            CloseHandle(hFile);
+        }
+    }
+    std::string zipHash;
+    AppUpdater::compute_sha256(dummyFile, zipHash);
+    TEST_CHECK(!AppUpdater::verify_downloaded_executable(dummyFile, zipHash),
+               "Reject non-MZ file (e.g. ZIP file)");
+
+    // 7. Test file <= 100 KB
+    {
+        HANDLE hFile = CreateFileW(dummyFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            char header[2] = {'M', 'Z'};
+            DWORD written = 0;
+            WriteFile(hFile, header, 2, &written, nullptr);
+            std::vector<char> padding(500, 'A');
+            WriteFile(hFile, padding.data(), static_cast<DWORD>(padding.size()), &written, nullptr);
+            CloseHandle(hFile);
+        }
+    }
+    std::string smallHash;
+    AppUpdater::compute_sha256(dummyFile, smallHash);
+    TEST_CHECK(!AppUpdater::verify_downloaded_executable(dummyFile, smallHash),
+               "Reject file smaller than 100 KB");
+
+    DeleteFileW(dummyFile.c_str());
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "     QuickDNS App Updater Tests" << std::endl;
@@ -70,6 +171,8 @@ int main() {
 
     test_semver_parsing();
     test_version_comparison();
+    test_allowed_hosts();
+    test_integrity_verification();
     test_github_api_query();
 
     std::cout << "========================================" << std::endl;
