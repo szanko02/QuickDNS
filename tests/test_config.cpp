@@ -2,6 +2,7 @@
 #include <iostream>
 #include <cassert>
 #include <filesystem>
+#include <fstream>
 
 int main() {
     std::cout << "=== QuickDNS: Test Config Manager ===" << std::endl;
@@ -149,6 +150,97 @@ int main() {
         // Built-in profiles cannot be deleted
         assert(cfgReloaded.delete_profile("comss") == false);
         std::cout << "[PASS] Built-in profile protection verified." << std::endl;
+    }
+
+    // 5. Round-trip verification: quotes, backslashes, Cyrillic, control characters
+    {
+        std::filesystem::path specialPath = std::filesystem::temp_directory_path() / "quickdns_special_chars.json";
+        if (std::filesystem::exists(specialPath)) {
+            std::filesystem::remove(specialPath);
+        }
+
+        std::string specialName = "DNS \"Super\" \\ Тест \t Профиль \n Строка 2";
+        std::string specialDesc = "Кавычки: \"\", Слэши: C:\\Windows\\System32, Символы: !@#$%^&*()_+-=";
+
+        {
+            ConfigManager cfgSpecial(specialPath);
+            DnsProfile p;
+            p.id = "special_id";
+            p.name = specialName;
+            p.description = specialDesc;
+            p.primary_ipv4 = "1.2.3.4";
+            assert(cfgSpecial.add_profile(p) == true);
+            assert(cfgSpecial.save_to_file() == true);
+        }
+
+        {
+            ConfigManager cfgLoaded(specialPath);
+            auto p = cfgLoaded.get_profile_by_id("special_id");
+            assert(p.has_value());
+            assert(p->name == specialName);
+            assert(p->description == specialDesc);
+            std::cout << "[PASS] Round-trip test with quotes, backslashes, Cyrillic and control characters passed!" << std::endl;
+        }
+
+        if (std::filesystem::exists(specialPath)) {
+            std::filesystem::remove(specialPath);
+        }
+    }
+
+    // 6. Reading old format v2.0.1 fixture
+    {
+        std::filesystem::path fixturePath = "tests/fixtures/profiles_v201.json";
+        if (!std::filesystem::exists(fixturePath)) {
+            fixturePath = "../tests/fixtures/profiles_v201.json";
+        }
+        if (!std::filesystem::exists(fixturePath)) {
+            fixturePath = "C:/Users/SWEETY/QuickDNS/tests/fixtures/profiles_v201.json";
+        }
+        if (std::filesystem::exists(fixturePath)) {
+            ConfigManager cfgOld(fixturePath);
+            assert(cfgOld.get_active_profile_id() == "comss");
+            auto comss = cfgOld.get_profile_by_id("comss");
+            assert(comss.has_value());
+            assert(comss->primary_ipv4 == "83.220.169.155");
+            std::cout << "[PASS] Successfully parsed v2.0.1 fixture config!" << std::endl;
+        } else {
+            std::cout << "[WARN] Fixture tests/fixtures/profiles_v201.json not found, skipping." << std::endl;
+        }
+    }
+
+    // 7. Broken JSON handling and backup creation
+    {
+        std::filesystem::path brokenPath = std::filesystem::temp_directory_path() / "quickdns_broken.json";
+        if (std::filesystem::exists(brokenPath)) {
+            std::filesystem::remove(brokenPath);
+        }
+
+        // Write incomplete/invalid JSON
+        {
+            std::ofstream f(brokenPath);
+            f << "{ \"active_profile_id\": \"broken\", \"profiles\": [";
+        }
+
+        ConfigManager cfgBroken(brokenPath);
+        // ConfigManager should back up corrupted file to .broken-<timestamp> and populate default presets
+        auto all = cfgBroken.get_all_profiles();
+        assert(!all.empty());
+
+        bool foundBackup = false;
+        for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::temp_directory_path())) {
+            std::string filename = entry.path().filename().string();
+            if (filename.rfind("quickdns_broken.json.broken-", 0) == 0) {
+                foundBackup = true;
+                std::filesystem::remove(entry.path());
+                break;
+            }
+        }
+        assert(foundBackup);
+        std::cout << "[PASS] Corrupted JSON backed up to .broken-<timestamp> and presets restored!" << std::endl;
+
+        if (std::filesystem::exists(brokenPath)) {
+            std::filesystem::remove(brokenPath);
+        }
     }
 
     // Cleanup

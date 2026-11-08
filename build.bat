@@ -112,7 +112,7 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] SmartDNS verifier compilation failed. & exi
 if %ERRORLEVEL% neq 0 ( echo [ERROR] App updater compilation failed. & exit /b 1 )
 
 echo [3/6] Compiling Config Manager...
-"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -c src\config_manager.cpp -o build\config_manager.o
+"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN -I include -I third_party -c src\config_manager.cpp -o build\config_manager.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Config manager compilation failed. & exit /b 1 )
 
 echo [4/6] Compiling Modern Win32 GUI, Benchmark and Dialogs...
@@ -143,13 +143,13 @@ echo [6/6] Linking Diagnostic tools [test_dns.exe, test_config.exe, test_benchma
 "!CXX!" -std=c++20 -O2 -static -I include tests\test_dns.cpp build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_dns.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_dns.exe failed. & exit /b 1 )
 
-"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_config.cpp build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_config.exe
+"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include -I third_party tests\test_config.cpp build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_config.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_config.exe failed. & exit /b 1 )
 
-"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_benchmark.cpp build\dns_benchmark.o build\dns_manager.o build\config_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_benchmark.exe
+"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include -I third_party tests\test_benchmark.cpp build\dns_benchmark.o build\dns_manager.o build\config_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_benchmark.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_benchmark.exe failed. & exit /b 1 )
 
-"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_smartdns_verifier.cpp build\smartdns_verifier.o build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -luuid -lole32 -o build\test_smartdns_verifier.exe
+"!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include -I third_party tests\test_smartdns_verifier.cpp build\smartdns_verifier.o build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -luuid -lole32 -o build\test_smartdns_verifier.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_smartdns_verifier.exe failed. & exit /b 1 )
 
 "!CXX!" -std=c++20 -O2 -finput-charset=utf-8 -fexec-charset=utf-8 -static -I include tests\test_updater.cpp build\app_updater.o build\resource_diag.o -lwinhttp -lshell32 -lbcrypt -o build\test_updater.exe

@@ -1,74 +1,64 @@
 #include "config_manager.h"
 #include "dns_manager.h"
 #include "encoding_utils.h"
+#include "nlohmann/json.hpp"
+
+#include <windows.h>
+#include <shlobj.h>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
-#include <cstdlib>
 #include <iostream>
+#include <chrono>
 
-namespace {
+using json = nlohmann::json;
 
-std::string escape_json_string(const std::string& input) {
-    std::ostringstream ss;
-    for (char c : input) {
-        switch (c) {
-            case '"': ss << "\\\""; break;
-            case '\\': ss << "\\\\"; break;
-            case '\b': ss << "\\b"; break;
-            case '\f': ss << "\\f"; break;
-            case '\n': ss << "\\n"; break;
-            case '\r': ss << "\\r"; break;
-            case '\t': ss << "\\t"; break;
-            default:
-                if ('\x00' <= c && c <= '\x1f') {
-                    // Control character
-                } else {
-                    ss << c;
-                }
-        }
-    }
-    return ss.str();
+void to_json(json& j, const DnsProfile& p) {
+    j = json{
+        {"id", p.id},
+        {"name", p.name},
+        {"description", p.description},
+        {"primary_ipv4", p.primary_ipv4},
+        {"secondary_ipv4", p.secondary_ipv4},
+        {"primary_ipv6", p.primary_ipv6},
+        {"secondary_ipv6", p.secondary_ipv6},
+        {"doh_template", p.doh_template},
+        {"is_builtin", p.is_builtin},
+        {"is_dhcp", p.is_dhcp},
+        {"is_smart_dns", p.is_smart_dns},
+        {"website_url", p.website_url},
+        {"unblocked_summary", p.unblocked_summary}
+    };
 }
 
-std::string extract_json_value(const std::string& json, const std::string& key) {
-    std::string searchKey = "\"" + key + "\"";
-    size_t pos = json.find(searchKey);
-    if (pos == std::string::npos) return "";
-
-    pos = json.find(':', pos);
-    if (pos == std::string::npos) return "";
-
-    pos++; // move past ':'
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
-        pos++;
-    }
-
-    if (pos >= json.size()) return "";
-
-    if (json[pos] == '"') {
-        // String value
-        size_t endPos = pos + 1;
-        while (endPos < json.size()) {
-            if (json[endPos] == '"' && json[endPos - 1] != '\\') {
-                break;
-            }
-            endPos++;
+void from_json(const json& j, DnsProfile& p) {
+    auto get_str = [&j](const char* key) -> std::string {
+        if (j.contains(key) && j[key].is_string()) {
+            return j[key].get<std::string>();
         }
-        return json.substr(pos + 1, endPos - pos - 1);
-    } else {
-        // Boolean or numeric
-        size_t endPos = pos;
-        while (endPos < json.size() && json[endPos] != ',' && json[endPos] != '}' && json[endPos] != '\n' && json[endPos] != '\r') {
-            endPos++;
+        return "";
+    };
+    auto get_bool = [&j](const char* key, bool def = false) -> bool {
+        if (j.contains(key) && j[key].is_boolean()) {
+            return j[key].get<bool>();
         }
-        std::string val = json.substr(pos, endPos - pos);
-        val.erase(std::remove_if(val.begin(), val.end(), ::isspace), val.end());
-        return val;
-    }
+        return def;
+    };
+
+    p.id = get_str("id");
+    p.name = get_str("name");
+    p.description = get_str("description");
+    p.primary_ipv4 = get_str("primary_ipv4");
+    p.secondary_ipv4 = get_str("secondary_ipv4");
+    p.primary_ipv6 = get_str("primary_ipv6");
+    p.secondary_ipv6 = get_str("secondary_ipv6");
+    p.doh_template = get_str("doh_template");
+    p.is_builtin = get_bool("is_builtin", false);
+    p.is_dhcp = get_bool("is_dhcp", false);
+    p.is_smart_dns = get_bool("is_smart_dns", false);
+    p.website_url = get_str("website_url");
+    p.unblocked_summary = get_str("unblocked_summary");
 }
-
-} // anonymous namespace
 
 ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
     if (config_path.empty()) {
@@ -81,6 +71,7 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
 
     bool needs_reset = false;
     if (loaded) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         for (const auto& p : m_profiles) {
             if (p.name.find("\xEF\xBF\xBD") != std::string::npos ||
                 p.description.find("\xEF\xBF\xBD") != std::string::npos) {
@@ -91,57 +82,63 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
     }
 
     if (!loaded || needs_reset) {
-        m_profiles = get_default_presets();
-        m_active_profile_id = "dhcp";
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_profiles = get_default_presets();
+            m_active_profile_id = "dhcp";
+        }
         save_to_file();
     } else {
         // Synchronize built-in presets with the latest authoritative IPs and DoH templates
         auto defaultPresets = get_default_presets();
         bool updatedAny = false;
-        for (auto& p : m_profiles) {
-            if (p.is_builtin) {
-                for (const auto& def : defaultPresets) {
-                    if (def.id == p.id) {
-                        if (p.primary_ipv4 != def.primary_ipv4 ||
-                            p.secondary_ipv4 != def.secondary_ipv4 ||
-                            p.doh_template != def.doh_template ||
-                            p.name != def.name ||
-                            p.description != def.description ||
-                            p.is_smart_dns != def.is_smart_dns ||
-                            p.website_url != def.website_url ||
-                            p.unblocked_summary != def.unblocked_summary) {
-                            p.primary_ipv4 = def.primary_ipv4;
-                            p.secondary_ipv4 = def.secondary_ipv4;
-                            p.primary_ipv6 = def.primary_ipv6;
-                            p.secondary_ipv6 = def.secondary_ipv6;
-                            p.doh_template = def.doh_template;
-                            p.name = def.name;
-                            p.description = def.description;
-                            p.is_smart_dns = def.is_smart_dns;
-                            p.website_url = def.website_url;
-                            p.unblocked_summary = def.unblocked_summary;
-                            updatedAny = true;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (auto& p : m_profiles) {
+                if (p.is_builtin) {
+                    for (const auto& def : defaultPresets) {
+                        if (def.id == p.id) {
+                            if (p.primary_ipv4 != def.primary_ipv4 ||
+                                p.secondary_ipv4 != def.secondary_ipv4 ||
+                                p.doh_template != def.doh_template ||
+                                p.name != def.name ||
+                                p.description != def.description ||
+                                p.is_smart_dns != def.is_smart_dns ||
+                                p.website_url != def.website_url ||
+                                p.unblocked_summary != def.unblocked_summary) {
+                                p.primary_ipv4 = def.primary_ipv4;
+                                p.secondary_ipv4 = def.secondary_ipv4;
+                                p.primary_ipv6 = def.primary_ipv6;
+                                p.secondary_ipv6 = def.secondary_ipv6;
+                                p.doh_template = def.doh_template;
+                                p.name = def.name;
+                                p.description = def.description;
+                                p.is_smart_dns = def.is_smart_dns;
+                                p.website_url = def.website_url;
+                                p.unblocked_summary = def.unblocked_summary;
+                                updatedAny = true;
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }
-        }
-        for (const auto& def : defaultPresets) {
-            bool found = false;
-            for (const auto& p : m_profiles) {
-                if (p.id == def.id) {
-                    found = true;
-                    break;
+            for (const auto& def : defaultPresets) {
+                bool found = false;
+                for (const auto& p : m_profiles) {
+                    if (p.id == def.id) {
+                        found = true;
+                        break;
+                    }
                 }
-            }
-            if (!found) {
-                if (!m_profiles.empty() && m_profiles.back().id == "dhcp") {
-                    m_profiles.insert(m_profiles.end() - 1, def);
-                } else {
-                    m_profiles.push_back(def);
+                if (!found) {
+                    if (!m_profiles.empty() && m_profiles.back().id == "dhcp") {
+                        m_profiles.insert(m_profiles.end() - 1, def);
+                    } else {
+                        m_profiles.push_back(def);
+                    }
+                    updatedAny = true;
                 }
-                updatedAny = true;
             }
         }
         if (updatedAny) {
@@ -151,9 +148,15 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
 }
 
 std::filesystem::path ConfigManager::resolve_default_config_path() {
-    const char* appData = std::getenv("APPDATA");
-    if (appData) {
-        return std::filesystem::path(appData) / "QuickDNS" / "profiles.json";
+    PWSTR roamingPath = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &roamingPath))) {
+        std::filesystem::path p = std::filesystem::path(roamingPath) / L"QuickDNS" / L"profiles.json";
+        CoTaskMemFree(roamingPath);
+        return p;
+    }
+    const wchar_t* wAppData = _wgetenv(L"APPDATA");
+    if (wAppData) {
+        return std::filesystem::path(wAppData) / L"QuickDNS" / L"profiles.json";
     }
     return std::filesystem::path("profiles.json");
 }
@@ -513,44 +516,83 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
 }
 
 bool ConfigManager::save_to_file() {
+    std::string active_id;
+    std::string theme;
+    std::vector<DnsProfile> profiles_copy;
+    std::filesystem::path path;
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        active_id = m_active_profile_id;
+        theme = m_theme_mode;
+        profiles_copy = m_profiles;
+        path = m_config_path;
+    }
+
     try {
-        if (m_config_path.has_parent_path()) {
-            std::filesystem::create_directories(m_config_path.parent_path());
+        if (path.has_parent_path()) {
+            std::filesystem::create_directories(path.parent_path());
         }
 
-        std::ofstream file(m_config_path, std::ios::out | std::ios::trunc | std::ios::binary);
-        if (!file.is_open()) return false;
-
-        std::ostringstream ss;
-        ss << "{\n";
-        ss << "  \"active_profile_id\": \"" << escape_json_string(m_active_profile_id) << "\",\n";
-        ss << "  \"theme\": \"" << escape_json_string(m_theme_mode) << "\",\n";
-        ss << "  \"profiles\": [\n";
-
-        for (size_t i = 0; i < m_profiles.size(); ++i) {
-            const auto& p = m_profiles[i];
-            ss << "    {\n";
-            ss << "      \"id\": \"" << escape_json_string(p.id) << "\",\n";
-            ss << "      \"name\": \"" << escape_json_string(p.name) << "\",\n";
-            ss << "      \"description\": \"" << escape_json_string(p.description) << "\",\n";
-            ss << "      \"primary_ipv4\": \"" << escape_json_string(p.primary_ipv4) << "\",\n";
-            ss << "      \"secondary_ipv4\": \"" << escape_json_string(p.secondary_ipv4) << "\",\n";
-            ss << "      \"primary_ipv6\": \"" << escape_json_string(p.primary_ipv6) << "\",\n";
-            ss << "      \"secondary_ipv6\": \"" << escape_json_string(p.secondary_ipv6) << "\",\n";
-            ss << "      \"doh_template\": \"" << escape_json_string(p.doh_template) << "\",\n";
-            ss << "      \"is_builtin\": " << (p.is_builtin ? "true" : "false") << ",\n";
-            ss << "      \"is_dhcp\": " << (p.is_dhcp ? "true" : "false") << ",\n";
-            ss << "      \"is_smart_dns\": " << (p.is_smart_dns ? "true" : "false") << ",\n";
-            ss << "      \"website_url\": \"" << escape_json_string(p.website_url) << "\",\n";
-            ss << "      \"unblocked_summary\": \"" << escape_json_string(p.unblocked_summary) << "\"\n";
-            ss << "    }" << (i + 1 < m_profiles.size() ? "," : "") << "\n";
+        json root;
+        root["active_profile_id"] = active_id;
+        root["theme"] = theme;
+        root["profiles"] = json::array();
+        for (const auto& p : profiles_copy) {
+            root["profiles"].push_back(p);
         }
 
-        ss << "  ]\n";
-        ss << "}\n";
+        std::string json_str = root.dump(2);
 
-        std::string jsonStr = ss.str();
-        file.write(jsonStr.data(), jsonStr.size());
+        std::filesystem::path tmp_path = path;
+        tmp_path += L".tmp";
+
+        HANDLE hFile = CreateFileW(
+            tmp_path.c_str(),
+            GENERIC_WRITE,
+            0,
+            nullptr,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr
+        );
+
+        if (hFile == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+
+        DWORD bytes_written = 0;
+        BOOL write_ok = WriteFile(
+            hFile,
+            json_str.data(),
+            static_cast<DWORD>(json_str.size()),
+            &bytes_written,
+            nullptr
+        );
+
+        if (!write_ok || bytes_written != json_str.size()) {
+            CloseHandle(hFile);
+            DeleteFileW(tmp_path.c_str());
+            return false;
+        }
+
+        FlushFileBuffers(hFile);
+        CloseHandle(hFile);
+
+        if (std::filesystem::exists(path)) {
+            if (!ReplaceFileW(path.c_str(), tmp_path.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr)) {
+                if (!MoveFileExW(tmp_path.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                    DeleteFileW(tmp_path.c_str());
+                    return false;
+                }
+            }
+        } else {
+            if (!MoveFileExW(tmp_path.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                DeleteFileW(tmp_path.c_str());
+                return false;
+            }
+        }
+
         return true;
     } catch (...) {
         return false;
@@ -558,6 +600,7 @@ bool ConfigManager::save_to_file() {
 }
 
 bool ConfigManager::load_from_file() {
+    std::lock_guard<std::mutex> lock(m_mutex);
     try {
         if (!std::filesystem::exists(m_config_path)) {
             return false;
@@ -566,70 +609,59 @@ bool ConfigManager::load_from_file() {
         std::ifstream file(m_config_path, std::ios::in | std::ios::binary);
         if (!file.is_open()) return false;
 
-        std::stringstream buffer;
-        buffer << file.rdbuf();
-        std::string content = buffer.str();
+        std::string content((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+        file.close();
 
-        std::string activeId = extract_json_value(content, "active_profile_id");
-        if (!activeId.empty()) {
-            m_active_profile_id = activeId;
-        }
+        json root;
+        try {
+            root = json::parse(content);
+        } catch (const std::exception&) {
+            auto now = std::chrono::system_clock::now();
+            auto ts = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+            std::filesystem::path broken_path = m_config_path;
+            broken_path += L".broken-" + std::to_wstring(ts);
 
-        std::string themeVal = extract_json_value(content, "theme");
-        if (!themeVal.empty()) {
-            m_theme_mode = (themeVal == "light") ? "light" : "dark";
-        }
+            std::error_code ec;
+            std::filesystem::rename(m_config_path, broken_path, ec);
 
-        // Parse profile objects
-        std::vector<DnsProfile> loadedProfiles;
-        size_t searchPos = 0;
-        while (true) {
-            size_t objStart = content.find('{', searchPos);
-            if (objStart == std::string::npos) break;
-
-            if (objStart == 0 || (objStart < 5 && searchPos == 0)) {
-                searchPos = objStart + 1;
-                continue;
+            std::wstring warn = L"Обнаружена ошибка в файле конфигурации profiles.json. Файл переименован в " +
+                                broken_path.filename().wstring() + L", созданы настройки по умолчанию.";
+            if (GetConsoleWindow() == nullptr) {
+                MessageBoxW(nullptr, warn.c_str(), L"QuickDNS - Ошибка конфигурации", MB_OK | MB_ICONWARNING);
             }
+            return false;
+        }
 
-            size_t objEnd = content.find('}', objStart);
-            if (objEnd == std::string::npos) break;
+        if (root.contains("active_profile_id") && root["active_profile_id"].is_string()) {
+            m_active_profile_id = root["active_profile_id"].get<std::string>();
+        }
 
-            std::string objStr = content.substr(objStart, objEnd - objStart + 1);
-            std::string id = extract_json_value(objStr, "id");
+        if (root.contains("theme") && root["theme"].is_string()) {
+            std::string t = root["theme"].get<std::string>();
+            m_theme_mode = (t == "light") ? "light" : "dark";
+        }
 
-            if (!id.empty()) {
-                DnsProfile p;
-                p.id = id;
-                p.name = extract_json_value(objStr, "name");
-                p.description = extract_json_value(objStr, "description");
-                p.primary_ipv4 = extract_json_value(objStr, "primary_ipv4");
-                p.secondary_ipv4 = extract_json_value(objStr, "secondary_ipv4");
-                p.primary_ipv6 = extract_json_value(objStr, "primary_ipv6");
-                p.secondary_ipv6 = extract_json_value(objStr, "secondary_ipv6");
-                p.doh_template = extract_json_value(objStr, "doh_template");
-                if (!p.doh_template.empty()) {
-                    std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(p.doh_template);
-                    if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
-                        std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid doh_template in profile '" 
-                                   << QuickDns::Encoding::utf8_to_wide(p.name) << L"' cleared: " << w_doh << L"\n";
-                        p.doh_template.clear();
+        if (root.contains("profiles") && root["profiles"].is_array()) {
+            std::vector<DnsProfile> loaded;
+            for (const auto& item : root["profiles"]) {
+                if (item.is_object() && item.contains("id") && item["id"].is_string()) {
+                    DnsProfile p = item.get<DnsProfile>();
+                    if (!p.id.empty()) {
+                        if (!p.doh_template.empty()) {
+                            std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(p.doh_template);
+                            if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
+                                p.doh_template.clear();
+                            }
+                        }
+                        loaded.push_back(p);
                     }
                 }
-                p.is_builtin = (extract_json_value(objStr, "is_builtin") == "true");
-                p.is_dhcp = (extract_json_value(objStr, "is_dhcp") == "true");
-                p.is_smart_dns = (extract_json_value(objStr, "is_smart_dns") == "true");
-                p.website_url = extract_json_value(objStr, "website_url");
-                p.unblocked_summary = extract_json_value(objStr, "unblocked_summary");
-                loadedProfiles.push_back(p);
             }
-
-            searchPos = objEnd + 1;
-        }
-
-        if (!loadedProfiles.empty()) {
-            m_profiles = std::move(loadedProfiles);
-            return true;
+            if (!loaded.empty()) {
+                m_profiles = std::move(loaded);
+                return true;
+            }
         }
 
         return false;
