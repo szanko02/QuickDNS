@@ -52,8 +52,8 @@ public:
     // Disable copy for clean resource management (move is allowed)
     DnsManager(const DnsManager&) = delete;
     DnsManager& operator=(const DnsManager&) = delete;
-    DnsManager(DnsManager&&) noexcept = default;
-    DnsManager& operator=(DnsManager&&) noexcept = default;
+    DnsManager(DnsManager&& other) noexcept;
+    DnsManager& operator=(DnsManager&& other) noexcept;
 
     /**
      * @brief Enumerates physical and active network adapters.
@@ -187,11 +187,17 @@ private:
     static bool is_virtual_adapter(const IP_ADAPTER_ADDRESSES* adapter);
     static bool execute_hidden_process(const std::wstring& command);
     static std::wstring format_win32_error(DWORD error_code);
-    static bool query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_str);
+    bool query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_str) const;
     void configure_doh_server(const std::wstring& server_ip, const std::wstring& doh_template);
     void configure_interface_doh(const std::wstring& adapter_id, const std::vector<std::wstring>& servers, const std::wstring& doh_template);
 
     mutable std::wstring last_error_;
+    HMODULE m_hIpHlp = nullptr;
+    HMODULE m_hDnsApi = nullptr;
+    void* m_pfnSetInterfaceDnsSettings = nullptr;
+    void* m_pfnGetInterfaceDnsSettings = nullptr;
+    void* m_pfnFreeInterfaceDnsSettings = nullptr;
+    void* m_pfnDnsFlushResolverCache = nullptr;
 };
 
 } // namespace quickdns

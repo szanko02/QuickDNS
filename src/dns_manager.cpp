@@ -229,9 +229,74 @@ namespace quickdns {
 
 DnsManager::DnsManager() {
     ensure_winsock();
+
+    m_hIpHlp = LoadLibraryExW(L"iphlpapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (m_hIpHlp) {
+        m_pfnSetInterfaceDnsSettings = reinterpret_cast<void*>(
+            GetProcAddress(m_hIpHlp, "SetInterfaceDnsSettings"));
+        m_pfnGetInterfaceDnsSettings = reinterpret_cast<void*>(
+            GetProcAddress(m_hIpHlp, "GetInterfaceDnsSettings"));
+        m_pfnFreeInterfaceDnsSettings = reinterpret_cast<void*>(
+            GetProcAddress(m_hIpHlp, "FreeInterfaceDnsSettings"));
+    }
+
+    m_hDnsApi = LoadLibraryExW(L"dnsapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (m_hDnsApi) {
+        m_pfnDnsFlushResolverCache = reinterpret_cast<void*>(
+            GetProcAddress(m_hDnsApi, "DnsFlushResolverCache"));
+    }
 }
 
-DnsManager::~DnsManager() = default;
+DnsManager::~DnsManager() {
+    if (m_hIpHlp) {
+        FreeLibrary(m_hIpHlp);
+        m_hIpHlp = nullptr;
+    }
+    if (m_hDnsApi) {
+        FreeLibrary(m_hDnsApi);
+        m_hDnsApi = nullptr;
+    }
+}
+
+DnsManager::DnsManager(DnsManager&& other) noexcept
+    : last_error_(std::move(other.last_error_)),
+      m_hIpHlp(other.m_hIpHlp),
+      m_hDnsApi(other.m_hDnsApi),
+      m_pfnSetInterfaceDnsSettings(other.m_pfnSetInterfaceDnsSettings),
+      m_pfnGetInterfaceDnsSettings(other.m_pfnGetInterfaceDnsSettings),
+      m_pfnFreeInterfaceDnsSettings(other.m_pfnFreeInterfaceDnsSettings),
+      m_pfnDnsFlushResolverCache(other.m_pfnDnsFlushResolverCache)
+{
+    other.m_hIpHlp = nullptr;
+    other.m_hDnsApi = nullptr;
+    other.m_pfnSetInterfaceDnsSettings = nullptr;
+    other.m_pfnGetInterfaceDnsSettings = nullptr;
+    other.m_pfnFreeInterfaceDnsSettings = nullptr;
+    other.m_pfnDnsFlushResolverCache = nullptr;
+}
+
+DnsManager& DnsManager::operator=(DnsManager&& other) noexcept {
+    if (this != &other) {
+        if (m_hIpHlp) FreeLibrary(m_hIpHlp);
+        if (m_hDnsApi) FreeLibrary(m_hDnsApi);
+
+        last_error_ = std::move(other.last_error_);
+        m_hIpHlp = other.m_hIpHlp;
+        m_hDnsApi = other.m_hDnsApi;
+        m_pfnSetInterfaceDnsSettings = other.m_pfnSetInterfaceDnsSettings;
+        m_pfnGetInterfaceDnsSettings = other.m_pfnGetInterfaceDnsSettings;
+        m_pfnFreeInterfaceDnsSettings = other.m_pfnFreeInterfaceDnsSettings;
+        m_pfnDnsFlushResolverCache = other.m_pfnDnsFlushResolverCache;
+
+        other.m_hIpHlp = nullptr;
+        other.m_hDnsApi = nullptr;
+        other.m_pfnSetInterfaceDnsSettings = nullptr;
+        other.m_pfnGetInterfaceDnsSettings = nullptr;
+        other.m_pfnFreeInterfaceDnsSettings = nullptr;
+        other.m_pfnDnsFlushResolverCache = nullptr;
+    }
+    return *this;
+}
 
 void DnsManager::log_info(const std::wstring& msg) const {
     std::wclog << L"[QuickDNS::DnsManager] INFO: " << msg << std::endl;
@@ -388,47 +453,40 @@ bool DnsManager::execute_hidden_process(const std::wstring& command) {
     return (wait_result == WAIT_OBJECT_0 && exit_code == 0);
 }
 
-bool DnsManager::query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_str) {
+bool DnsManager::query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_str) const {
     // Attempt 1: Modern Windows 10/11 GetInterfaceDnsSettings API
-    HMODULE hIpHlp = LoadLibraryW(L"iphlpapi.dll");
-    if (hIpHlp) {
-        auto pfnGet = reinterpret_cast<PFN_GetInterfaceDnsSettings>(
-            GetProcAddress(hIpHlp, "GetInterfaceDnsSettings"));
-        auto pfnFree = reinterpret_cast<PFN_FreeInterfaceDnsSettings>(
-            GetProcAddress(hIpHlp, "FreeInterfaceDnsSettings"));
+    auto pfnGet = reinterpret_cast<PFN_GetInterfaceDnsSettings>(m_pfnGetInterfaceDnsSettings);
+    auto pfnFree = reinterpret_cast<PFN_FreeInterfaceDnsSettings>(m_pfnFreeInterfaceDnsSettings);
 
-        if (pfnGet && guid != GUID_NULL) {
-            DNS_INTERFACE_SETTINGS settings = {};
-            settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
-            DWORD err = pfnGet(guid, &settings);
-            if (err == ERROR_SUCCESS) {
-                bool has_static_nameserver = false;
-                if (settings.NameServer && settings.NameServer[0] != L'\0') {
-                    for (const wchar_t* p = settings.NameServer; *p; ++p) {
-                        if (!iswspace(*p)) {
-                            has_static_nameserver = true;
-                            break;
-                        }
+    if (pfnGet && guid != GUID_NULL) {
+        DNS_INTERFACE_SETTINGS settings = {};
+        settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+        DWORD err = pfnGet(guid, &settings);
+        if (err == ERROR_SUCCESS) {
+            bool has_static_nameserver = false;
+            if (settings.NameServer && settings.NameServer[0] != L'\0') {
+                for (const wchar_t* p = settings.NameServer; *p; ++p) {
+                    if (!iswspace(*p)) {
+                        has_static_nameserver = true;
+                        break;
                     }
-                }
-                if (settings.ProfileNameServer && settings.ProfileNameServer[0] != L'\0') {
-                    for (const wchar_t* p = settings.ProfileNameServer; *p; ++p) {
-                        if (!iswspace(*p)) {
-                            has_static_nameserver = true;
-                            break;
-                        }
-                    }
-                }
-                if (pfnFree) {
-                    pfnFree(&settings);
-                }
-                FreeLibrary(hIpHlp);
-                if (has_static_nameserver) {
-                    return false; // Static DNS configured
                 }
             }
+            if (settings.ProfileNameServer && settings.ProfileNameServer[0] != L'\0') {
+                for (const wchar_t* p = settings.ProfileNameServer; *p; ++p) {
+                    if (!iswspace(*p)) {
+                        has_static_nameserver = true;
+                        break;
+                    }
+                }
+            }
+            if (pfnFree) {
+                pfnFree(&settings);
+            }
+            if (has_static_nameserver) {
+                return false; // Static DNS configured
+            }
         }
-        FreeLibrary(hIpHlp);
     }
 
     // Attempt 2: Direct Registry Query fallback
@@ -818,45 +876,39 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
     bool v6_modern_ok = false;
 
     // 1. Modern SetInterfaceDnsSettings API (Windows 10 1809+ / Windows 11)
-    HMODULE hIpHlp = LoadLibraryW(L"iphlpapi.dll");
-    if (hIpHlp) {
-        auto pfnSet = reinterpret_cast<PFN_SetInterfaceDnsSettings>(
-            GetProcAddress(hIpHlp, "SetInterfaceDnsSettings"));
+    auto pfnSet = reinterpret_cast<PFN_SetInterfaceDnsSettings>(m_pfnSetInterfaceDnsSettings);
+    if (pfnSet && adapter.guid != GUID_NULL) {
+        if (!ipv4_primary.empty()) {
+            DNS_INTERFACE_SETTINGS settings_v4 = {};
+            settings_v4.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+            settings_v4.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
+            settings_v4.NameServer = const_cast<PWSTR>(v4_servers.c_str());
+            settings_v4.ProfileNameServer = const_cast<PWSTR>(v4_servers.c_str());
 
-        if (pfnSet && adapter.guid != GUID_NULL) {
-            if (!ipv4_primary.empty()) {
-                DNS_INTERFACE_SETTINGS settings_v4 = {};
-                settings_v4.Version = DNS_INTERFACE_SETTINGS_VERSION1;
-                settings_v4.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
-                settings_v4.NameServer = const_cast<PWSTR>(v4_servers.c_str());
-                settings_v4.ProfileNameServer = const_cast<PWSTR>(v4_servers.c_str());
-
-                DWORD status = pfnSet(adapter.guid, &settings_v4);
-                if (status == ERROR_SUCCESS) {
-                    v4_modern_ok = true;
-                    log_info(L"SetInterfaceDnsSettings (IPv4) succeeded on adapter: " + adapter.name);
-                } else {
-                    log_info(L"SetInterfaceDnsSettings (IPv4) returned code: " + std::to_wstring(status) + L" (" + format_win32_error(status) + L")");
-                }
-            }
-
-            if (!ipv6_primary.empty()) {
-                DNS_INTERFACE_SETTINGS settings_v6 = {};
-                settings_v6.Version = DNS_INTERFACE_SETTINGS_VERSION1;
-                settings_v6.Flags = DNS_SETTING_IPV6 | DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
-                settings_v6.NameServer = const_cast<PWSTR>(v6_servers.c_str());
-                settings_v6.ProfileNameServer = const_cast<PWSTR>(v6_servers.c_str());
-
-                DWORD status = pfnSet(adapter.guid, &settings_v6);
-                if (status == ERROR_SUCCESS) {
-                    v6_modern_ok = true;
-                    log_info(L"SetInterfaceDnsSettings (IPv6) succeeded on adapter: " + adapter.name);
-                } else {
-                    log_info(L"SetInterfaceDnsSettings (IPv6) returned code: " + std::to_wstring(status) + L" (" + format_win32_error(status) + L")");
-                }
+            DWORD status = pfnSet(adapter.guid, &settings_v4);
+            if (status == ERROR_SUCCESS) {
+                v4_modern_ok = true;
+                log_info(L"SetInterfaceDnsSettings (IPv4) succeeded on adapter: " + adapter.name);
+            } else {
+                log_info(L"SetInterfaceDnsSettings (IPv4) returned code: " + std::to_wstring(status) + L" (" + format_win32_error(status) + L")");
             }
         }
-        FreeLibrary(hIpHlp);
+
+        if (!ipv6_primary.empty()) {
+            DNS_INTERFACE_SETTINGS settings_v6 = {};
+            settings_v6.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+            settings_v6.Flags = DNS_SETTING_IPV6 | DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
+            settings_v6.NameServer = const_cast<PWSTR>(v6_servers.c_str());
+            settings_v6.ProfileNameServer = const_cast<PWSTR>(v6_servers.c_str());
+
+            DWORD status = pfnSet(adapter.guid, &settings_v6);
+            if (status == ERROR_SUCCESS) {
+                v6_modern_ok = true;
+                log_info(L"SetInterfaceDnsSettings (IPv6) succeeded on adapter: " + adapter.name);
+            } else {
+                log_info(L"SetInterfaceDnsSettings (IPv6) returned code: " + std::to_wstring(status) + L" (" + format_win32_error(status) + L")");
+            }
+        }
     }
 
     // 2. Comprehensive netsh application
@@ -1129,40 +1181,34 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
     bool modern_api_ok = false;
 
     // 1. Try modern SetInterfaceDnsSettings API for IPv4 and IPv6
-    HMODULE hIpHlp = LoadLibraryW(L"iphlpapi.dll");
-    if (hIpHlp) {
-        auto pfnSet = reinterpret_cast<PFN_SetInterfaceDnsSettings>(
-            GetProcAddress(hIpHlp, "SetInterfaceDnsSettings"));
+    auto pfnSet = reinterpret_cast<PFN_SetInterfaceDnsSettings>(m_pfnSetInterfaceDnsSettings);
+    if (pfnSet && adapter.guid != GUID_NULL) {
+        // Reset IPv4
+        DNS_INTERFACE_SETTINGS settings = {};
+        settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+        settings.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
+        settings.NameServer = const_cast<PWSTR>(L"");
+        settings.ProfileNameServer = const_cast<PWSTR>(L"");
 
-        if (pfnSet && adapter.guid != GUID_NULL) {
-            // Reset IPv4
-            DNS_INTERFACE_SETTINGS settings = {};
-            settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
-            settings.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
-            settings.NameServer = const_cast<PWSTR>(L"");
-            settings.ProfileNameServer = const_cast<PWSTR>(L"");
-
-            DWORD status = pfnSet(adapter.guid, &settings);
-            if (status == ERROR_SUCCESS) {
-                modern_api_ok = true;
-                log_info(L"Successfully reset IPv4 DNS to DHCP via SetInterfaceDnsSettings on " + adapter.name);
-            } else {
-                log_info(L"SetInterfaceDnsSettings reset IPv4 returned: " + format_win32_error(status));
-            }
-
-            // Reset IPv6
-            DNS_INTERFACE_SETTINGS settings_v6 = {};
-            settings_v6.Version = DNS_INTERFACE_SETTINGS_VERSION1;
-            settings_v6.Flags = DNS_SETTING_IPV6 | DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
-            settings_v6.NameServer = const_cast<PWSTR>(L"");
-            settings_v6.ProfileNameServer = const_cast<PWSTR>(L"");
-
-            DWORD status_v6 = pfnSet(adapter.guid, &settings_v6);
-            if (status_v6 == ERROR_SUCCESS) {
-                log_info(L"Successfully reset IPv6 DNS to DHCP via SetInterfaceDnsSettings on " + adapter.name);
-            }
+        DWORD status = pfnSet(adapter.guid, &settings);
+        if (status == ERROR_SUCCESS) {
+            modern_api_ok = true;
+            log_info(L"Successfully reset IPv4 DNS to DHCP via SetInterfaceDnsSettings on " + adapter.name);
+        } else {
+            log_info(L"SetInterfaceDnsSettings reset IPv4 returned: " + format_win32_error(status));
         }
-        FreeLibrary(hIpHlp);
+
+        // Reset IPv6
+        DNS_INTERFACE_SETTINGS settings_v6 = {};
+        settings_v6.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+        settings_v6.Flags = DNS_SETTING_IPV6 | DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
+        settings_v6.NameServer = const_cast<PWSTR>(L"");
+        settings_v6.ProfileNameServer = const_cast<PWSTR>(L"");
+
+        DWORD status_v6 = pfnSet(adapter.guid, &settings_v6);
+        if (status_v6 == ERROR_SUCCESS) {
+            log_info(L"Successfully reset IPv6 DNS to DHCP via SetInterfaceDnsSettings on " + adapter.name);
+        }
     }
 
     // 2. Netsh reset for IPv4 and IPv6
@@ -1251,17 +1297,12 @@ bool DnsManager::flush_dns_cache() {
     bool flushed_api = false;
 
     // 1. Direct in-process call to DnsFlushResolverCache in dnsapi.dll
-    HMODULE hDnsApi = LoadLibraryW(L"dnsapi.dll");
-    if (hDnsApi) {
-        auto pfnFlush = reinterpret_cast<PFN_DnsFlushResolverCache>(
-            GetProcAddress(hDnsApi, "DnsFlushResolverCache"));
-        if (pfnFlush) {
-            flushed_api = (pfnFlush() != FALSE);
-            if (flushed_api) {
-                log_info(L"DNS resolver cache successfully flushed via dnsapi.dll::DnsFlushResolverCache.");
-            }
+    auto pfnFlush = reinterpret_cast<PFN_DnsFlushResolverCache>(m_pfnDnsFlushResolverCache);
+    if (pfnFlush) {
+        flushed_api = (pfnFlush() != FALSE);
+        if (flushed_api) {
+            log_info(L"DNS resolver cache successfully flushed via dnsapi.dll::DnsFlushResolverCache.");
         }
-        FreeLibrary(hDnsApi);
     }
 
     // 2. Also invoke ipconfig.exe /flushdns to clear system-wide DNS client cache
