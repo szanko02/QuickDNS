@@ -511,6 +511,16 @@ std::vector<NetworkAdapterInfo> DnsManager::get_network_adapters() {
             }
         }
 
+        item.info.has_ipv6 = (pCurr->Ipv6IfIndex != 0) || !item.info.dns_ipv6.empty();
+        if (!item.info.has_ipv6) {
+            for (PIP_ADAPTER_UNICAST_ADDRESS pUni = pCurr->FirstUnicastAddress; pUni != nullptr; pUni = pUni->Next) {
+                if (pUni->Address.lpSockaddr && pUni->Address.lpSockaddr->sa_family == AF_INET6) {
+                    item.info.has_ipv6 = true;
+                    break;
+                }
+            }
+        }
+
         // Determine DHCP vs Static DNS configuration
         item.info.is_dhcp_dns = query_is_dhcp_dns(item.info.guid, item.info.id);
 
@@ -633,22 +643,45 @@ std::optional<NetworkAdapterInfo> DnsManager::get_primary_adapter() {
     return adapters.front();
 }
 
-bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter, 
-                                const std::wstring& primary_dns, 
-                                const std::wstring& secondary_dns,
-                                const std::wstring& doh_template) {
-    if (primary_dns.empty()) {
-        set_last_error(L"Адрес основного DNS не может быть пустым.");
+bool DnsManager::validate_dns_addresses(const std::wstring& ipv4_primary,
+                                       const std::wstring& ipv4_secondary,
+                                       const std::wstring& ipv6_primary,
+                                       const std::wstring& ipv6_secondary,
+                                       std::wstring* out_err)
+{
+    if (ipv4_primary.empty() && ipv6_primary.empty()) {
+        if (out_err) *out_err = L"Не указан ни один адрес DNS сервера.";
         return false;
     }
-
-    if (!is_valid_ip(primary_dns)) {
-        set_last_error(L"Некорректный IP-адрес основного DNS: " + primary_dns);
+    if (!ipv4_primary.empty() && !is_valid_ipv4(ipv4_primary)) {
+        if (out_err) *out_err = L"Некорректный IPv4-адрес основного DNS: " + ipv4_primary;
         return false;
     }
+    if (!ipv4_secondary.empty() && !is_valid_ipv4(ipv4_secondary)) {
+        if (out_err) *out_err = L"Некорректный IPv4-адрес дополнительного DNS: " + ipv4_secondary;
+        return false;
+    }
+    if (!ipv6_primary.empty() && !is_valid_ipv6(ipv6_primary)) {
+        if (out_err) *out_err = L"Некорректный IPv6-адрес основного DNS: " + ipv6_primary;
+        return false;
+    }
+    if (!ipv6_secondary.empty() && !is_valid_ipv6(ipv6_secondary)) {
+        if (out_err) *out_err = L"Некорректный IPv6-адрес дополнительного DNS: " + ipv6_secondary;
+        return false;
+    }
+    return true;
+}
 
-    if (!secondary_dns.empty() && !is_valid_ip(secondary_dns)) {
-        set_last_error(L"Некорректный IP-адрес дополнительного DNS: " + secondary_dns);
+bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
+                                const std::wstring& ipv4_primary,
+                                const std::wstring& ipv4_secondary,
+                                const std::wstring& ipv6_primary,
+                                const std::wstring& ipv6_secondary,
+                                const std::wstring& doh_template)
+{
+    std::wstring err;
+    if (!validate_dns_addresses(ipv4_primary, ipv4_secondary, ipv6_primary, ipv6_secondary, &err)) {
+        set_last_error(err);
         return false;
     }
 
@@ -662,12 +695,18 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
         return false;
     }
 
-    std::wstring servers = primary_dns;
-    if (!secondary_dns.empty()) {
-        servers += L"," + secondary_dns;
+    std::wstring v4_servers = ipv4_primary;
+    if (!ipv4_secondary.empty()) {
+        v4_servers += L"," + ipv4_secondary;
     }
 
-    bool modern_api_ok = false;
+    std::wstring v6_servers = ipv6_primary;
+    if (!ipv6_secondary.empty()) {
+        v6_servers += L"," + ipv6_secondary;
+    }
+
+    bool v4_modern_ok = false;
+    bool v6_modern_ok = false;
 
     // 1. Modern SetInterfaceDnsSettings API (Windows 10 1809+ / Windows 11)
     HMODULE hIpHlp = LoadLibraryW(L"iphlpapi.dll");
@@ -676,95 +715,156 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
             GetProcAddress(hIpHlp, "SetInterfaceDnsSettings"));
 
         if (pfnSet && adapter.guid != GUID_NULL) {
-            DNS_INTERFACE_SETTINGS settings = {};
-            settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
-            settings.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
-            settings.NameServer = const_cast<PWSTR>(servers.c_str());
-            settings.ProfileNameServer = const_cast<PWSTR>(servers.c_str());
+            if (!ipv4_primary.empty()) {
+                DNS_INTERFACE_SETTINGS settings_v4 = {};
+                settings_v4.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+                settings_v4.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
+                settings_v4.NameServer = const_cast<PWSTR>(v4_servers.c_str());
+                settings_v4.ProfileNameServer = const_cast<PWSTR>(v4_servers.c_str());
 
-            DWORD status = pfnSet(adapter.guid, &settings);
-            if (status == ERROR_SUCCESS) {
-                modern_api_ok = true;
-                log_info(L"SetInterfaceDnsSettings succeeded on adapter: " + adapter.name);
-            } else {
-                log_info(L"SetInterfaceDnsSettings returned code: " + std::to_wstring(status) + L" (" + format_win32_error(status) + L")");
+                DWORD status = pfnSet(adapter.guid, &settings_v4);
+                if (status == ERROR_SUCCESS) {
+                    v4_modern_ok = true;
+                    log_info(L"SetInterfaceDnsSettings (IPv4) succeeded on adapter: " + adapter.name);
+                } else {
+                    log_info(L"SetInterfaceDnsSettings (IPv4) returned code: " + std::to_wstring(status) + L" (" + format_win32_error(status) + L")");
+                }
+            }
+
+            if (!ipv6_primary.empty()) {
+                DNS_INTERFACE_SETTINGS settings_v6 = {};
+                settings_v6.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+                settings_v6.Flags = DNS_SETTING_IPV6 | DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
+                settings_v6.NameServer = const_cast<PWSTR>(v6_servers.c_str());
+                settings_v6.ProfileNameServer = const_cast<PWSTR>(v6_servers.c_str());
+
+                DWORD status = pfnSet(adapter.guid, &settings_v6);
+                if (status == ERROR_SUCCESS) {
+                    v6_modern_ok = true;
+                    log_info(L"SetInterfaceDnsSettings (IPv6) succeeded on adapter: " + adapter.name);
+                } else {
+                    log_info(L"SetInterfaceDnsSettings (IPv6) returned code: " + std::to_wstring(status) + L" (" + format_win32_error(status) + L")");
+                }
             }
         }
         FreeLibrary(hIpHlp);
     }
 
     // 2. Comprehensive netsh application
-    // Applying netsh guarantees immediate synchronization with the kernel TCP/IP stack,
-    // Network Connections Control Panel, and legacy network management APIs.
-    bool netsh_ok = false;
+    bool v4_netsh_ok = false;
+    bool v6_netsh_ok = false;
     std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
-    std::wstring ip_family = is_valid_ipv4(primary_dns) ? L"ipv4" : L"ipv6";
 
-    // Attempt netsh by numeric if_index (bulletproof against localized/Cyrillic adapter names)
-    if (adapter.if_index > 0) {
-        std::wstring cmd_pri = netsh_path + L" interface " + ip_family + 
-            L" set dnsservers name=" + std::to_wstring(adapter.if_index) + 
-            L" source=static address=" + primary_dns + 
-            L" register=none validate=no";
+    if (!ipv4_primary.empty()) {
+        if (adapter.if_index > 0) {
+            std::wstring cmd_pri = netsh_path + L" interface ipv4 set dnsservers name=" + 
+                std::to_wstring(adapter.if_index) + 
+                L" source=static address=" + ipv4_primary + 
+                L" register=none validate=no";
 
-        log_info(L"Executing netsh by index: " + cmd_pri);
-        if (execute_hidden_process(cmd_pri)) {
-            netsh_ok = true;
-            if (!secondary_dns.empty()) {
-                std::wstring sec_family = is_valid_ipv4(secondary_dns) ? L"ipv4" : L"ipv6";
-                std::wstring cmd_sec = netsh_path + L" interface " + sec_family + 
-                    L" add dnsservers name=" + std::to_wstring(adapter.if_index) + 
-                    L" address=" + secondary_dns + 
-                    L" index=2 validate=no";
-                execute_hidden_process(cmd_sec);
+            log_info(L"Executing netsh IPv4 by index: " + cmd_pri);
+            if (execute_hidden_process(cmd_pri)) {
+                v4_netsh_ok = true;
+                if (!ipv4_secondary.empty()) {
+                    std::wstring cmd_sec = netsh_path + L" interface ipv4 add dnsservers name=" + 
+                        std::to_wstring(adapter.if_index) + 
+                        L" address=" + ipv4_secondary + 
+                        L" index=2 validate=no";
+                    execute_hidden_process(cmd_sec);
+                }
+            }
+        }
+
+        if (!v4_netsh_ok && !adapter.name.empty() && adapter.name.find(L'"') == std::wstring::npos) {
+            std::wstring cmd_pri = netsh_path + L" interface ipv4 set dnsservers name=\"" + adapter.name + 
+                L"\" source=static address=" + ipv4_primary + 
+                L" register=none validate=no";
+
+            log_info(L"Executing netsh IPv4 by name: " + cmd_pri);
+            if (execute_hidden_process(cmd_pri)) {
+                v4_netsh_ok = true;
+                if (!ipv4_secondary.empty()) {
+                    std::wstring cmd_sec = netsh_path + L" interface ipv4 add dnsservers name=\"" + adapter.name + 
+                        L"\" address=" + ipv4_secondary + 
+                        L" index=2 validate=no";
+                    execute_hidden_process(cmd_sec);
+                }
             }
         }
     }
 
-    // Fallback to adapter friendly name if numeric index did not succeed
-    if (!netsh_ok && !adapter.name.empty() && adapter.name.find(L'"') == std::wstring::npos) {
-        std::wstring cmd_pri = netsh_path + L" interface " + ip_family + 
-            L" set dnsservers name=\"" + adapter.name + 
-            L"\" source=static address=" + primary_dns + 
-            L" register=none validate=no";
+    if (!ipv6_primary.empty()) {
+        if (adapter.if_index > 0) {
+            std::wstring cmd_pri = netsh_path + L" interface ipv6 set dnsservers name=" + 
+                std::to_wstring(adapter.if_index) + 
+                L" source=static address=" + ipv6_primary + 
+                L" register=none validate=no";
 
-        log_info(L"Executing netsh by name: " + cmd_pri);
-        if (execute_hidden_process(cmd_pri)) {
-            netsh_ok = true;
-            if (!secondary_dns.empty()) {
-                std::wstring sec_family = is_valid_ipv4(secondary_dns) ? L"ipv4" : L"ipv6";
-                std::wstring cmd_sec = netsh_path + L" interface " + sec_family + 
-                    L" add dnsservers name=\"" + adapter.name + 
-                    L"\" address=" + secondary_dns + 
-                    L" index=2 validate=no";
-                execute_hidden_process(cmd_sec);
+            log_info(L"Executing netsh IPv6 by index: " + cmd_pri);
+            if (execute_hidden_process(cmd_pri)) {
+                v6_netsh_ok = true;
+                if (!ipv6_secondary.empty()) {
+                    std::wstring cmd_sec = netsh_path + L" interface ipv6 add dnsservers name=" + 
+                        std::to_wstring(adapter.if_index) + 
+                        L" address=" + ipv6_secondary + 
+                        L" index=2 validate=no";
+                    execute_hidden_process(cmd_sec);
+                }
+            }
+        }
+
+        if (!v6_netsh_ok && !adapter.name.empty() && adapter.name.find(L'"') == std::wstring::npos) {
+            std::wstring cmd_pri = netsh_path + L" interface ipv6 set dnsservers name=\"" + adapter.name + 
+                L"\" source=static address=" + ipv6_primary + 
+                L" register=none validate=no";
+
+            log_info(L"Executing netsh IPv6 by name: " + cmd_pri);
+            if (execute_hidden_process(cmd_pri)) {
+                v6_netsh_ok = true;
+                if (!ipv6_secondary.empty()) {
+                    std::wstring cmd_sec = netsh_path + L" interface ipv6 add dnsservers name=\"" + adapter.name + 
+                        L"\" address=" + ipv6_secondary + 
+                        L" index=2 validate=no";
+                    execute_hidden_process(cmd_sec);
+                }
             }
         }
     }
 
     // 3. Direct Registry synchronization as an additional reliability layer
-    if (!adapter.id.empty()) {
+    if (!adapter.id.empty() && !v4_servers.empty()) {
         std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + adapter.id;
         HKEY hKey = nullptr;
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
             RegSetValueExW(hKey, L"NameServer", 0, REG_SZ,
-                reinterpret_cast<const BYTE*>(servers.c_str()),
-                static_cast<DWORD>((servers.length() + 1) * sizeof(wchar_t)));
+                reinterpret_cast<const BYTE*>(v4_servers.c_str()),
+                static_cast<DWORD>((v4_servers.length() + 1) * sizeof(wchar_t)));
             RegCloseKey(hKey);
+        }
+    }
+    if (!adapter.id.empty() && !v6_servers.empty()) {
+        std::wstring subkey6 = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters\\Interfaces\\" + adapter.id;
+        HKEY hKey6 = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey6.c_str(), 0, KEY_SET_VALUE, &hKey6) == ERROR_SUCCESS) {
+            RegSetValueExW(hKey6, L"NameServer", 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(v6_servers.c_str()),
+                static_cast<DWORD>((v6_servers.length() + 1) * sizeof(wchar_t)));
+            RegCloseKey(hKey6);
         }
     }
 
     // 4. DNS over HTTPS (DoH) encryption
+    std::vector<std::wstring> server_list;
+    if (!ipv4_primary.empty()) server_list.push_back(ipv4_primary);
+    if (!ipv4_secondary.empty()) server_list.push_back(ipv4_secondary);
+    if (!ipv6_primary.empty()) server_list.push_back(ipv6_primary);
+    if (!ipv6_secondary.empty()) server_list.push_back(ipv6_secondary);
+
     if (!doh_template.empty()) {
-        configure_doh_server(primary_dns, doh_template);
-        if (!secondary_dns.empty()) {
-            configure_doh_server(secondary_dns, doh_template);
+        for (const auto& s : server_list) {
+            configure_doh_server(s, doh_template);
         }
     }
-
-    std::vector<std::wstring> server_list;
-    if (!primary_dns.empty()) server_list.push_back(primary_dns);
-    if (!secondary_dns.empty()) server_list.push_back(secondary_dns);
 
     std::wstring guid_str = adapter.id;
     if (guid_str.empty() && adapter.guid != GUID_NULL) {
@@ -774,7 +874,9 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
         configure_interface_doh(guid_str, server_list, doh_template);
     }
 
-    if (!modern_api_ok && !netsh_ok) {
+    bool v4_ok = ipv4_primary.empty() || v4_modern_ok || v4_netsh_ok;
+    bool v6_ok = ipv6_primary.empty() || v6_modern_ok || v6_netsh_ok;
+    if (!v4_ok && !v6_ok) {
         set_last_error(L"Не удалось применить DNS ни через Windows API, ни через netsh. Проверьте права Администратора.");
         return false;
     }
@@ -782,6 +884,17 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
     // Flush DNS resolver cache
     flush_dns_cache();
     return true;
+}
+
+bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter, 
+                                const std::wstring& primary_dns, 
+                                const std::wstring& secondary_dns,
+                                const std::wstring& doh_template) {
+    if (is_valid_ipv6(primary_dns)) {
+        return set_static_dns(adapter, L"", L"", primary_dns, secondary_dns, doh_template);
+    } else {
+        return set_static_dns(adapter, primary_dns, secondary_dns, L"", L"", doh_template);
+    }
 }
 
 void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::wstring& doh_template) {

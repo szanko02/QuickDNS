@@ -132,6 +132,54 @@ bool test_doh_validation() {
     return all_passed;
 }
 
+bool test_mixed_address_validation() {
+    print_double_separator();
+    std::wcout << L"[TEST SUITE 1.7] Mixed IPv4 and IPv6 Address Validation\n";
+    print_separator();
+
+    struct TestCase {
+        std::wstring v4_pri;
+        std::wstring v4_sec;
+        std::wstring v6_pri;
+        std::wstring v6_sec;
+        bool expected;
+        std::wstring desc;
+    };
+
+    std::vector<TestCase> cases = {
+        { L"8.8.8.8", L"8.8.4.4", L"", L"", true, L"Valid IPv4 primary and secondary" },
+        { L"1.1.1.1", L"", L"", L"", true, L"Valid IPv4 primary only" },
+        { L"", L"", L"2001:4860:4860::8888", L"2001:4860:4860::8844", true, L"Valid IPv6 primary and secondary" },
+        { L"", L"", L"2606:4700:4700::1111", L"", true, L"Valid IPv6 primary only" },
+        { L"8.8.8.8", L"8.8.4.4", L"2001:4860:4860::8888", L"2001:4860:4860::8844", true, L"Valid mixed full dual-stack" },
+        { L"1.1.1.1", L"", L"2606:4700:4700::1111", L"", true, L"Valid mixed single dual-stack" },
+        { L"", L"", L"", L"", false, L"Reject all empty addresses" },
+        { L"999.1.1.1", L"", L"", L"", false, L"Reject out-of-range IPv4 primary" },
+        { L"1.1.1.1", L"not.an.ip", L"", L"", false, L"Reject invalid IPv4 secondary" },
+        { L"", L"", L"2001:xyz::1", L"", false, L"Reject invalid IPv6 primary" },
+        { L"", L"", L"2001:4860:4860::8888", L"2001:::1", false, L"Reject invalid IPv6 secondary" },
+        { L"2001:4860:4860::8888", L"", L"", L"", false, L"Reject IPv6 in IPv4 primary slot" },
+        { L"", L"", L"8.8.8.8", L"", false, L"Reject IPv4 in IPv6 primary slot" },
+        { L"8.8.8.8", L"8.8.4.4", L"bad_ipv6", L"", false, L"Reject valid IPv4 with bad IPv6" },
+        { L"bad_ipv4", L"", L"2001:4860:4860::8888", L"", false, L"Reject valid IPv6 with bad IPv4" }
+    };
+
+    bool all_passed = true;
+    for (const auto& tc : cases) {
+        std::wstring err;
+        bool res = quickdns::DnsManager::validate_dns_addresses(tc.v4_pri, tc.v4_sec, tc.v6_pri, tc.v6_sec, &err);
+        bool pass = (res == tc.expected);
+        if (!pass) all_passed = false;
+        std::wcout << L"  " << std::left << std::setw(38) << tc.desc
+                   << L" | Expected: " << (tc.expected ? L"PASS" : L"FAIL")
+                   << L" | Got: " << (res ? L"PASS" : L"FAIL")
+                   << L" | Status: " << (pass ? L"PASS" : L"FAIL") << L"\n";
+    }
+
+    std::wcout << L"\nResult: " << (all_passed ? L"ALL MIXED ADDRESS VALIDATION TESTS PASSED" : L"SOME TESTS FAILED") << L"\n\n";
+    return all_passed;
+}
+
 void print_adapter(size_t index, const quickdns::NetworkAdapterInfo& adapter, bool is_primary = false) {
     print_separator();
     std::wcout << L"[" << index << L"] " << adapter.name 
@@ -192,6 +240,11 @@ int main() {
 
     // Test 1.5: DoH Template Validation
     if (!test_doh_validation()) {
+        suite_ok = false;
+    }
+
+    // Test 1.7: Mixed Address Validation
+    if (!test_mixed_address_validation()) {
         suite_ok = false;
     }
 

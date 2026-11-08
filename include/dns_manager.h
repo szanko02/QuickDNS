@@ -38,6 +38,7 @@ struct NetworkAdapterInfo {
     bool is_dhcp_dns{false};             // True if DNS is configured via DHCP, false if static
     std::vector<std::wstring> dns_ipv4;  // Configured IPv4 DNS server addresses
     std::vector<std::wstring> dns_ipv6;  // Configured IPv6 DNS server addresses
+    bool has_ipv6{false};                // True if interface supports / has IPv6 enabled
 };
 
 /**
@@ -71,6 +72,37 @@ public:
      * @return The active NetworkAdapterInfo if available, or std::nullopt.
      */
     std::optional<NetworkAdapterInfo> get_primary_adapter();
+
+    /**
+     * @brief Validates combined IPv4 and IPv6 DNS address sets.
+     * @return True if valid, false on error with message in out_err.
+     */
+    static bool validate_dns_addresses(const std::wstring& ipv4_primary,
+                                       const std::wstring& ipv4_secondary,
+                                       const std::wstring& ipv6_primary,
+                                       const std::wstring& ipv6_secondary,
+                                       std::wstring* out_err = nullptr);
+
+    /**
+     * @brief Configures static DNS servers on the specified adapter.
+     * Supports both IPv4 and IPv6 DNS addresses simultaneously.
+     * Uses SetInterfaceDnsSettings (Windows 10 1809+ / Windows 11) with fallback to netsh.
+     * Automatically flushes the DNS resolver cache upon successful application.
+     * 
+     * @param adapter Target network adapter.
+     * @param ipv4_primary Primary IPv4 DNS IP address.
+     * @param ipv4_secondary Optional secondary IPv4 DNS IP address.
+     * @param ipv6_primary Primary IPv6 DNS IP address.
+     * @param ipv6_secondary Optional secondary IPv6 DNS IP address.
+     * @param doh_template Optional DNS-over-HTTPS URL template.
+     * @return True on success, false on error.
+     */
+    bool set_static_dns(const NetworkAdapterInfo& adapter,
+                        const std::wstring& ipv4_primary,
+                        const std::wstring& ipv4_secondary,
+                        const std::wstring& ipv6_primary,
+                        const std::wstring& ipv6_secondary,
+                        const std::wstring& doh_template = L"");
 
     /**
      * @brief Configures static DNS servers on the specified adapter.

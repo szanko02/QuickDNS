@@ -673,6 +673,11 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
                 } else {
                     show_tray_notification(L"DNS обновлен", L"Профиль '" + res->profile_name + L"' успешно применен.");
                 }
+                if (res->ipv6_warning) {
+                    MessageBoxW(m_hWnd,
+                                L"У профиля нет IPv6 DNS, запросы могут идти через DNS роутера.",
+                                L"Предупреждение QuickDNS", MB_OK | MB_ICONWARNING);
+                }
             } else {
                 MessageBoxW(m_hWnd, res->message.c_str(), L"Ошибка", MB_OK | MB_ICONERROR);
             }
@@ -2301,6 +2306,8 @@ void MainWindow::on_profile_selected() {
         } else {
             std::wstring pri  = utf8_to_wide(p.primary_ipv4);
             std::wstring sec  = utf8_to_wide(p.secondary_ipv4);
+            std::wstring pri6 = utf8_to_wide(p.primary_ipv6);
+            std::wstring sec6 = utf8_to_wide(p.secondary_ipv6);
             if (p.is_smart_dns) {
                 descText = L"[SmartDNS] " + utf8_to_wide(p.description);
                 if (!p.unblocked_summary.empty()) {
@@ -2309,8 +2316,11 @@ void MainWindow::on_profile_selected() {
             } else {
                 descText = utf8_to_wide(p.description);
             }
-            dohText  = utf8_to_wide(p.doh_template);
-            ipText = pri + (sec.empty() ? L"" : L", " + sec);
+            dohText = utf8_to_wide(p.doh_template);
+            ipText = pri;
+            if (!sec.empty()) ipText += (ipText.empty() ? L"" : L", ") + sec;
+            if (!pri6.empty()) ipText += (ipText.empty() ? L"" : L", ") + pri6;
+            if (!sec6.empty()) ipText += (ipText.empty() ? L"" : L", ") + sec6;
         }
 
         if (m_hEditProfileIp) {
@@ -2379,12 +2389,21 @@ void MainWindow::apply_selected_dns() {
             res->message = res->success ? L"Сетевой адаптер успешно переключен на DHCP." 
                                         : L"Не удалось сбросить DNS на DHCP: " + dnsMgr->get_last_error();
         } else {
-            std::wstring pri = utf8_to_wide(profile.primary_ipv4);
-            std::wstring sec = utf8_to_wide(profile.secondary_ipv4);
+            std::wstring pri_v4 = utf8_to_wide(profile.primary_ipv4);
+            std::wstring sec_v4 = utf8_to_wide(profile.secondary_ipv4);
+            std::wstring pri_v6 = utf8_to_wide(profile.primary_ipv6);
+            std::wstring sec_v6 = utf8_to_wide(profile.secondary_ipv6);
             std::wstring doh = manualDoh.empty() ? utf8_to_wide(profile.doh_template) : manualDoh;
-            res->success = dnsMgr->set_static_dns(adapter, pri, sec, doh);
+
+            res->success = dnsMgr->set_static_dns(adapter, pri_v4, sec_v4, pri_v6, sec_v6, doh);
             res->message = res->success ? L"DNS серверы успешно установлены!" 
                                         : L"Не удалось применить DNS: " + dnsMgr->get_last_error();
+
+            bool adapterHasIpv6 = adapter.has_ipv6 || !adapter.dns_ipv6.empty();
+            bool profileHasIpv6 = !profile.primary_ipv6.empty() || !profile.secondary_ipv6.empty();
+            if (res->success && adapterHasIpv6 && !profileHasIpv6) {
+                res->ipv6_warning = true;
+            }
         }
 
         if (!PostMessageW(hWnd, WM_APP_DNS_APPLIED, 0, reinterpret_cast<LPARAM>(res))) {

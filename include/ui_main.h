@@ -30,6 +30,7 @@ namespace quickdns {
 struct DnsApplyResult {
     bool success = false;
     bool is_dhcp = false;
+    bool ipv6_warning = false;
     std::string profile_id;
     std::wstring profile_name;
     std::wstring message;
