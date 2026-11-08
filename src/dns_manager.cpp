@@ -114,6 +114,115 @@ std::wstring get_system32_path() {
     return L"C:\\Windows\\System32";
 }
 
+constexpr const wchar_t* QUICKDNS_REG_PATH = L"SOFTWARE\\QuickDNS";
+constexpr const wchar_t* MANAGED_DOH_REG_PATH = L"SOFTWARE\\QuickDNS\\ManagedDohServers";
+
+bool is_doh_server_managed(const std::wstring& server_ip) {
+    std::wstring path = std::wstring(MANAGED_DOH_REG_PATH) + L"\\" + server_ip;
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        RegCloseKey(hKey);
+        return true;
+    }
+    return false;
+}
+
+void mark_doh_server_managed(const std::wstring& server_ip) {
+    std::wstring path = std::wstring(MANAGED_DOH_REG_PATH) + L"\\" + server_ip;
+    HKEY hKey = nullptr;
+    DWORD disp = 0;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, nullptr,
+                        REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr, &hKey, &disp) == ERROR_SUCCESS) {
+        RegCloseKey(hKey);
+    }
+}
+
+void unmark_doh_server_managed(const std::wstring& server_ip) {
+    std::wstring path = std::wstring(MANAGED_DOH_REG_PATH) + L"\\" + server_ip;
+    RegDeleteKeyW(HKEY_LOCAL_MACHINE, path.c_str());
+}
+
+std::vector<std::wstring> get_managed_doh_servers() {
+    std::vector<std::wstring> servers;
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, MANAGED_DOH_REG_PATH, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t subkeyName[256] = {0};
+        DWORD index = 0;
+        DWORD nameLen = 256;
+        while (RegEnumKeyExW(hKey, index, subkeyName, &nameLen, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
+            servers.emplace_back(subkeyName);
+            index++;
+            nameLen = 256;
+        }
+        RegCloseKey(hKey);
+    }
+    return servers;
+}
+
+void backup_and_set_enable_autodoh() {
+    HKEY hAppKey = nullptr;
+    DWORD disp = 0;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, QUICKDNS_REG_PATH, 0, nullptr,
+                        REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hAppKey, &disp) == ERROR_SUCCESS) {
+        DWORD present = 0;
+        DWORD pLen = sizeof(DWORD);
+        if (RegQueryValueExW(hAppKey, L"OriginalEnableAutoDohPresent", nullptr, nullptr,
+                            reinterpret_cast<BYTE*>(&present), &pLen) != ERROR_SUCCESS) {
+            HKEY hDnsParam = nullptr;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters", 0, KEY_READ, &hDnsParam) == ERROR_SUCCESS) {
+                DWORD origVal = 0;
+                DWORD vLen = sizeof(DWORD);
+                if (RegQueryValueExW(hDnsParam, L"EnableAutoDoh", nullptr, nullptr,
+                                     reinterpret_cast<BYTE*>(&origVal), &vLen) == ERROR_SUCCESS) {
+                    DWORD isPresent = 1;
+                    RegSetValueExW(hAppKey, L"OriginalEnableAutoDohPresent", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&isPresent), sizeof(DWORD));
+                    RegSetValueExW(hAppKey, L"OriginalEnableAutoDoh", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&origVal), sizeof(DWORD));
+                } else {
+                    DWORD isPresent = 0;
+                    RegSetValueExW(hAppKey, L"OriginalEnableAutoDohPresent", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&isPresent), sizeof(DWORD));
+                }
+                RegCloseKey(hDnsParam);
+            }
+        }
+        RegCloseKey(hAppKey);
+    }
+
+    HKEY hDnsParam = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters", 0, KEY_SET_VALUE, &hDnsParam) == ERROR_SUCCESS) {
+        DWORD enableAutoDoh = 2;
+        RegSetValueExW(hDnsParam, L"EnableAutoDoh", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&enableAutoDoh), sizeof(DWORD));
+        RegCloseKey(hDnsParam);
+    }
+}
+
+void restore_enable_autodoh() {
+    HKEY hAppKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, QUICKDNS_REG_PATH, 0, KEY_ALL_ACCESS, &hAppKey) == ERROR_SUCCESS) {
+        DWORD present = 0;
+        DWORD pLen = sizeof(DWORD);
+        if (RegQueryValueExW(hAppKey, L"OriginalEnableAutoDohPresent", nullptr, nullptr,
+                            reinterpret_cast<BYTE*>(&present), &pLen) == ERROR_SUCCESS) {
+            HKEY hDnsParam = nullptr;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters", 0, KEY_SET_VALUE, &hDnsParam) == ERROR_SUCCESS) {
+                if (present == 1) {
+                    DWORD origVal = 0;
+                    DWORD vLen = sizeof(DWORD);
+                    if (RegQueryValueExW(hAppKey, L"OriginalEnableAutoDoh", nullptr, nullptr,
+                                         reinterpret_cast<BYTE*>(&origVal), &vLen) == ERROR_SUCCESS) {
+                        RegSetValueExW(hDnsParam, L"EnableAutoDoh", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&origVal), sizeof(DWORD));
+                    }
+                } else {
+                    RegDeleteValueW(hDnsParam, L"EnableAutoDoh");
+                }
+                RegCloseKey(hDnsParam);
+            }
+            RegDeleteValueW(hAppKey, L"OriginalEnableAutoDohPresent");
+            RegDeleteValueW(hAppKey, L"OriginalEnableAutoDoh");
+        }
+        RegCloseKey(hAppKey);
+    }
+}
+
 } // anonymous namespace
 
 namespace quickdns {
@@ -912,29 +1021,38 @@ void DnsManager::configure_doh_server(const std::wstring& server_ip, const std::
     // 1. Direct Windows Registry configuration
     // HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DohWellKnownServers\<server_ip>
     std::wstring reg_key_path = L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters\\DohWellKnownServers\\" + server_ip;
-    HKEY hKey = nullptr;
-    DWORD disposition = 0;
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, reg_key_path.c_str(), 0, nullptr,
-                        REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hKey, &disposition) == ERROR_SUCCESS) {
-        RegSetValueExW(hKey, L"Template", 0, REG_SZ,
-            reinterpret_cast<const BYTE*>(doh_template.c_str()),
-            static_cast<DWORD>((doh_template.length() + 1) * sizeof(wchar_t)));
 
-        ULONGLONG flags64 = 0x0c;
-        RegSetValueExW(hKey, L"Flags", 0, REG_QWORD, reinterpret_cast<const BYTE*>(&flags64), sizeof(flags64));
-
-        RegCloseKey(hKey);
-        log_info(L"Registered DoH server in Dnscache\\Parameters\\DohWellKnownServers");
+    // Check if key already exists in Windows
+    HKEY hExisting = nullptr;
+    bool alreadyExists = (RegOpenKeyExW(HKEY_LOCAL_MACHINE, reg_key_path.c_str(), 0, KEY_READ, &hExisting) == ERROR_SUCCESS);
+    if (alreadyExists) {
+        RegCloseKey(hExisting);
     }
 
-    // Set EnableAutoDoh = 2 (Enforce DoH encryption system-wide for known servers)
-    HKEY hDnsParam = nullptr;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters", 0, KEY_SET_VALUE, &hDnsParam) == ERROR_SUCCESS) {
-        DWORD enableAutoDoh = 2;
-        RegSetValueExW(hDnsParam, L"EnableAutoDoh", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&enableAutoDoh), sizeof(DWORD));
-        RegCloseKey(hDnsParam);
-        log_info(L"Set EnableAutoDoh=2 in Dnscache\\Parameters");
+    bool isManaged = is_doh_server_managed(server_ip);
+    if (alreadyExists && !isManaged) {
+        log_info(L"DoH server " + server_ip + L" already exists in system DohWellKnownServers and was not created by QuickDNS; preserving system entry");
+    } else {
+        HKEY hKey = nullptr;
+        DWORD disposition = 0;
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, reg_key_path.c_str(), 0, nullptr,
+                            REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hKey, &disposition) == ERROR_SUCCESS) {
+            RegSetValueExW(hKey, L"Template", 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(doh_template.c_str()),
+                static_cast<DWORD>((doh_template.length() + 1) * sizeof(wchar_t)));
+
+            // Flags: 0x0c = AutoUpgrade (0x4) | UdpFallback (0x8)
+            ULONGLONG flags64 = 0x0c;
+            RegSetValueExW(hKey, L"Flags", 0, REG_QWORD, reinterpret_cast<const BYTE*>(&flags64), sizeof(flags64));
+
+            RegCloseKey(hKey);
+            mark_doh_server_managed(server_ip);
+            log_info(L"Registered DoH server in Dnscache\\Parameters\\DohWellKnownServers (managed by QuickDNS)");
+        }
     }
+
+    // Backup original EnableAutoDoh setting and set EnableAutoDoh = 2
+    backup_and_set_enable_autodoh();
 
     // 2. Windows netsh encryption (tries 'set encryption' first; if not found, tries 'add encryption')
     std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
@@ -991,7 +1109,8 @@ void DnsManager::configure_interface_doh(const std::wstring& adapter_id,
                 reinterpret_cast<const BYTE*>(doh_template.c_str()),
                 static_cast<DWORD>((doh_template.length() + 1) * sizeof(wchar_t)));
 
-            ULONGLONG dohFlags = 0x2; // 0x2 = Encrypted only (DoH enforced)
+            // DohFlags: 0x1 = Encrypted preferred with UDP fallback (matching netsh udpfallback=yes)
+            ULONGLONG dohFlags = 0x1;
             RegSetValueExW(hKey, L"DohFlags", 0, REG_QWORD,
                 reinterpret_cast<const BYTE*>(&dohFlags), sizeof(dohFlags));
 
@@ -1009,13 +1128,14 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
 
     bool modern_api_ok = false;
 
-    // 1. Try modern SetInterfaceDnsSettings API
+    // 1. Try modern SetInterfaceDnsSettings API for IPv4 and IPv6
     HMODULE hIpHlp = LoadLibraryW(L"iphlpapi.dll");
     if (hIpHlp) {
         auto pfnSet = reinterpret_cast<PFN_SetInterfaceDnsSettings>(
             GetProcAddress(hIpHlp, "SetInterfaceDnsSettings"));
 
         if (pfnSet && adapter.guid != GUID_NULL) {
+            // Reset IPv4
             DNS_INTERFACE_SETTINGS settings = {};
             settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
             settings.Flags = DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
@@ -1025,15 +1145,27 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
             DWORD status = pfnSet(adapter.guid, &settings);
             if (status == ERROR_SUCCESS) {
                 modern_api_ok = true;
-                log_info(L"Successfully reset DNS to DHCP via SetInterfaceDnsSettings on " + adapter.name);
+                log_info(L"Successfully reset IPv4 DNS to DHCP via SetInterfaceDnsSettings on " + adapter.name);
             } else {
-                log_info(L"SetInterfaceDnsSettings reset returned: " + format_win32_error(status));
+                log_info(L"SetInterfaceDnsSettings reset IPv4 returned: " + format_win32_error(status));
+            }
+
+            // Reset IPv6
+            DNS_INTERFACE_SETTINGS settings_v6 = {};
+            settings_v6.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+            settings_v6.Flags = DNS_SETTING_IPV6 | DNS_SETTING_NAMESERVER | DNS_SETTING_PROFILE_NAMESERVER;
+            settings_v6.NameServer = const_cast<PWSTR>(L"");
+            settings_v6.ProfileNameServer = const_cast<PWSTR>(L"");
+
+            DWORD status_v6 = pfnSet(adapter.guid, &settings_v6);
+            if (status_v6 == ERROR_SUCCESS) {
+                log_info(L"Successfully reset IPv6 DNS to DHCP via SetInterfaceDnsSettings on " + adapter.name);
             }
         }
         FreeLibrary(hIpHlp);
     }
 
-    // 2. Netsh reset
+    // 2. Netsh reset for IPv4 and IPv6
     bool netsh_ok = false;
     std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
 
@@ -1059,7 +1191,7 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
         execute_hidden_process(cmd_ipv6);
     }
 
-    // 3. Clear Registry static NameServer entry
+    // 3. Clear Registry static NameServer entries for IPv4 and IPv6
     if (!adapter.id.empty()) {
         std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + adapter.id;
         HKEY hKey = nullptr;
@@ -1068,6 +1200,15 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
             RegSetValueExW(hKey, L"NameServer", 0, REG_SZ,
                 reinterpret_cast<const BYTE*>(&emptyStr), sizeof(wchar_t));
             RegCloseKey(hKey);
+        }
+
+        std::wstring subkey6 = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters\\Interfaces\\" + adapter.id;
+        HKEY hKey6 = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey6.c_str(), 0, KEY_SET_VALUE, &hKey6) == ERROR_SUCCESS) {
+            const wchar_t emptyStr = L'\0';
+            RegSetValueExW(hKey6, L"NameServer", 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(&emptyStr), sizeof(wchar_t));
+            RegCloseKey(hKey6);
         }
     }
 
@@ -1079,6 +1220,22 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
     if (!guid_str.empty()) {
         configure_interface_doh(guid_str, {}, L"");
     }
+
+    // 5. Clean up application-managed DohWellKnownServers and netsh encryption
+    auto managed_servers = get_managed_doh_servers();
+    for (const auto& s : managed_servers) {
+        std::wstring wellKnownKey = L"SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters\\DohWellKnownServers\\" + s;
+        RegDeleteTreeW(HKEY_LOCAL_MACHINE, wellKnownKey.c_str());
+
+        std::wstring cmd_del = netsh_path + L" dns delete encryption server=" + s;
+        execute_hidden_process(cmd_del);
+
+        unmark_doh_server_managed(s);
+        log_info(L"Removed managed DoH server registration for " + s);
+    }
+
+    // 6. Restore original EnableAutoDoh setting
+    restore_enable_autodoh();
 
     if (!modern_api_ok && !netsh_ok) {
         set_last_error(L"Не удалось переключить адаптер на DHCP. Проверьте права Администратора.");
