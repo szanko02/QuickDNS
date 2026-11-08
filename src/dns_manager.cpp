@@ -918,12 +918,13 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
         }
     }
 
-    // 2. Comprehensive netsh application
+    // 2. Netsh fallback (only executed if modern API failed or was unavailable)
     bool v4_netsh_ok = false;
     bool v6_netsh_ok = false;
     std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
 
-    if (!ipv4_primary.empty()) {
+    if (!ipv4_primary.empty() && !v4_modern_ok) {
+        log_info(L"Modern SetInterfaceDnsSettings failed or unavailable for IPv4, attempting netsh fallback.");
         if (adapter.if_index > 0) {
             std::wstring cmd_pri = netsh_path + L" interface ipv4 set dnsservers name=" + 
                 std::to_wstring(adapter.if_index) + 
@@ -959,9 +960,16 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
                 }
             }
         }
+
+        if (v4_netsh_ok) {
+            log_info(L"Successfully applied IPv4 DNS via netsh fallback on " + adapter.name);
+        }
+    } else if (v4_modern_ok) {
+        log_info(L"Skipped netsh IPv4: modern API succeeded.");
     }
 
-    if (!ipv6_primary.empty()) {
+    if (!ipv6_primary.empty() && !v6_modern_ok) {
+        log_info(L"Modern SetInterfaceDnsSettings failed or unavailable for IPv6, attempting netsh fallback.");
         if (adapter.if_index > 0) {
             std::wstring cmd_pri = netsh_path + L" interface ipv6 set dnsservers name=" + 
                 std::to_wstring(adapter.if_index) + 
@@ -997,10 +1005,17 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
                 }
             }
         }
+
+        if (v6_netsh_ok) {
+            log_info(L"Successfully applied IPv6 DNS via netsh fallback on " + adapter.name);
+        }
+    } else if (v6_modern_ok) {
+        log_info(L"Skipped netsh IPv6: modern API succeeded.");
     }
 
-    // 3. Direct Registry synchronization as an additional reliability layer
-    if (!adapter.id.empty() && !v4_servers.empty()) {
+    // 3. Direct Registry synchronization ONLY if both modern API and netsh failed
+    if (!ipv4_primary.empty() && !v4_modern_ok && !v4_netsh_ok && !adapter.id.empty()) {
+        log_info(L"Both modern API and netsh failed for IPv4, attempting registry fallback.");
         std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + adapter.id;
         HKEY hKey = nullptr;
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
@@ -1008,9 +1023,11 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
                 reinterpret_cast<const BYTE*>(v4_servers.c_str()),
                 static_cast<DWORD>((v4_servers.length() + 1) * sizeof(wchar_t)));
             RegCloseKey(hKey);
+            log_info(L"Applied IPv4 DNS via direct registry fallback.");
         }
     }
-    if (!adapter.id.empty() && !v6_servers.empty()) {
+    if (!ipv6_primary.empty() && !v6_modern_ok && !v6_netsh_ok && !adapter.id.empty()) {
+        log_info(L"Both modern API and netsh failed for IPv6, attempting registry fallback.");
         std::wstring subkey6 = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters\\Interfaces\\" + adapter.id;
         HKEY hKey6 = nullptr;
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey6.c_str(), 0, KEY_SET_VALUE, &hKey6) == ERROR_SUCCESS) {
@@ -1018,6 +1035,7 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
                 reinterpret_cast<const BYTE*>(v6_servers.c_str()),
                 static_cast<DWORD>((v6_servers.length() + 1) * sizeof(wchar_t)));
             RegCloseKey(hKey6);
+            log_info(L"Applied IPv6 DNS via direct registry fallback.");
         }
     }
 
@@ -1218,51 +1236,61 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
         }
     }
 
-    // 2. Netsh reset for IPv4 and IPv6
+    // 2. Netsh and Registry fallback (only if modern SetInterfaceDnsSettings API failed)
     bool netsh_ok = false;
     std::wstring netsh_path = get_system32_path() + L"\\netsh.exe";
 
-    if (adapter.if_index > 0) {
-        std::wstring cmd_ipv4 = netsh_path + L" interface ipv4 set dnsservers name=" + 
-            std::to_wstring(adapter.if_index) + L" source=dhcp";
-        if (execute_hidden_process(cmd_ipv4)) {
-            netsh_ok = true;
-        }
-        std::wstring cmd_ipv6 = netsh_path + L" interface ipv6 set dnsservers name=" + 
-            std::to_wstring(adapter.if_index) + L" source=dhcp";
-        execute_hidden_process(cmd_ipv6);
-    }
-
-    if (!netsh_ok && !adapter.name.empty() && adapter.name.find(L'"') == std::wstring::npos) {
-        std::wstring cmd_ipv4 = netsh_path + L" interface ipv4 set dnsservers name=\"" + 
-            adapter.name + L"\" source=dhcp";
-        if (execute_hidden_process(cmd_ipv4)) {
-            netsh_ok = true;
-        }
-        std::wstring cmd_ipv6 = netsh_path + L" interface ipv6 set dnsservers name=\"" + 
-            adapter.name + L"\" source=dhcp";
-        execute_hidden_process(cmd_ipv6);
-    }
-
-    // 3. Clear Registry static NameServer entries for IPv4 and IPv6
-    if (!adapter.id.empty()) {
-        std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + adapter.id;
-        HKEY hKey = nullptr;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-            const wchar_t emptyStr = L'\0';
-            RegSetValueExW(hKey, L"NameServer", 0, REG_SZ,
-                reinterpret_cast<const BYTE*>(&emptyStr), sizeof(wchar_t));
-            RegCloseKey(hKey);
+    if (!modern_api_ok) {
+        log_info(L"Modern SetInterfaceDnsSettings failed or unavailable for reset, attempting netsh fallback.");
+        if (adapter.if_index > 0) {
+            std::wstring cmd_ipv4 = netsh_path + L" interface ipv4 set dnsservers name=" + 
+                std::to_wstring(adapter.if_index) + L" source=dhcp";
+            if (execute_hidden_process(cmd_ipv4)) {
+                netsh_ok = true;
+            }
+            std::wstring cmd_ipv6 = netsh_path + L" interface ipv6 set dnsservers name=" + 
+                std::to_wstring(adapter.if_index) + L" source=dhcp";
+            execute_hidden_process(cmd_ipv6);
         }
 
-        std::wstring subkey6 = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters\\Interfaces\\" + adapter.id;
-        HKEY hKey6 = nullptr;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey6.c_str(), 0, KEY_SET_VALUE, &hKey6) == ERROR_SUCCESS) {
-            const wchar_t emptyStr = L'\0';
-            RegSetValueExW(hKey6, L"NameServer", 0, REG_SZ,
-                reinterpret_cast<const BYTE*>(&emptyStr), sizeof(wchar_t));
-            RegCloseKey(hKey6);
+        if (!netsh_ok && !adapter.name.empty() && adapter.name.find(L'"') == std::wstring::npos) {
+            std::wstring cmd_ipv4 = netsh_path + L" interface ipv4 set dnsservers name=\"" + 
+                adapter.name + L"\" source=dhcp";
+            if (execute_hidden_process(cmd_ipv4)) {
+                netsh_ok = true;
+            }
+            std::wstring cmd_ipv6 = netsh_path + L" interface ipv6 set dnsservers name=\"" + 
+                adapter.name + L"\" source=dhcp";
+            execute_hidden_process(cmd_ipv6);
         }
+
+        if (netsh_ok) {
+            log_info(L"Reset to DHCP succeeded via netsh fallback on " + adapter.name);
+        }
+
+        // 3. Clear Registry static NameServer entries only if both modern API and netsh failed
+        if (!netsh_ok && !adapter.id.empty()) {
+            log_info(L"Both modern API and netsh failed for DHCP reset, attempting direct registry fallback.");
+            std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + adapter.id;
+            HKEY hKey = nullptr;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+                const wchar_t emptyStr = L'\0';
+                RegSetValueExW(hKey, L"NameServer", 0, REG_SZ,
+                    reinterpret_cast<const BYTE*>(&emptyStr), sizeof(wchar_t));
+                RegCloseKey(hKey);
+            }
+
+            std::wstring subkey6 = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters\\Interfaces\\" + adapter.id;
+            HKEY hKey6 = nullptr;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey6.c_str(), 0, KEY_SET_VALUE, &hKey6) == ERROR_SUCCESS) {
+                const wchar_t emptyStr = L'\0';
+                RegSetValueExW(hKey6, L"NameServer", 0, REG_SZ,
+                    reinterpret_cast<const BYTE*>(&emptyStr), sizeof(wchar_t));
+                RegCloseKey(hKey6);
+            }
+        }
+    } else {
+        log_info(L"Skipped netsh reset to DHCP: modern API succeeded.");
     }
 
     // 4. Clear interface-specific DoH configuration
@@ -1301,24 +1329,24 @@ bool DnsManager::reset_to_dhcp(const NetworkAdapterInfo& adapter) {
 }
 
 bool DnsManager::flush_dns_cache() {
-    bool flushed_api = false;
-
     // 1. Direct in-process call to DnsFlushResolverCache in dnsapi.dll
     auto pfnFlush = reinterpret_cast<PFN_DnsFlushResolverCache>(m_pfnDnsFlushResolverCache);
-    if (pfnFlush) {
-        flushed_api = (pfnFlush() != FALSE);
-        if (flushed_api) {
-            log_info(L"DNS resolver cache successfully flushed via dnsapi.dll::DnsFlushResolverCache.");
-        }
+    if (pfnFlush && pfnFlush() != FALSE) {
+        log_info(L"DNS resolver cache successfully flushed via in-process dnsapi.dll::DnsFlushResolverCache.");
+        return true;
     }
 
-    // 2. Also invoke ipconfig.exe /flushdns to clear system-wide DNS client cache
+    log_info(L"In-process DnsFlushResolverCache unavailable or failed, falling back to ipconfig.exe /flushdns.");
+
+    // 2. Fallback: invoke ipconfig.exe /flushdns only if in-process call failed
     bool flushed_ipconfig = execute_hidden_process(get_system32_path() + L"\\ipconfig.exe /flushdns");
     if (flushed_ipconfig) {
-        log_info(L"ipconfig.exe /flushdns completed successfully.");
+        log_info(L"DNS resolver cache successfully flushed via fallback ipconfig.exe /flushdns.");
+        return true;
     }
 
-    return flushed_api || flushed_ipconfig;
+    log_error(L"Failed to flush DNS cache via both DnsFlushResolverCache and ipconfig.");
+    return false;
 }
 
 } // namespace quickdns
