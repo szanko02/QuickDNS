@@ -79,6 +79,7 @@ private:
     void start_ping_worker();
     void stop_ping_worker();
     void trigger_immediate_ping();
+    void update_ping_target_ip();
 
     // Data binding & UI updates
     void refresh_network_adapters();
@@ -192,6 +193,7 @@ private:
     std::atomic<bool> m_stopPingWorker{false};
     std::atomic<bool> m_pingImmediate{false};
     std::mutex m_historyMutex;
+    std::string m_pingTargetIp;
     std::vector<int> m_latencyHistory;
     int m_currentPingMs = -1;
 };

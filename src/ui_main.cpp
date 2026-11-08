@@ -1781,18 +1781,28 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
     DeleteDC(hdcMem);
 }
 
+void MainWindow::update_ping_target_ip() {
+    std::string targetIp;
+    if (m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
+        const auto& adp = m_adapters[m_selectedAdapterIndex];
+        if (!adp.dns_ipv4.empty()) {
+            targetIp = wide_to_utf8(adp.dns_ipv4[0]);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_historyMutex);
+        m_pingTargetIp = std::move(targetIp);
+    }
+}
+
 void MainWindow::start_ping_worker() {
     m_stopPingWorker = false;
     m_pingWorker = std::thread([this]() {
         while (!m_stopPingWorker) {
             std::string ip_to_ping;
             {
-                if (m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
-                    const auto& adp = m_adapters[m_selectedAdapterIndex];
-                    if (!adp.dns_ipv4.empty()) {
-                        ip_to_ping = wide_to_utf8(adp.dns_ipv4[0]);
-                    }
-                }
+                std::lock_guard<std::mutex> lock(m_historyMutex);
+                ip_to_ping = m_pingTargetIp;
             }
 
             int ping_val = -1;
@@ -1906,6 +1916,7 @@ void MainWindow::refresh_network_adapters() {
     } else {
         m_selectedAdapterIndex = -1;
     }
+    update_ping_target_ip();
 }
 
 void MainWindow::populate_profiles_combobox() {
@@ -2252,6 +2263,7 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
 
 void MainWindow::on_adapter_changed() {
     m_selectedAdapterIndex = ComboBox_GetCurSel(m_hComboAdapter);
+    update_ping_target_ip();
     auto_sync_profile_with_adapter();
     update_status_card();
 
