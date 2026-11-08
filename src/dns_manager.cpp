@@ -159,6 +159,27 @@ std::vector<std::wstring> get_managed_doh_servers() {
     return servers;
 }
 
+std::optional<std::wstring> read_reg_string(HKEY root, const std::wstring& path, const wchar_t* name) {
+    DWORD bytes = 0;
+    LONG status = RegGetValueW(root, path.c_str(), name, RRF_RT_REG_SZ | RRF_RT_REG_MULTI_SZ, nullptr, nullptr, &bytes);
+    if (status != ERROR_SUCCESS || bytes == 0) {
+        return std::nullopt;
+    }
+
+    std::wstring result(bytes / sizeof(wchar_t), L'\0');
+    status = RegGetValueW(root, path.c_str(), name, RRF_RT_REG_SZ | RRF_RT_REG_MULTI_SZ, nullptr, result.data(), &bytes);
+    if (status != ERROR_SUCCESS) {
+        return std::nullopt;
+    }
+
+    size_t len = bytes / sizeof(wchar_t);
+    while (len > 0 && result[len - 1] == L'\0') {
+        len--;
+    }
+    result.resize(len);
+    return result;
+}
+
 void backup_and_set_enable_autodoh() {
     HKEY hAppKey = nullptr;
     DWORD disp = 0;
@@ -492,19 +513,11 @@ bool DnsManager::query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_st
     // Attempt 2: Direct Registry Query fallback
     // HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}
     std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + guid_str;
-    HKEY hKey = nullptr;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        wchar_t nameServer[512] = {0};
-        DWORD dataSize = sizeof(nameServer);
-        DWORD type = 0;
-        LONG r = RegQueryValueExW(hKey, L"NameServer", nullptr, &type, reinterpret_cast<LPBYTE>(nameServer), &dataSize);
-        RegCloseKey(hKey);
-
-        if (r == ERROR_SUCCESS && (type == REG_SZ || type == REG_MULTI_SZ)) {
-            for (const wchar_t* p = nameServer; *p; ++p) {
-                if (!iswspace(*p)) {
-                    return false; // Found static DNS in registry
-                }
+    auto optNameServer = read_reg_string(HKEY_LOCAL_MACHINE, subkey, L"NameServer");
+    if (optNameServer.has_value()) {
+        for (wchar_t c : *optNameServer) {
+            if (!iswspace(c)) {
+                return false; // Found static DNS in registry
             }
         }
     }
@@ -694,20 +707,14 @@ std::vector<NetworkAdapterInfo> DnsManager::get_network_adapters() {
         // If static DNS is detected but dns_ipv4 list is empty, query registry / GetInterfaceDnsSettings to populate it
         if (!item.info.is_dhcp_dns && item.info.dns_ipv4.empty()) {
             std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + item.info.id;
-            HKEY hKey = nullptr;
-            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-                wchar_t nameServer[512] = {0};
-                DWORD dataSize = sizeof(nameServer);
-                DWORD type = 0;
-                if (RegQueryValueExW(hKey, L"NameServer", nullptr, &type, reinterpret_cast<LPBYTE>(nameServer), &dataSize) == ERROR_SUCCESS) {
-                    auto tokens = split_string_by_delimiters(nameServer, L", ");
-                    for (const auto& token : tokens) {
-                        if (is_valid_ipv4(token)) {
-                            item.info.dns_ipv4.push_back(token);
-                        }
+            auto optNameServer = read_reg_string(HKEY_LOCAL_MACHINE, subkey, L"NameServer");
+            if (optNameServer.has_value()) {
+                auto tokens = split_string_by_delimiters(*optNameServer, L", ");
+                for (const auto& token : tokens) {
+                    if (is_valid_ipv4(token)) {
+                        item.info.dns_ipv4.push_back(token);
                     }
                 }
-                RegCloseKey(hKey);
             }
         }
 
