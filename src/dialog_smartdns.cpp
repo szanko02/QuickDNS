@@ -160,6 +160,11 @@ SmartDnsDialog::SmartDnsDialog(
 }
 
 SmartDnsDialog::~SmartDnsDialog() {
+    m_verifyCancelled.store(true, std::memory_order_release);
+    if (m_verifyThread.joinable()) {
+        m_verifyThread.join();
+    }
+
     if (m_hFontRegular) DeleteObject(m_hFontRegular);
     if (m_hFontBold) DeleteObject(m_hFontBold);
     if (m_hFontHeader) DeleteObject(m_hFontHeader);
@@ -908,6 +913,10 @@ void SmartDnsDialog::on_apply_selected() {
     if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_filteredIndices.size())) {
         size_t realIdx = m_filteredIndices[m_selectedIndex];
         m_selectedProfileId = m_allEntries[realIdx].profile_id;
+        m_verifyCancelled.store(true, std::memory_order_release);
+        if (m_verifyThread.joinable()) {
+            m_verifyThread.join();
+        }
         m_finished = true;
     }
 }
@@ -924,7 +933,11 @@ void SmartDnsDialog::on_open_website(size_t index) {
 
 void SmartDnsDialog::on_verify_and_scrape_ips() {
     if (m_isVerifying) return;
+    if (m_verifyThread.joinable()) {
+        m_verifyThread.join();
+    }
     m_isVerifying = true;
+    m_verifyCancelled.store(false, std::memory_order_release);
     EnableWindow(m_hBtnVerify, FALSE);
     SetWindowTextW(m_hBtnVerify, L"Проверка...");
     m_statusText = L"Скрейпинг актуальных IP и тестирование DoH...";
@@ -932,9 +945,8 @@ void SmartDnsDialog::on_verify_and_scrape_ips() {
 
     HWND hWndDlg = m_hWnd;
     auto entriesCopy = m_allEntries;
-    ConfigManager* pCfg = m_pConfig;
 
-    std::thread([hWndDlg, entriesCopy, pCfg]() mutable {
+    m_verifyThread = std::thread([hWndDlg, entriesCopy, isCancelled = &m_verifyCancelled]() {
         std::vector<DnsProfile> profilesToVerify;
         profilesToVerify.reserve(entriesCopy.size());
         for (const auto& e : entriesCopy) {
@@ -949,13 +961,22 @@ void SmartDnsDialog::on_verify_and_scrape_ips() {
         }
 
         auto results = SmartDnsVerifier::verify_profiles(profilesToVerify);
+        if (isCancelled->load(std::memory_order_acquire)) {
+            return;
+        }
 
         auto* pAllocResults = new std::vector<SmartDnsVerificationResult>(std::move(results));
-        PostMessageW(hWndDlg, WM_APP + 55, reinterpret_cast<WPARAM>(pAllocResults), 0);
-    }).detach();
+        if (!PostMessageW(hWndDlg, WM_APP + 55, reinterpret_cast<WPARAM>(pAllocResults), 0)) {
+            delete pAllocResults;
+        }
+    });
 }
 
 void SmartDnsDialog::on_close() {
+    m_verifyCancelled.store(true, std::memory_order_release);
+    if (m_verifyThread.joinable()) {
+        m_verifyThread.join();
+    }
     m_finished = true;
 }
 
@@ -1367,7 +1388,9 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
     }
 
     case WM_APP + 55: {
-        auto* pResults = reinterpret_cast<std::vector<SmartDnsVerificationResult>*>(wParam);
+        std::unique_ptr<std::vector<SmartDnsVerificationResult>> pResults(
+            reinterpret_cast<std::vector<SmartDnsVerificationResult>*>(wParam)
+        );
         if (pResults) {
             std::wstring changesMsg;
             std::vector<std::pair<DnsProfile, SmartDnsVerificationResult>> pendingChanges;
@@ -1428,9 +1451,10 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 }
             }
 
-            delete pResults;
-
             m_statusText = L"Проверка завершена. Обновлено IP провайдеров: " + std::to_wstring(appliedCount);
+        }
+        if (m_verifyThread.joinable()) {
+            m_verifyThread.join();
         }
         m_isVerifying = false;
         EnableWindow(m_hBtnVerify, TRUE);

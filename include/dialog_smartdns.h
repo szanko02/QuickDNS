@@ -6,6 +6,8 @@
 #include <vector>
 #include <optional>
 #include <memory>
+#include <thread>
+#include <atomic>
 #include "config_manager.h"
 #include "ui_palette.h"
 
@@ -102,6 +104,8 @@ private:
 
     ConfigManager* m_pConfig = nullptr;
     bool m_isVerifying = false;
+    std::thread m_verifyThread;
+    std::atomic<bool> m_verifyCancelled{false};
 
     std::wstring m_statusText;
     bool m_searchEditFocused = false;

@@ -12,6 +12,7 @@
 #include "dns_manager.h"
 #include "config_manager.h"
 #include "app_updater.h"
+#include "background_tasks.h"
 #include "resource.h"
 
 // Custom window messages
@@ -21,6 +22,30 @@
 #define WM_APP_PING_UPDATED     (WM_APP + 4)
 #define WM_APP_RESTORE_INSTANCE (WM_APP + 5)
 #define WM_APP_UPDATE_RESULT    (WM_APP + 6)
+#define WM_APP_DOWNLOAD_RESULT  (WM_APP + 7)
+#define WM_APP_SMARTDNS_RESULT  (WM_APP + 8)
+
+namespace quickdns {
+
+struct DnsApplyResult {
+    bool success = false;
+    bool is_dhcp = false;
+    std::string profile_id;
+    std::wstring profile_name;
+    std::wstring message;
+};
+
+struct DownloadUpdateResult {
+    bool success = false;
+    std::wstring errorMessage;
+    std::wstring errorTitle;
+};
+
+struct SmartDnsTrayResult {
+    int found_new = 0;
+};
+
+} // namespace quickdns
 
 class MainWindow {
 public:
@@ -159,6 +184,8 @@ private:
 
     std::atomic<bool> m_isBusy = false;
     std::atomic<bool> m_isCheckingUpdate{false};
+
+    quickdns::BackgroundTasks m_tasks;
 
     // Ping Monitor State
     std::thread m_pingWorker;

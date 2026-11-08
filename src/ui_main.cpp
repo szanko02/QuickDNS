@@ -262,6 +262,7 @@ MainWindow::MainWindow()
 }
 
 MainWindow::~MainWindow() {
+    m_tasks.join_all();
     stop_ping_worker();
     remove_tray_icon();
 
@@ -461,12 +462,13 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_APP_UPDATE_RESULT: {
+        m_isCheckingUpdate = false;
         if (m_hBtnCheckUpdate) {
             EnableWindow(m_hBtnCheckUpdate, TRUE);
             SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
         }
 
-        auto* pInfo = reinterpret_cast<quickdns::ReleaseInfo*>(lParam);
+        std::unique_ptr<quickdns::ReleaseInfo> pInfo(reinterpret_cast<quickdns::ReleaseInfo*>(lParam));
         if (!pInfo) {
             MessageBoxW(hWnd, L"Не удалось связаться с сервером GitHub Releases. Проверьте интернет-соединение.",
                         L"Ошибка обновления", MB_OK | MB_ICONWARNING);
@@ -474,7 +476,6 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         }
 
         quickdns::ReleaseInfo info = *pInfo;
-        delete pInfo;
 
         if (!info.is_newer) {
             std::wstring msg = L"У вас установлена последняя версия QuickDNS (v" + std::wstring(quickdns::APP_VERSION_W) + L").\nОбновлений не требуется.";
@@ -483,6 +484,20 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         }
 
         prompt_and_install_update(info);
+        return 0;
+    }
+
+    case WM_APP_DOWNLOAD_RESULT: {
+        std::unique_ptr<quickdns::DownloadUpdateResult> res(reinterpret_cast<quickdns::DownloadUpdateResult*>(lParam));
+        if (m_hBtnCheckUpdate) {
+            EnableWindow(m_hBtnCheckUpdate, TRUE);
+            SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
+        }
+        if (res && !res->success && !res->errorMessage.empty()) {
+            MessageBoxW(m_hWnd, res->errorMessage.c_str(),
+                        res->errorTitle.empty() ? L"Ошибка" : res->errorTitle.c_str(),
+                        MB_OK | MB_ICONERROR);
+        }
         return 0;
     }
 
@@ -583,8 +598,9 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             return 0;
         }
         if (wmId == IDM_TRAY_VERIFY_SMARTDNS) {
-            std::thread([this]() {
-                auto profiles = m_configManager->get_all_profiles();
+            auto profiles = m_configManager->get_all_profiles();
+            HWND hWnd = m_hWnd;
+            m_tasks.run([hWnd, profiles]() {
                 auto results = quickdns::SmartDnsVerifier::verify_profiles(profiles);
                 int found_new = 0;
                 for (const auto& r : results) {
@@ -592,18 +608,19 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
                         found_new++;
                     }
                 }
-                if (found_new > 0) {
-                    std::wstring msg = L"Найдены новые IP для " + std::to_wstring(found_new) + L" профилей, откройте окно SmartDNS для подтверждения";
-                    show_tray_notification(L"QuickDNS SmartDNS", msg.c_str());
-                } else {
-                    show_tray_notification(L"QuickDNS SmartDNS", L"Проверка завершена. Все IP-адреса SmartDNS актуальны.");
+                auto* pRes = new quickdns::SmartDnsTrayResult{found_new};
+                if (!PostMessageW(hWnd, WM_APP_SMARTDNS_RESULT, 0, reinterpret_cast<LPARAM>(pRes))) {
+                    delete pRes;
                 }
-                PostMessageW(m_hWnd, WM_APP_REFRESH_STATUS, 0, 0);
-            }).detach();
+            });
             show_tray_notification(L"QuickDNS", L"Запущена проверка серверов SmartDNS...");
             return 0;
         }
         if (wmId == IDM_TRAY_EXIT) {
+            if (m_isBusy) {
+                MessageBoxW(m_hWnd, L"Дождитесь завершения текущей сетевой операции.", L"QuickDNS", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
             DestroyWindow(m_hWnd);
             return 0;
         }
@@ -612,6 +629,20 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             return 0;
         }
         break;
+    }
+
+    case WM_APP_SMARTDNS_RESULT: {
+        std::unique_ptr<quickdns::SmartDnsTrayResult> res(reinterpret_cast<quickdns::SmartDnsTrayResult*>(lParam));
+        if (res) {
+            if (res->found_new > 0) {
+                std::wstring msg = L"Найдены новые IP для " + std::to_wstring(res->found_new) + L" профилей, откройте окно SmartDNS для подтверждения";
+                show_tray_notification(L"QuickDNS SmartDNS", msg.c_str());
+            } else {
+                show_tray_notification(L"QuickDNS SmartDNS", L"Проверка завершена. Все IP-адреса SmartDNS актуальны.");
+            }
+        }
+        PostMessageW(m_hWnd, WM_APP_REFRESH_STATUS, 0, 0);
+        return 0;
     }
 
     case WM_APP_TRAYMSG: {
@@ -624,6 +655,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_APP_DNS_APPLIED: {
+        std::unique_ptr<quickdns::DnsApplyResult> res(reinterpret_cast<quickdns::DnsApplyResult*>(lParam));
         m_isBusy = false;
         EnableWindow(m_hBtnApply, TRUE);
         EnableWindow(m_hBtnBenchmark, TRUE);
@@ -631,6 +663,20 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         EnableWindow(m_hBtnResetDhcp, TRUE);
         EnableWindow(m_hBtnFlushDns, TRUE);
         if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, TRUE);
+
+        if (res) {
+            if (res->success) {
+                m_configManager->set_active_profile_id(res->profile_id);
+                m_configManager->save_to_file();
+                if (res->is_dhcp) {
+                    show_tray_notification(L"Сброс DNS", L"Адаптер переключен на автоматический DNS (DHCP).");
+                } else {
+                    show_tray_notification(L"DNS обновлен", L"Профиль '" + res->profile_name + L"' успешно применен.");
+                }
+            } else {
+                MessageBoxW(m_hWnd, res->message.c_str(), L"Ошибка", MB_OK | MB_ICONERROR);
+            }
+        }
 
         refresh_network_adapters();
         update_status_card();
@@ -801,7 +847,17 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         break;
     }
 
+    case WM_CLOSE: {
+        if (m_isBusy) {
+            MessageBoxW(m_hWnd, L"Дождитесь завершения текущей сетевой операции.", L"QuickDNS", MB_OK | MB_ICONWARNING);
+            return 0;
+        }
+        DestroyWindow(m_hWnd);
+        return 0;
+    }
+
     case WM_DESTROY: {
+        m_tasks.join_all();
         remove_tray_icon();
         stop_ping_worker();
         PostQuitMessage(0);
@@ -2080,13 +2136,13 @@ void MainWindow::check_manual_update() {
     }
 
     HWND hWnd = m_hWnd;
-    std::thread([hWnd, this]() {
+    m_tasks.run([hWnd]() {
         auto optInfo = quickdns::AppUpdater::check_github_update(quickdns::APP_VERSION);
-        m_isCheckingUpdate = false;
-
         auto* pResult = optInfo ? new quickdns::ReleaseInfo(*optInfo) : nullptr;
-        PostMessageW(hWnd, WM_APP_UPDATE_RESULT, 0, reinterpret_cast<LPARAM>(pResult));
-    }).detach();
+        if (!PostMessageW(hWnd, WM_APP_UPDATE_RESULT, 0, reinterpret_cast<LPARAM>(pResult))) {
+            delete pResult;
+        }
+    });
 }
 
 void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
@@ -2139,24 +2195,25 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
     std::wstring dlUrl = utf8_to_wide(info.download_url);
     std::wstring sha256Url = utf8_to_wide(info.sha256_url);
 
-    std::thread([hWnd, dlUrl, sha256Url, tempExe, this]() {
+    m_tasks.run([hWnd, dlUrl, sha256Url, tempExe]() {
+        auto* res = new quickdns::DownloadUpdateResult();
         if (sha256Url.empty()) {
-            MessageBoxW(hWnd, L"Контрольная сумма SHA-256 релиза не найдена на GitHub. Установка отменена в целях безопасности.",
-                        L"Ошибка безопасности", MB_OK | MB_ICONERROR);
-            if (m_hBtnCheckUpdate) {
-                EnableWindow(m_hBtnCheckUpdate, TRUE);
-                SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
+            res->success = false;
+            res->errorMessage = L"Контрольная сумма SHA-256 релиза не найдена на GitHub. Установка отменена в целях безопасности.";
+            res->errorTitle = L"Ошибка безопасности";
+            if (!PostMessageW(hWnd, WM_APP_DOWNLOAD_RESULT, 0, reinterpret_cast<LPARAM>(res))) {
+                delete res;
             }
             return;
         }
 
         std::string expectedSha256 = quickdns::AppUpdater::download_sha256(sha256Url);
         if (expectedSha256.length() != 64) {
-            MessageBoxW(hWnd, L"Не удалось загрузить контрольную сумму SHA-256. Установка отменена в целях безопасности.",
-                        L"Ошибка безопасности", MB_OK | MB_ICONERROR);
-            if (m_hBtnCheckUpdate) {
-                EnableWindow(m_hBtnCheckUpdate, TRUE);
-                SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
+            res->success = false;
+            res->errorMessage = L"Не удалось загрузить контрольную сумму SHA-256. Установка отменена в целях безопасности.";
+            res->errorTitle = L"Ошибка безопасности";
+            if (!PostMessageW(hWnd, WM_APP_DOWNLOAD_RESULT, 0, reinterpret_cast<LPARAM>(res))) {
+                delete res;
             }
             return;
         }
@@ -2166,27 +2223,31 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
             bool verified = quickdns::AppUpdater::verify_downloaded_executable(tempExe, expectedSha256);
             if (!verified) {
                 DeleteFileW(tempExe.c_str());
-                MessageBoxW(hWnd, L"Целостность файла обновления не подтверждена (неверный SHA-256 или поврежденный файл). Установка отменена.",
-                            L"Ошибка проверки целостности", MB_OK | MB_ICONERROR);
+                res->success = false;
+                res->errorMessage = L"Целостность файла обновления не подтверждена (неверный SHA-256 или поврежденный файл). Установка отменена.";
+                res->errorTitle = L"Ошибка проверки целостности";
             } else {
                 bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe);
                 if (!restarted) {
                     DeleteFileW(tempExe.c_str());
-                    MessageBoxW(hWnd, L"Не удалось применить обновление автоматически.",
-                                L"Ошибка обновления", MB_OK | MB_ICONERROR);
+                    res->success = false;
+                    res->errorMessage = L"Не удалось применить обновление автоматически.";
+                    res->errorTitle = L"Ошибка обновления";
+                } else {
+                    res->success = true;
                 }
             }
         } else {
             DeleteFileW(tempExe.c_str());
-            MessageBoxW(hWnd, L"Не удалось скачать файл обновления. Повторите попытку позже.",
-                        L"Ошибка скачивания", MB_OK | MB_ICONERROR);
+            res->success = false;
+            res->errorMessage = L"Не удалось скачать файл обновления. Повторите попытку позже.";
+            res->errorTitle = L"Ошибка скачивания";
         }
 
-        if (m_hBtnCheckUpdate) {
-            EnableWindow(m_hBtnCheckUpdate, TRUE);
-            SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
+        if (!PostMessageW(hWnd, WM_APP_DOWNLOAD_RESULT, 0, reinterpret_cast<LPARAM>(res))) {
+            delete res;
         }
-    }).detach();
+    });
 }
 
 void MainWindow::on_adapter_changed() {
@@ -2293,34 +2354,31 @@ void MainWindow::apply_selected_dns() {
         }
     }
 
-    std::thread([this, adapter, profile, manualDoh, hWnd]() {
-        bool success = false;
-        std::wstring msg;
+    DnsManager* dnsMgr = m_dnsManager.get();
+
+    m_tasks.run([dnsMgr, adapter, profile, manualDoh, hWnd]() {
+        auto* res = new quickdns::DnsApplyResult();
+        res->is_dhcp = profile.is_dhcp;
+        res->profile_id = profile.id;
+        res->profile_name = utf8_to_wide(profile.name);
 
         if (profile.is_dhcp) {
-            success = m_dnsManager->reset_to_dhcp(adapter);
-            msg = success ? L"Сетевой адаптер успешно переключен на DHCP." 
-                          : L"Не удалось сбросить DNS на DHCP: " + m_dnsManager->get_last_error();
+            res->success = dnsMgr->reset_to_dhcp(adapter);
+            res->message = res->success ? L"Сетевой адаптер успешно переключен на DHCP." 
+                                        : L"Не удалось сбросить DNS на DHCP: " + dnsMgr->get_last_error();
         } else {
             std::wstring pri = utf8_to_wide(profile.primary_ipv4);
             std::wstring sec = utf8_to_wide(profile.secondary_ipv4);
             std::wstring doh = manualDoh.empty() ? utf8_to_wide(profile.doh_template) : manualDoh;
-            success = m_dnsManager->set_static_dns(adapter, pri, sec, doh);
-            msg = success ? L"DNS серверы успешно установлены!" 
-                          : L"Не удалось применить DNS: " + m_dnsManager->get_last_error();
+            res->success = dnsMgr->set_static_dns(adapter, pri, sec, doh);
+            res->message = res->success ? L"DNS серверы успешно установлены!" 
+                                        : L"Не удалось применить DNS: " + dnsMgr->get_last_error();
         }
 
-        if (success) {
-            m_configManager->set_active_profile_id(profile.id);
-            m_configManager->save_to_file();
-            std::wstring profName = utf8_to_wide(profile.name);
-            show_tray_notification(L"DNS обновлен", L"Профиль '" + profName + L"' успешно применен.");
-        } else {
-            MessageBoxW(hWnd, msg.c_str(), L"Ошибка", MB_OK | MB_ICONERROR);
+        if (!PostMessageW(hWnd, WM_APP_DNS_APPLIED, 0, reinterpret_cast<LPARAM>(res))) {
+            delete res;
         }
-
-        PostMessageW(hWnd, WM_APP_DNS_APPLIED, 0, 0);
-    }).detach();
+    });
 }
 
 void MainWindow::reset_to_dhcp() {
@@ -2332,26 +2390,29 @@ void MainWindow::reset_to_dhcp() {
     m_isBusy = true;
     EnableWindow(m_hBtnApply, FALSE);
     EnableWindow(m_hBtnBenchmark, FALSE);
+    if (m_hBtnSmartDnsCatalog) EnableWindow(m_hBtnSmartDnsCatalog, FALSE);
     EnableWindow(m_hBtnResetDhcp, FALSE);
     EnableWindow(m_hBtnFlushDns, FALSE);
     if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, FALSE);
 
     NetworkAdapterInfo adapter = m_adapters[m_selectedAdapterIndex];
     HWND hWnd = m_hWnd;
+    DnsManager* dnsMgr = m_dnsManager.get();
 
-    std::thread([this, adapter, hWnd]() {
-        bool success = m_dnsManager->reset_to_dhcp(adapter);
-        if (success) {
-            m_configManager->set_active_profile_id("dhcp");
-            m_configManager->save_to_file();
-            show_tray_notification(L"Сброс DNS", L"Адаптер переключен на автоматический DNS (DHCP).");
-        } else {
-            std::wstring err = L"Не удалось сбросить DNS: " + m_dnsManager->get_last_error();
-            MessageBoxW(hWnd, err.c_str(), L"Ошибка", MB_OK | MB_ICONERROR);
+    m_tasks.run([dnsMgr, adapter, hWnd]() {
+        auto* res = new quickdns::DnsApplyResult();
+        res->is_dhcp = true;
+        res->profile_id = "dhcp";
+        res->profile_name = L"DHCP";
+        res->success = dnsMgr->reset_to_dhcp(adapter);
+        if (!res->success) {
+            res->message = L"Не удалось сбросить DNS: " + dnsMgr->get_last_error();
         }
 
-        PostMessageW(hWnd, WM_APP_DNS_APPLIED, 0, 0);
-    }).detach();
+        if (!PostMessageW(hWnd, WM_APP_DNS_APPLIED, 0, reinterpret_cast<LPARAM>(res))) {
+            delete res;
+        }
+    });
 }
 
 void MainWindow::flush_dns_cache() {
@@ -2473,7 +2534,7 @@ void MainWindow::open_windows_network_settings() {
         dohTemplate = utf8_to_wide(m_profiles[m_selectedProfileIndex].doh_template);
     }
 
-    std::thread([dohTemplate]() {
+    m_tasks.run([dohTemplate]() {
         HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         if (FAILED(hr)) return;
 
@@ -2727,7 +2788,7 @@ void MainWindow::open_windows_network_settings() {
             pAutomation->Release();
         }
         CoUninitialize();
-    }).detach();
+    });
 }
 
 void MainWindow::copy_text_to_clipboard(const std::wstring& text) {
