@@ -5,19 +5,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Enable Unicode and UTF-8 charset
+# Enable Unicode, UTF-8 charset, and warning flags
 add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 if(MSVC)
-    add_compile_options(/utf-8)
+    add_compile_options(/utf-8 /W4 /permissive-)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()
-    add_compile_options(-finput-charset=utf-8 -fexec-charset=utf-8)
+    add_compile_options(-finput-charset=utf-8 -fexec-charset=utf-8 -Wall -Wextra -Wpedantic)
+    add_link_options(-static -static-libgcc -static-libstdc++)
 endif()
-
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-    ${CMAKE_CURRENT_SOURCE_DIR}/res
-)
 
 # Common Windows System Libraries
 if(MSVC)
@@ -68,6 +64,11 @@ add_library(quickdns_core STATIC
     src/smartdns_verifier.cpp
     src/app_updater.cpp
 )
+target_include_directories(quickdns_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${CMAKE_CURRENT_SOURCE_DIR}/res
+)
 target_link_libraries(quickdns_core PUBLIC ${WIN32_LIBS})
 
 # GUI Application
@@ -81,6 +82,11 @@ set(APP_SOURCES
 )
 
 add_executable(QuickDNS WIN32 ${APP_SOURCES})
+target_include_directories(QuickDNS PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${CMAKE_CURRENT_SOURCE_DIR}/res
+)
 target_link_libraries(QuickDNS PRIVATE quickdns_core ${WIN32_LIBS})
 
 if(MSVC)
@@ -125,3 +131,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_updater.cpp")
     target_link_libraries(test_updater PRIVATE quickdns_core ${WIN32_LIBS})
     add_test(NAME TestUpdater COMMAND test_updater)
 endif()
+
+# Mark tests that perform live network/DNS/HTTP operations
+set_tests_properties(TestBenchmark TestSmartDnsVerifier TestUpdater PROPERTIES LABELS "network")

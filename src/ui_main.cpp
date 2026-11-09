@@ -3,6 +3,7 @@
 #include "dialog_benchmark.h"
 #include "dialog_smartdns.h"
 #include "smartdns_verifier.h"
+#include "app_updater.h"
 #include "encoding_utils.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
@@ -1204,7 +1205,8 @@ void MainWindow::create_controls() {
     startY += 30 + 14;
 
     // 5. Footer Version Badge
-    m_hFooterVersion = CreateWindowExW(0, L"STATIC", L"QuickDNS v2.0.1 • Portable",
+    std::wstring footerVersionStr = L"QuickDNS v" + std::wstring(quickdns::APP_VERSION_W) + L" \u2022 Portable";
+    m_hFooterVersion = CreateWindowExW(0, L"STATIC", footerVersionStr.c_str(),
         WS_CHILD | WS_VISIBLE | SS_CENTER,
         marginX, startY, contentWidth, 18,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -1229,7 +1231,6 @@ void MainWindow::reposition_controls() {
     RECT rcClient = {};
     GetClientRect(m_hWnd, &rcClient);
     int clientWidth = rcClient.right - rcClient.left;
-    int clientHeight = rcClient.bottom - rcClient.top;
 
     int marginX = 20;
     int contentWidth = clientWidth - (marginX * 2);

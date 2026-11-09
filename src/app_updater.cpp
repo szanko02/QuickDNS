@@ -7,10 +7,6 @@
 #include <iostream>
 #include <cctype>
 
-#pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "bcrypt.lib")
-
 namespace quickdns {
 
 namespace {
@@ -54,14 +50,6 @@ std::wstring utf8_to_wide(const std::string& str) {
     int sz = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.length()), nullptr, 0);
     std::wstring out(sz, 0);
     MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.length()), &out[0], sz);
-    return out;
-}
-
-std::string wide_to_utf8(const std::wstring& str) {
-    if (str.empty()) return "";
-    int sz = WideCharToMultiByte(CP_UTF8, 0, str.c_str(), static_cast<int>(str.length()), nullptr, 0, nullptr, nullptr);
-    std::string out(sz, 0);
-    WideCharToMultiByte(CP_UTF8, 0, str.c_str(), static_cast<int>(str.length()), &out[0], sz, nullptr, nullptr);
     return out;
 }
 

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -27,37 +27,53 @@ jobs:
     - name: Build Application & Tests
       run: cmake --build build --config Release
 
-    - name: Run Unit Tests
+    - name: Run Unit Tests (Exclude Live Network Tests)
       working-directory: build
-      run: ctest -C Release --output-on-failure
+      run: ctest -C Release --output-on-failure -LE network
 
-    - name: Package Release ZIP
+    - name: Package Release
       shell: pwsh
       run: |
         Copy-Item -Path build/Release/QuickDNS.exe -Destination QuickDNS.exe -Force
         (Get-FileHash build/Release/QuickDNS.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline QuickDNS.exe.sha256
         ./scripts/package_release.ps1
+        New-Item -ItemType Directory -Force -Path release-dist | Out-Null
+        Copy-Item -Path build/Release/QuickDNS.exe -Destination release-dist/QuickDNS.exe -Force
+        Copy-Item -Path QuickDNS.exe.sha256 -Destination release-dist/QuickDNS.exe.sha256 -Force
+        Copy-Item -Path dist/*.zip -Destination release-dist/ -Force
 
-    - name: Upload Artifact
+    - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: QuickDNS-Release-x64
         path: |
-          build/Release/QuickDNS.exe
-          QuickDNS.exe.sha256
+          release-dist/*
           build/Release/test_dns.exe
           build/Release/test_config.exe
           build/Release/test_benchmark.exe
-          dist/*.zip
+          build/Release/test_smartdns_verifier.exe
+          build/Release/test_updater.exe
+
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: QuickDNS-Release-x64
+        path: release_files
 
     - name: Publish GitHub Release
-      if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          build/Release/QuickDNS.exe
-          QuickDNS.exe.sha256
-          dist/*.zip
+          release_files/QuickDNS.exe
+          release_files/QuickDNS.exe.sha256
+          release_files/*.zip
         generate_release_notes: true
         append_body: false
       env:

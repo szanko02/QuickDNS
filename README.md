@@ -68,7 +68,7 @@ QuickDNS автоматизирует этот процесс:
 | **GeoHide US (США)** | `[SmartDNS]` | `192.255.159.241` | `192.3.233.253` | `https://us.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | Серверы США: ChatGPT, Claude, Gemini, Copilot, Grok, Spotify, Netflix US, Notion |
 | **Comss.one DNS** | `[SmartDNS]` | `83.220.169.155` | `212.109.195.93` | `https://dns.comss.one/dns-query` | [dns.comss.one](https://dns.comss.one/) | ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X, AdGuard |
 | **Zapret DNS** | `[SmartDNS]` | `83.217.211.149` | — | `https://dns.zapret.moe/dns-query` | [zapret.moe](https://zapret.moe/) | Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker |
-| **Без межаў DNS** | `[SmartDNS]` | `143.20.64.55` | `31.58.216.201` | `https://dns.bezmezhau.com/dns-query` | [bezmezhau.com](https://bezmezhau.com/) | ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok |
+| **Без межаў DNS** | `[SmartDNS]` | `181.215.40.49` | `143.20.64.55` | `https://dns.bezmezhau.com/dns-query` | [bezmezhau.com](https://bezmezhau.com/) | ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok |
 | **Malw.link DNS** | `[SmartDNS]` | `179.254.166.171` | `164.5.224.81` | `https://dns.malw.link/dns-query` | [info.dns.malw.link](https://info.dns.malw.link/) | ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva |
 | **Astracat DNS** | `[SmartDNS]` | `135.106.217.200` | `185.139.69.24` | `https://dns.astracat.ru/dns-query` | [astracat.ru](https://astracat.ru/) | ChatGPT, Claude, Discord, YouTube, Spotify, Twitter/X, Instagram, Notion |
 | **Mafioznik DNS** | `[SmartDNS]` | `103.27.157.38` | `103.27.157.100` | `https://dns.mafioznik.xyz/dns-query` | [dns.mafioznik.xyz](https://dns.mafioznik.xyz/) | ChatGPT, Discord, YouTube, Steam Community, Spotify, Instagram, Twitter/X |
@@ -80,6 +80,9 @@ QuickDNS автоматизирует этот процесс:
 | **Quad9 DNS** | Безопасность | `9.9.9.9` | `149.112.112.112` | `https://dns.quad9.net/dns-query` | [quad9.net](https://quad9.net/) | Блокировка вредоносных и фишинговых ресурсов |
 | **AdGuard DNS** | Фильтрация | `94.140.14.14` | `94.140.15.15` | `https://dns.adguard-dns.com/dns-query` | [adguard-dns.io](https://adguard-dns.io/) | Фильтрация рекламы и счетчиков аналитики |
 | **Автоматически (DHCP)** | Системный | *Авто* | *Авто* | — | — | Сброс параметров на стандартный DNS роутера или провайдера |
+
+> **Предупреждение о приватности при использовании SmartDNS:**  
+> При выборе стороннего SmartDNS весь ваш незашифрованный DNS-трафик (список посещаемых доменов) становится виден оператору этого сервиса. Используйте только те профили, операторам которых вы доверяете.
 
 ---
 
@@ -118,6 +121,11 @@ QuickDNS автоматизирует этот процесс:
 Выберите профиль <b>«Автоматически (DHCP)»</b> и нажмите «Применить DNS в 1 клик». Программа переведет адаптер в автоматический режим получения DNS от вашего роутера или провайдера.
 </details>
 
+<details>
+<summary><b>Как проверяется целостность и безопасность при автообновлении?</b></summary>
+Обновления скачиваются исключительно по HTTPS с официальных доменов GitHub с проверкой сертификатов TLS. Перед запуском нового исполняемого файла программа загружает файл <code>QuickDNS.exe.sha256</code> из релиза и вычисляет контрольную сумму через Windows BCrypt API. При несовпадении хэша или отсутствии файла подписи обновление блокируется.
+</details>
+
 ---
 
 ## Архитектура и стек технологий
@@ -139,6 +147,7 @@ QuickDNS/
 │   └── workflows/
 │       └── build.yml             # Автоматическая сборка в GitHub Actions
 ├── include/
+│   ├── app_updater.h             # Защищенная загрузка и проверка SHA-256 обновлений
 │   ├── config_manager.h          # Управление профилями и JSON-персистентность
 │   ├── dialog_add_profile.h      # Модальное окно добавления своих DNS-профилей
 │   ├── dialog_benchmark.h        # Диалог многопоточного тестирования скорости DNS
@@ -147,8 +156,10 @@ QuickDNS/
 │   ├── dns_manager.h             # Сетевое ядро, Win32 IPHlpApi и сброс кэша
 │   ├── encoding_utils.h          # Декодирование UTF-8 <-> UTF-16
 │   ├── resource.h                # Идентификаторы ресурсов и контролов
+│   ├── smartdns_verifier.h       # Верификация SmartDNS-нод и валидация IP
 │   ├── ui_main.h                 # Архитектура главного окна и системного трея
-│   └── ui_palette.h              # Цветовая палитра темной и светлой тем
+│   ├── ui_palette.h              # Цветовая палитра темной и светлой тем
+│   └── winsock_init.h            # Потокобезопасная глобальная инициализация Winsock
 ├── res/
 │   ├── app.manifest              # Манифест UAC requireAdministrator + DPI v2
 │   ├── app_icon.ico              # Фирменная иконка приложения (16x16 - 256x256)
@@ -157,6 +168,7 @@ QuickDNS/
 │   ├── resource.rc               # Ресурсы главного приложения
 │   └── resource_diag.rc          # Ресурсы диагностических тестов
 ├── src/
+│   ├── app_updater.cpp           # Обновление через GitHub API, валидация TLS и BCrypt SHA-256
 │   ├── config_manager.cpp        # Реализация JSON хранилища и встроенных пресетов
 │   ├── dialog_add_profile.cpp    # Реализация модального диалога добавления профиля
 │   ├── dialog_benchmark.cpp      # Реализация окна тестирования DNS
@@ -164,11 +176,14 @@ QuickDNS/
 │   ├── dns_benchmark.cpp         # Реализация движка замера скорости
 │   ├── dns_manager.cpp           # Системные сетевые вызовы Windows
 │   ├── main.cpp                  # Точка входа wWinMain, инициализация GDI+ и COM
+│   ├── smartdns_verifier.cpp     # DNS RFC 1035 wireformat запросы и HTTP DoH замеры
 │   └── ui_main.cpp               # Графический интерфейс, трей, обработка событий
 ├── tests/
 │   ├── test_benchmark.cpp        # Тесты движка бенчмарка DNS
 │   ├── test_config.cpp           # Тесты конфигураций и персистентности
-│   └── test_dns.cpp              # Тесты адаптеров и сброса кэша DNS
+│   ├── test_dns.cpp              # Тесты адаптеров и сброса кэша DNS
+│   ├── test_smartdns_verifier.cpp # Тесты верификатора SmartDNS и DNS wireformat
+│   └── test_updater.cpp          # Тесты модуля обновлений и SHA-256 BCrypt
 ├── .gitignore
 ├── build.bat                     # Быстрая сборка проекта
 ├── CMakeLists.txt                # Скрипт сборки CMake

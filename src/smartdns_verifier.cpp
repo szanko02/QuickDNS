@@ -17,8 +17,6 @@
 #include <set>
 #include <sstream>
 
-#pragma comment(lib, "winhttp.lib")
-
 using QuickDns::Encoding::utf8_to_wide;
 
 namespace {
