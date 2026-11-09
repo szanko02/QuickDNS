@@ -29,3 +29,17 @@ These rules are persistent for this project. Apply on every prompt.
   - No pre-work before first subagent call.
   - Independently verify results before accepting. Spawn additional rounds if needed.
 - Use Solo routine only for simple tasks and meta-configuration.
+
+### 5. Release Management & GitHub Releases Text
+- Never publish empty or auto-generated release notes: Every version release must have a formatted title and changelog body matching past releases (`v2.0.0`, `v2.0.1`, `v2.0.2`).
+- Release Title Format: `QuickDNS vX.Y.Z - <Highlights summary>` (e.g. `QuickDNS v2.0.2 - Security Hardening, SHA-256 Update Verification, IPv6 DNS & Architecture Stability`).
+- Release Body Structure:
+  - Heading: `### QuickDNS vX.Y.Z`
+  - Lead summary paragraph explaining core focus of release.
+  - Bulleted change breakdown with bold topic names: `- **<Topic>**: <What changed and technical reason>`.
+  - Full changelog compare link at bottom: `**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v<prev>...v<new>`.
+  - Maintain `RELEASE_NOTES.md` in repository root with bilingual (English primary, Russian summary) text before tagging.
+- Workflow & Post-Release Verification:
+  - After publishing tag or running CI, verify GitHub Release via API or web to ensure title, body, and all binary assets (`QuickDNS.exe`, `QuickDNS.exe.sha256`, `QuickDNS-vX.Y.Z-Portable.zip`) are attached.
+  - If existing release was drafted or auto-created without body, patch title and body immediately via GitHub API (`PATCH /repos/{owner}/{repo}/releases/{id}`).
+  - Never allow dangling or cancelled CI runs to remain unnoticed; cancel stalled runs and monitor completion.
