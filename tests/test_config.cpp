@@ -5,6 +5,7 @@
 #include <fstream>
 
 int main() {
+    _putenv("TESTING=1");
     std::cout << "=== QuickDNS: Test Config Manager ===" << std::endl;
 
     std::filesystem::path testPath = std::filesystem::temp_directory_path() / "quickdns_test_profiles.json";

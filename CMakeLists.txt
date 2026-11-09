@@ -134,3 +134,4 @@ endif()
 
 # Mark tests that perform live network/DNS/HTTP operations
 set_tests_properties(TestBenchmark TestSmartDnsVerifier TestUpdater PROPERTIES LABELS "network")
+set_tests_properties(TestDns TestConfig PROPERTIES TIMEOUT 30)

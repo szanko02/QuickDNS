@@ -627,7 +627,10 @@ bool ConfigManager::load_from_file() {
 
             std::wstring warn = L"Обнаружена ошибка в файле конфигурации profiles.json. Файл переименован в " +
                                 broken_path.filename().wstring() + L", созданы настройки по умолчанию.";
-            if (GetConsoleWindow() == nullptr) {
+            bool is_ci_or_test = (std::getenv("CI") != nullptr ||
+                                  std::getenv("GITHUB_ACTIONS") != nullptr ||
+                                  std::getenv("TESTING") != nullptr);
+            if (!is_ci_or_test && GetConsoleWindow() == nullptr) {
                 MessageBoxW(nullptr, warn.c_str(), L"QuickDNS - Ошибка конфигурации", MB_OK | MB_ICONWARNING);
             }
             return false;

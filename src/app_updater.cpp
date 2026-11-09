@@ -154,7 +154,83 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
 
-    if (responseBody.empty()) return std::nullopt;
+    if (responseBody.empty()) {
+        // Fallback: Query https://github.com/{owner}/{repo}/releases/latest with HEAD request
+        // Bypasses api.github.com REST rate limits (e.g. HTTP 403 on shared SmartDNS IPs)
+        HINTERNET hFallbackSession = WinHttpOpen(
+            L"Mozilla/5.0",
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            WINHTTP_NO_PROXY_NAME,
+            WINHTTP_NO_PROXY_BYPASS, 0
+        );
+        if (!hFallbackSession) return std::nullopt;
+
+        DWORD redirectPolicyNever = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        WinHttpSetOption(hFallbackSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicyNever, sizeof(redirectPolicyNever));
+
+        DWORD fbTo = 10000;
+        WinHttpSetTimeouts(hFallbackSession, fbTo, fbTo, fbTo, fbTo);
+
+        HINTERNET hFallbackConnect = WinHttpConnect(hFallbackSession, L"github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+        if (!hFallbackConnect) {
+            WinHttpCloseHandle(hFallbackSession);
+            return std::nullopt;
+        }
+
+        std::wstring fbPath = L"/" + utf8_to_wide(repoOwner) + L"/" + utf8_to_wide(repoName) + L"/releases/latest";
+        HINTERNET hFallbackReq = WinHttpOpenRequest(
+            hFallbackConnect, L"HEAD", fbPath.c_str(),
+            nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE
+        );
+
+        if (!hFallbackReq) {
+            WinHttpCloseHandle(hFallbackConnect);
+            WinHttpCloseHandle(hFallbackSession);
+            return std::nullopt;
+        }
+
+        std::wstring fbHeaders = L"User-Agent: QuickDNS-AppUpdater\r\nAccept: */*\r\n";
+        std::wstring locHeader;
+        if (WinHttpSendRequest(hFallbackReq, fbHeaders.c_str(), static_cast<DWORD>(fbHeaders.length()), nullptr, 0, 0, 0) &&
+            WinHttpReceiveResponse(hFallbackReq, nullptr))
+        {
+            wchar_t locBuf[1024] = {};
+            DWORD locSz = sizeof(locBuf);
+            if (WinHttpQueryHeaders(hFallbackReq, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
+                                    locBuf, &locSz, WINHTTP_NO_HEADER_INDEX)) {
+                locHeader = locBuf;
+            }
+        }
+
+        WinHttpCloseHandle(hFallbackReq);
+        WinHttpCloseHandle(hFallbackConnect);
+        WinHttpCloseHandle(hFallbackSession);
+
+        if (locHeader.empty()) return std::nullopt;
+
+        size_t tagPos = locHeader.rfind(L"/tag/");
+        if (tagPos == std::wstring::npos) return std::nullopt;
+
+        std::wstring tagW = locHeader.substr(tagPos + 5);
+        if (tagW.empty()) return std::nullopt;
+
+        int utf8Len = WideCharToMultiByte(CP_UTF8, 0, tagW.c_str(), static_cast<int>(tagW.size()), nullptr, 0, nullptr, nullptr);
+        std::string tag(utf8Len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, tagW.c_str(), static_cast<int>(tagW.size()), tag.data(), utf8Len, nullptr, nullptr);
+
+        ReleaseInfo fbInfo;
+        fbInfo.tag_name = tag;
+        fbInfo.title = "QuickDNS " + tag;
+        fbInfo.notes = "";
+        fbInfo.semver = tag;
+        if (!fbInfo.semver.empty() && (fbInfo.semver[0] == 'v' || fbInfo.semver[0] == 'V')) {
+            fbInfo.semver = fbInfo.semver.substr(1);
+        }
+        fbInfo.download_url = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/" + tag + "/QuickDNS.exe";
+        fbInfo.sha256_url = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/" + tag + "/QuickDNS.exe.sha256";
+        fbInfo.is_newer = is_version_newer(currentVersion, fbInfo.semver);
+        return fbInfo;
+    }
 
     ReleaseInfo info;
     info.tag_name = extract_json_field(responseBody, "tag_name");
