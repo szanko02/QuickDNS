@@ -32,7 +32,6 @@ using namespace quickdns;
 namespace {
     constexpr const wchar_t* WINDOW_CLASS_NAME = L"QuickDNS_MainWindowClass";
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
-    constexpr const wchar_t* WINDOW_TITLE      = L"QuickDNS v2.0.1 — Быстрая смена DNS в 1 клик";
 
     constexpr int WINDOW_CLIENT_WIDTH  = 580;
     constexpr int WINDOW_CLIENT_HEIGHT = 760;
@@ -295,10 +294,11 @@ bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
     int posX = (screenWidth - winWidth) / 2;
     int posY = (screenHeight - winHeight) / 2;
 
+    std::wstring winTitle = L"QuickDNS v" + std::wstring(quickdns::APP_VERSION_W) + L" — Быстрая смена DNS в 1 клик";
     m_hWnd = CreateWindowExW(
         0,
         WINDOW_CLASS_NAME,
-        WINDOW_TITLE,
+        winTitle.c_str(),
         dwStyle,
         posX, posY,
         winWidth, winHeight,
@@ -980,7 +980,8 @@ void MainWindow::create_controls() {
     int updateBtnH = 28;
     int btnY = startY - 3;
 
-    m_hTitleLabel = CreateWindowExW(0, L"STATIC", L"QuickDNS v2.0.1 — Менеджер DNS",
+    std::wstring titleText = L"QuickDNS v" + std::wstring(quickdns::APP_VERSION_W) + L" — Менеджер DNS";
+    m_hTitleLabel = CreateWindowExW(0, L"STATIC", titleText.c_str(),
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         marginX, startY, contentWidth - themeBtnSize - updateBtnW - 16, 24,
         m_hWnd, nullptr, m_hInstance, nullptr);
@@ -1862,7 +1863,8 @@ void MainWindow::setup_tray_icon() {
     m_nid.uCallbackMessage = WM_APP_TRAYMSG;
     m_nid.hIcon = LoadIconW(m_hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     if (!m_nid.hIcon) m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(m_nid.szTip, L"QuickDNS v2.0.1 — Быстрая смена DNS");
+    std::wstring trayTip = L"QuickDNS v" + std::wstring(quickdns::APP_VERSION_W) + L" — Быстрая смена DNS";
+    wcsncpy_s(m_nid.szTip, trayTip.c_str(), _TRUNCATE);
 
     Shell_NotifyIconW(NIM_ADD, &m_nid);
 }
