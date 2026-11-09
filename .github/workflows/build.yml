@@ -8,6 +8,10 @@ on:
     branches: [ "master", "main" ]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -37,22 +41,17 @@ jobs:
         Copy-Item -Path build/Release/QuickDNS.exe -Destination QuickDNS.exe -Force
         (Get-FileHash build/Release/QuickDNS.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline QuickDNS.exe.sha256
         ./scripts/package_release.ps1
-        New-Item -ItemType Directory -Force -Path release-dist | Out-Null
-        Copy-Item -Path build/Release/QuickDNS.exe -Destination release-dist/QuickDNS.exe -Force
-        Copy-Item -Path QuickDNS.exe.sha256 -Destination release-dist/QuickDNS.exe.sha256 -Force
-        Copy-Item -Path dist/*.zip -Destination release-dist/ -Force
+        New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+        Copy-Item -Path QuickDNS.exe -Destination release-artifacts/QuickDNS.exe -Force
+        Copy-Item -Path QuickDNS.exe.sha256 -Destination release-artifacts/QuickDNS.exe.sha256 -Force
+        Copy-Item -Path dist/*.zip -Destination release-artifacts/ -Force
+        Copy-Item -Path RELEASE_NOTES.md -Destination release-artifacts/RELEASE_NOTES.md -Force
 
-    - name: Upload Build Artifacts
+    - name: Upload Release Files
       uses: actions/upload-artifact@v4
       with:
-        name: QuickDNS-Release-x64
-        path: |
-          release-dist/*
-          build/Release/test_dns.exe
-          build/Release/test_config.exe
-          build/Release/test_benchmark.exe
-          build/Release/test_smartdns_verifier.exe
-          build/Release/test_updater.exe
+        name: QuickDNS-Release-Files
+        path: release-artifacts/*
 
   release:
     name: Publish Release
@@ -64,17 +63,22 @@ jobs:
     steps:
     - uses: actions/download-artifact@v4
       with:
-        name: QuickDNS-Release-x64
-        path: release_files
+        name: QuickDNS-Release-Files
+        path: artifacts
+
+    - name: List Release Files
+      shell: pwsh
+      run: Get-ChildItem -Recurse artifacts
 
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
+        name: QuickDNS ${{ github.ref_name }}
+        body_path: artifacts/RELEASE_NOTES.md
         files: |
-          release_files/QuickDNS.exe
-          release_files/QuickDNS.exe.sha256
-          release_files/*.zip
-        generate_release_notes: true
-        append_body: false
+          artifacts/QuickDNS.exe
+          artifacts/QuickDNS.exe.sha256
+          artifacts/*.zip
+        generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
