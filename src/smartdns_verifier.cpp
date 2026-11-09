@@ -1,5 +1,6 @@
 #include "smartdns_verifier.h"
 #include "encoding_utils.h"
+#include "winsock_init.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -16,20 +17,13 @@
 #include <set>
 #include <sstream>
 
-#pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "winhttp.lib")
 
 using QuickDns::Encoding::utf8_to_wide;
 
 namespace {
 
-void ensure_winsock() {
-    static std::once_flag init_flag;
-    std::call_once(init_flag, []() {
-        WSADATA wsaData;
-        WSAStartup(MAKEWORD(2, 2), &wsaData);
-    });
-}
+using quickdns::ensure_winsock;
 
 // Build standard DNS wireformat query packet (RFC 1035)
 std::vector<uint8_t> build_dns_query_packet(uint16_t txid, const std::string& domain) {

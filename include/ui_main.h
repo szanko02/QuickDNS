@@ -176,10 +176,10 @@ private:
     UINT m_msgRestoreInstance = 0;
 
     // Business Logic Engines
-    std::unique_ptr<DnsManager> m_dnsManager;
+    std::unique_ptr<quickdns::DnsManager> m_dnsManager;
     std::unique_ptr<ConfigManager> m_configManager;
 
-    std::vector<NetworkAdapterInfo> m_adapters;
+    std::vector<quickdns::NetworkAdapterInfo> m_adapters;
     std::vector<DnsProfile> m_profiles;
     int m_selectedAdapterIndex = -1;
     int m_selectedProfileIndex = -1;

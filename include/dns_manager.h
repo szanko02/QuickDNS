@@ -16,12 +16,6 @@
 #include <optional>
 #include <string_view>
 
-// Auto-link required Windows networking libraries under MSVC/Clang
-#pragma comment(lib, "iphlpapi.lib")
-#pragma comment(lib, "dnsapi.lib")
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "ole32.lib")
-
 namespace quickdns {
 
 /**
@@ -202,6 +196,3 @@ private:
 
 } // namespace quickdns
 
-// Global namespace aliases for compatibility
-using quickdns::NetworkAdapterInfo;
-using quickdns::DnsManager;

@@ -1,5 +1,6 @@
 #include "dns_benchmark.h"
 #include "encoding_utils.h"
+#include "winsock_init.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -11,19 +12,11 @@
 #include <mutex>
 #include <random>
 
-#pragma comment(lib, "ws2_32.lib")
-
 using QuickDns::Encoding::utf8_to_wide;
 
 namespace {
 
-void ensure_winsock() {
-    static std::once_flag init_flag;
-    std::call_once(init_flag, []() {
-        WSADATA wsaData;
-        WSAStartup(MAKEWORD(2, 2), &wsaData);
-    });
-}
+using quickdns::ensure_winsock;
 
 const std::vector<std::string> BENCHMARK_DOMAINS = {
     "chatgpt.com",

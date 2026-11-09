@@ -1,16 +1,13 @@
 #include "dns_manager.h"
+#include "winsock_init.h"
 
 #include <iostream>
 #include <sstream>
+#include <fstream>
+#include <mutex>
 #include <algorithm>
 #include <cwctype>
 #include <objbase.h>
-
-#pragma comment(lib, "iphlpapi.lib")
-#pragma comment(lib, "dnsapi.lib")
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "advapi32.lib")
 
 // Dynamic function pointer signatures for Windows 10 1809+ / Windows 11 DNS settings API
 #ifndef DNS_INTERFACE_SETTINGS_VERSION1
@@ -56,19 +53,52 @@ typedef BOOL (WINAPI *PFN_DnsFlushResolverCache)(VOID);
 
 namespace {
 
-// RAII helper to ensure WSAStartup is called exactly once across the process
-struct WinsockInitializer {
-    WinsockInitializer() {
-        WSADATA wsaData;
-        WSAStartup(MAKEWORD(2, 2), &wsaData);
-    }
-    ~WinsockInitializer() {
-        WSACleanup();
-    }
-};
+using quickdns::ensure_winsock;
 
-void ensure_winsock() {
-    static WinsockInitializer initializer;
+std::mutex g_log_mutex;
+
+void write_log_entry(const wchar_t* level, const std::wstring& msg) {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wchar_t time_buf[64];
+    swprintf_s(time_buf, L"[%04u-%02u-%02u %02u:%02u:%02u.%03u]",
+              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+    std::wstring line = std::wstring(time_buf) + L" [" + level + L"] " + msg + L"\r\n";
+    OutputDebugStringW(line.c_str());
+
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    const wchar_t* local_app_data = _wgetenv(L"LOCALAPPDATA");
+    if (!local_app_data || *local_app_data == L'\0') {
+        return;
+    }
+
+    std::wstring dir = std::wstring(local_app_data) + L"\\QuickDNS";
+    CreateDirectoryW(dir.c_str(), nullptr);
+
+    std::wstring log_path = dir + L"\\quickdns.log";
+    std::wstring old_path = dir + L"\\quickdns.log.old";
+
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    if (GetFileAttributesExW(log_path.c_str(), GetFileExInfoStandard, &fad)) {
+        LARGE_INTEGER size;
+        size.LowPart = fad.nFileSizeLow;
+        size.HighPart = fad.nFileSizeHigh;
+        if (size.QuadPart >= 1024 * 1024) { // 1 MB limit
+            MoveFileExW(log_path.c_str(), old_path.c_str(), MOVEFILE_REPLACE_EXISTING);
+        }
+    }
+
+    int utf8_len = WideCharToMultiByte(CP_UTF8, 0, line.c_str(), static_cast<int>(line.size()), nullptr, 0, nullptr, nullptr);
+    if (utf8_len > 0) {
+        std::string utf8_line(utf8_len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, line.c_str(), static_cast<int>(line.size()), utf8_line.data(), utf8_len, nullptr, nullptr);
+        std::ofstream out(log_path.c_str(), std::ios::binary | std::ios::app);
+        if (out.is_open()) {
+            out.write(utf8_line.data(), utf8_line.size());
+            out.flush();
+        }
+    }
 }
 
 // Internal structure to assist in prioritizing network adapters during sorting
@@ -320,11 +350,11 @@ DnsManager& DnsManager::operator=(DnsManager&& other) noexcept {
 }
 
 void DnsManager::log_info(const std::wstring& msg) const {
-    std::wclog << L"[QuickDNS::DnsManager] INFO: " << msg << std::endl;
+    write_log_entry(L"INFO", msg);
 }
 
 void DnsManager::log_error(const std::wstring& msg) const {
-    std::wcerr << L"[QuickDNS::DnsManager] ERROR: " << msg << std::endl;
+    write_log_entry(L"ERROR", msg);
 }
 
 void DnsManager::set_last_error(const std::wstring& msg) const {
