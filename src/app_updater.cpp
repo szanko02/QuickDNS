@@ -1,4 +1,6 @@
 #include "app_updater.h"
+#include "encoding_utils.h"
+#include "../third_party/nlohmann/json.hpp"
 #include <winhttp.h>
 #include <shellapi.h>
 #include <bcrypt.h>
@@ -11,46 +13,18 @@ namespace quickdns {
 
 namespace {
 
-std::string extract_json_field(const std::string& json, const std::string& key) {
-    std::string searchKey = "\"" + key + "\"";
-    size_t pos = json.find(searchKey);
-    if (pos == std::string::npos) return "";
-
-    pos = json.find(':', pos);
-    if (pos == std::string::npos) return "";
-
-    pos++;
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
-        pos++;
-    }
-    if (pos >= json.size()) return "";
-
-    if (json[pos] == '"') {
-        size_t endPos = pos + 1;
-        while (endPos < json.size()) {
-            if (json[endPos] == '"' && json[endPos - 1] != '\\') {
-                break;
+std::wstring normalize_crlf(const std::wstring& str) {
+    std::wstring result;
+    result.reserve(str.size() + 32);
+    for (size_t i = 0; i < str.size(); ++i) {
+        if (str[i] == L'\n') {
+            if (i == 0 || str[i - 1] != L'\r') {
+                result.push_back(L'\r');
             }
-            endPos++;
         }
-        return json.substr(pos + 1, endPos - pos - 1);
-    } else {
-        size_t endPos = pos;
-        while (endPos < json.size() && json[endPos] != ',' && json[endPos] != '}' && json[endPos] != '\n' && json[endPos] != '\r') {
-            endPos++;
-        }
-        std::string val = json.substr(pos, endPos - pos);
-        val.erase(std::remove_if(val.begin(), val.end(), ::isspace), val.end());
-        return val;
+        result.push_back(str[i]);
     }
-}
-
-std::wstring utf8_to_wide(const std::string& str) {
-    if (str.empty()) return L"";
-    int sz = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.length()), nullptr, 0);
-    std::wstring out(sz, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.length()), &out[0], sz);
-    return out;
+    return result;
 }
 
 } // anonymous namespace
@@ -119,7 +93,7 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
         return std::nullopt;
     }
 
-    std::wstring path = L"/repos/" + utf8_to_wide(repoOwner) + L"/" + utf8_to_wide(repoName) + L"/releases/latest";
+    std::wstring path = L"/repos/" + QuickDns::Encoding::utf8_to_wide(repoOwner) + L"/" + QuickDns::Encoding::utf8_to_wide(repoName) + L"/releases/latest";
     HINTERNET hRequest = WinHttpOpenRequest(
         hConnect, L"GET", path.c_str(),
         nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE
@@ -177,7 +151,7 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
             return std::nullopt;
         }
 
-        std::wstring fbPath = L"/" + utf8_to_wide(repoOwner) + L"/" + utf8_to_wide(repoName) + L"/releases/latest";
+        std::wstring fbPath = L"/" + QuickDns::Encoding::utf8_to_wide(repoOwner) + L"/" + QuickDns::Encoding::utf8_to_wide(repoName) + L"/releases/latest";
         HINTERNET hFallbackReq = WinHttpOpenRequest(
             hFallbackConnect, L"HEAD", fbPath.c_str(),
             nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE
@@ -232,48 +206,70 @@ std::optional<ReleaseInfo> AppUpdater::check_github_update(
         return fbInfo;
     }
 
+    auto j = nlohmann::json::parse(responseBody, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) {
+        std::wcerr << L"Не удалось разобрать ответ сервера обновлений." << std::endl;
+        return std::nullopt;
+    }
+
     ReleaseInfo info;
-    info.tag_name = extract_json_field(responseBody, "tag_name");
-    info.title = extract_json_field(responseBody, "name");
-    info.notes = extract_json_field(responseBody, "body");
+    std::string tag_name = j.value("tag_name", std::string{});
+    std::string body = j.value("body", std::string{});
+    info.title = j.value("name", std::string{});
+
+    std::string exeUrl;
+    std::string shaUrl;
+
+    if (j.contains("assets") && j["assets"].is_array()) {
+        for (const auto& asset : j["assets"]) {
+            if (!asset.is_object()) continue;
+            std::string assetName = asset.value("name", std::string{});
+            if (assetName == "QuickDNS.exe") {
+                exeUrl = asset.value("browser_download_url", std::string{});
+                if (asset.contains("size") && asset["size"].is_number()) {
+                    info.asset_size = asset["size"].get<size_t>();
+                }
+            } else if (assetName == "QuickDNS.exe.sha256") {
+                shaUrl = asset.value("browser_download_url", std::string{});
+            }
+        }
+
+        // As a fallback if exeUrl is still empty after checking for "QuickDNS.exe",
+        // accept the first asset whose "name" ends with ".exe" and store its "browser_download_url"
+        if (exeUrl.empty()) {
+            for (const auto& asset : j["assets"]) {
+                if (!asset.is_object()) continue;
+                std::string assetName = asset.value("name", std::string{});
+                if (assetName.size() >= 4 && assetName.compare(assetName.size() - 4, 4, ".exe") == 0) {
+                    exeUrl = asset.value("browser_download_url", std::string{});
+                    if (asset.contains("size") && asset["size"].is_number()) {
+                        info.asset_size = asset["size"].get<size_t>();
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Convert tag_name, body, exeUrl, shaUrl to std::wstring via QuickDns::Encoding::utf8_to_wide
+    std::wstring tag_name_w = QuickDns::Encoding::utf8_to_wide(tag_name);
+    std::wstring body_w = QuickDns::Encoding::utf8_to_wide(body);
+    std::wstring exeUrl_w = QuickDns::Encoding::utf8_to_wide(exeUrl);
+    std::wstring shaUrl_w = QuickDns::Encoding::utf8_to_wide(shaUrl);
+
+    // Also normalize lone \n (not preceded by \r) in info.changelog (notes) to \r\n for Win32 controls
+    body_w = normalize_crlf(body_w);
+
+    info.tag_name = QuickDns::Encoding::wide_to_utf8(tag_name_w);
+    info.notes = QuickDns::Encoding::wide_to_utf8(body_w);
+    info.download_url = QuickDns::Encoding::wide_to_utf8(exeUrl_w);
+    info.sha256_url = QuickDns::Encoding::wide_to_utf8(shaUrl_w);
 
     if (info.tag_name.empty()) return std::nullopt;
 
     info.semver = info.tag_name;
     if (!info.semver.empty() && (info.semver[0] == 'v' || info.semver[0] == 'V')) {
         info.semver = info.semver.substr(1);
-    }
-
-    // Look for QuickDNS.exe asset download URL
-    size_t assetPos = responseBody.find("\"name\":\"QuickDNS.exe\"");
-    if (assetPos == std::string::npos) {
-        assetPos = responseBody.find("\"name\": \"QuickDNS.exe\"");
-    }
-
-    if (assetPos != std::string::npos) {
-        size_t urlKey = responseBody.find("\"browser_download_url\"", assetPos);
-        if (urlKey != std::string::npos) {
-            info.download_url = extract_json_field(responseBody.substr(urlKey, 400), "browser_download_url");
-        }
-        size_t sizeKey = responseBody.find("\"size\"", assetPos);
-        if (sizeKey != std::string::npos && (urlKey == std::string::npos || sizeKey < urlKey + 500)) {
-            std::string sizeStr = extract_json_field(responseBody.substr(sizeKey, 100), "size");
-            if (!sizeStr.empty()) {
-                try { info.asset_size = std::stoull(sizeStr); } catch (...) {}
-            }
-        }
-    }
-
-    // Look for QuickDNS.exe.sha256 checksum asset URL
-    size_t shaPos = responseBody.find("\"name\":\"QuickDNS.exe.sha256\"");
-    if (shaPos == std::string::npos) {
-        shaPos = responseBody.find("\"name\": \"QuickDNS.exe.sha256\"");
-    }
-    if (shaPos != std::string::npos) {
-        size_t urlKey = responseBody.find("\"browser_download_url\"", shaPos);
-        if (urlKey != std::string::npos) {
-            info.sha256_url = extract_json_field(responseBody.substr(urlKey, 400), "browser_download_url");
-        }
     }
 
     info.is_newer = is_version_newer(currentVersion, info.semver);
@@ -603,8 +599,9 @@ bool AppUpdater::download_file(
 }
 
 bool AppUpdater::apply_update_and_restart(const std::wstring& downloadedExePath) {
-    wchar_t currentExe[MAX_PATH] = {};
-    if (GetModuleFileNameW(nullptr, currentExe, MAX_PATH) == 0) {
+    wchar_t currentExe[MAX_PATH] = {0};
+    DWORD exeLen = GetModuleFileNameW(nullptr, currentExe, MAX_PATH);
+    if (exeLen == 0 || exeLen >= MAX_PATH) {
         return false;
     }
 

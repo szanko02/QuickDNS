@@ -310,14 +310,17 @@ DnsManager::~DnsManager() {
 }
 
 DnsManager::DnsManager(DnsManager&& other) noexcept
-    : last_error_(std::move(other.last_error_)),
-      m_hIpHlp(other.m_hIpHlp),
+    : m_hIpHlp(other.m_hIpHlp),
       m_hDnsApi(other.m_hDnsApi),
       m_pfnSetInterfaceDnsSettings(other.m_pfnSetInterfaceDnsSettings),
       m_pfnGetInterfaceDnsSettings(other.m_pfnGetInterfaceDnsSettings),
       m_pfnFreeInterfaceDnsSettings(other.m_pfnFreeInterfaceDnsSettings),
       m_pfnDnsFlushResolverCache(other.m_pfnDnsFlushResolverCache)
 {
+    {
+        std::lock_guard<std::mutex> lock(other.error_mutex_);
+        last_error_ = std::move(other.last_error_);
+    }
     other.m_hIpHlp = nullptr;
     other.m_hDnsApi = nullptr;
     other.m_pfnSetInterfaceDnsSettings = nullptr;
@@ -331,7 +334,10 @@ DnsManager& DnsManager::operator=(DnsManager&& other) noexcept {
         if (m_hIpHlp) FreeLibrary(m_hIpHlp);
         if (m_hDnsApi) FreeLibrary(m_hDnsApi);
 
-        last_error_ = std::move(other.last_error_);
+        {
+            std::scoped_lock lock(error_mutex_, other.error_mutex_);
+            last_error_ = std::move(other.last_error_);
+        }
         m_hIpHlp = other.m_hIpHlp;
         m_hDnsApi = other.m_hDnsApi;
         m_pfnSetInterfaceDnsSettings = other.m_pfnSetInterfaceDnsSettings;
@@ -358,11 +364,15 @@ void DnsManager::log_error(const std::wstring& msg) const {
 }
 
 void DnsManager::set_last_error(const std::wstring& msg) const {
-    last_error_ = msg;
+    {
+        std::lock_guard<std::mutex> lock(error_mutex_);
+        last_error_ = msg;
+    }
     log_error(msg);
 }
 
 std::wstring DnsManager::get_last_error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
     return last_error_;
 }
 
@@ -1043,29 +1053,38 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
         log_info(L"Skipped netsh IPv6: modern API succeeded.");
     }
 
+    bool v4_ok = ipv4_primary.empty() || v4_modern_ok || v4_netsh_ok;
+    bool v6_ok = ipv6_primary.empty() || v6_modern_ok || v6_netsh_ok;
+
     // 3. Direct Registry synchronization ONLY if both modern API and netsh failed
-    if (!ipv4_primary.empty() && !v4_modern_ok && !v4_netsh_ok && !adapter.id.empty()) {
+    if (!v4_ok && !adapter.id.empty()) {
         log_info(L"Both modern API and netsh failed for IPv4, attempting registry fallback.");
         std::wstring subkey = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + adapter.id;
         HKEY hKey = nullptr;
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-            RegSetValueExW(hKey, L"NameServer", 0, REG_SZ,
+            LSTATUS ret = RegSetValueExW(hKey, L"NameServer", 0, REG_SZ,
                 reinterpret_cast<const BYTE*>(v4_servers.c_str()),
                 static_cast<DWORD>((v4_servers.length() + 1) * sizeof(wchar_t)));
             RegCloseKey(hKey);
-            log_info(L"Applied IPv4 DNS via direct registry fallback.");
+            if (ret == ERROR_SUCCESS) {
+                v4_ok = true;
+                log_info(L"Applied IPv4 DNS via direct registry fallback.");
+            }
         }
     }
-    if (!ipv6_primary.empty() && !v6_modern_ok && !v6_netsh_ok && !adapter.id.empty()) {
+    if (!v6_ok && !adapter.id.empty()) {
         log_info(L"Both modern API and netsh failed for IPv6, attempting registry fallback.");
         std::wstring subkey6 = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters\\Interfaces\\" + adapter.id;
         HKEY hKey6 = nullptr;
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey6.c_str(), 0, KEY_SET_VALUE, &hKey6) == ERROR_SUCCESS) {
-            RegSetValueExW(hKey6, L"NameServer", 0, REG_SZ,
+            LSTATUS ret = RegSetValueExW(hKey6, L"NameServer", 0, REG_SZ,
                 reinterpret_cast<const BYTE*>(v6_servers.c_str()),
                 static_cast<DWORD>((v6_servers.length() + 1) * sizeof(wchar_t)));
             RegCloseKey(hKey6);
-            log_info(L"Applied IPv6 DNS via direct registry fallback.");
+            if (ret == ERROR_SUCCESS) {
+                v6_ok = true;
+                log_info(L"Applied IPv6 DNS via direct registry fallback.");
+            }
         }
     }
 
@@ -1090,9 +1109,7 @@ bool DnsManager::set_static_dns(const NetworkAdapterInfo& adapter,
         configure_interface_doh(guid_str, server_list, doh_template);
     }
 
-    bool v4_ok = ipv4_primary.empty() || v4_modern_ok || v4_netsh_ok;
-    bool v6_ok = ipv6_primary.empty() || v6_modern_ok || v6_netsh_ok;
-    if (!v4_ok && !v6_ok) {
+    if (!v4_ok || !v6_ok) {
         set_last_error(L"Не удалось применить DNS ни через Windows API, ни через netsh. Проверьте права Администратора.");
         return false;
     }

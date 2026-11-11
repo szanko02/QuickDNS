@@ -56,7 +56,7 @@ public:
     std::string get_active_profile_id() const;
 
     /**
-     * @brief Sets the active DNS profile ID and saves the configuration.
+     * @brief Sets the active DNS profile ID in memory (and save_config() / save_to_file() persists to disk).
      * @param id The active profile ID.
      */
     void set_active_profile_id(const std::string& id);
@@ -72,23 +72,23 @@ public:
     void set_theme_mode(const std::string& theme);
 
     /**
-     * @brief Adds a new DNS profile. Cannot add if ID is empty or already exists.
+     * @brief Adds a new DNS profile to in-memory state (and save_config() / save_to_file() persists to disk). Cannot add if ID is empty or already exists.
      * @param profile The profile to add.
-     * @return True if added and saved successfully, false otherwise.
+     * @return True if added successfully in memory, false otherwise.
      */
     bool add_profile(const DnsProfile& profile);
 
     /**
-     * @brief Updates an existing DNS profile matching the profile ID.
+     * @brief Updates an existing DNS profile matching the profile ID in memory (and save_config() / save_to_file() persists to disk).
      * @param profile The profile containing updated fields.
-     * @return True if updated and saved successfully, false if not found.
+     * @return True if updated successfully in memory, false if not found.
      */
     bool update_profile(const DnsProfile& profile);
 
     /**
-     * @brief Deletes a profile by its ID. Built-in profiles cannot be deleted.
+     * @brief Deletes a profile by its ID from in-memory state (and save_config() / save_to_file() persists to disk). Built-in profiles cannot be deleted.
      * @param id The ID of the profile to remove.
-     * @return True if removed and saved successfully, false if not found or built-in.
+     * @return True if removed successfully in memory, false if not found or built-in.
      */
     bool delete_profile(const std::string& id);
 
@@ -116,7 +116,6 @@ public:
 
 private:
     static std::filesystem::path resolve_default_config_path();
-    bool save_to_file_internal();
 
     std::filesystem::path m_config_path;
     std::string m_active_profile_id = "dhcp";

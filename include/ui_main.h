@@ -186,6 +186,7 @@ private:
 
     std::atomic<bool> m_isBusy = false;
     std::atomic<bool> m_isCheckingUpdate{false};
+    std::atomic<bool> m_isVerifyingSmartDns{false};
 
     quickdns::BackgroundTasks m_tasks;
 

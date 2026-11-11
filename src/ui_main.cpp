@@ -599,7 +599,14 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             return 0;
         }
         if (wmId == IDM_TRAY_VERIFY_SMARTDNS) {
+            if (m_isVerifyingSmartDns.exchange(true)) {
+                break;
+            }
             auto profiles = m_configManager->get_all_profiles();
+            if (profiles.empty()) {
+                m_isVerifyingSmartDns = false;
+                break;
+            }
             HWND hWnd = m_hWnd;
             m_tasks.run([hWnd, profiles]() {
                 auto results = quickdns::SmartDnsVerifier::verify_profiles(profiles);
@@ -633,6 +640,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_APP_SMARTDNS_RESULT: {
+        m_isVerifyingSmartDns = false;
         std::unique_ptr<quickdns::SmartDnsTrayResult> res(reinterpret_cast<quickdns::SmartDnsTrayResult*>(lParam));
         if (res) {
             if (res->found_new > 0) {
@@ -2193,8 +2201,12 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
         return;
     }
 
-    wchar_t currentExe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, currentExe, MAX_PATH);
+    wchar_t currentExe[MAX_PATH] = {0};
+    DWORD exeLen = GetModuleFileNameW(nullptr, currentExe, MAX_PATH);
+    if (exeLen == 0 || exeLen >= MAX_PATH) {
+        MessageBoxW(m_hWnd, L"Не удалось определить путь к исполняемому файлу.", L"Ошибка обновления", MB_OK | MB_ICONERROR);
+        return;
+    }
     std::wstring exeDir = currentExe;
     size_t lastSlash = exeDir.find_last_of(L"\\/");
     if (lastSlash != std::wstring::npos) {
@@ -2837,7 +2849,11 @@ void MainWindow::copy_text_to_clipboard(const std::wstring& text) {
         if (pMem) {
             memcpy(pMem, text.c_str(), bytes);
             GlobalUnlock(hGlob);
-            SetClipboardData(CF_UNICODETEXT, hGlob);
+            if (!SetClipboardData(CF_UNICODETEXT, hGlob)) {
+                GlobalFree(hGlob);
+            }
+        } else {
+            GlobalFree(hGlob);
         }
     }
     CloseClipboard();

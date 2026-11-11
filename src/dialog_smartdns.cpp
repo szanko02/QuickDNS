@@ -926,7 +926,10 @@ void SmartDnsDialog::on_open_website(size_t index) {
         size_t realIdx = m_filteredIndices[index];
         const auto& entry = m_allEntries[realIdx];
         if (!entry.website_url.empty()) {
-            ShellExecuteW(m_hWnd, L"open", entry.website_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            if (_wcsnicmp(entry.website_url.c_str(), L"https://", 8) == 0 ||
+                _wcsnicmp(entry.website_url.c_str(), L"http://", 7) == 0) {
+                ShellExecuteW(m_hWnd, L"open", entry.website_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
         }
     }
 }

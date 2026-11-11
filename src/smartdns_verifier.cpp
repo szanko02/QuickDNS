@@ -185,6 +185,9 @@ std::vector<std::string> SmartDnsVerifier::scrape_ips_from_webpage(const std::st
     );
     if (!hSession) return found_ips;
 
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+
     DWORD to = static_cast<DWORD>(timeout_ms);
     WinHttpSetTimeouts(hSession, to, to, to, to);
 
@@ -394,6 +397,9 @@ DohVerificationResult SmartDnsVerifier::verify_doh(const std::string& doh_url, i
         result.status_text = L"Ошибка инициализации сети";
         return result;
     }
+
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
 
     DWORD to = static_cast<DWORD>(timeout_ms);
     WinHttpSetTimeouts(hSession, to, to, to, to);

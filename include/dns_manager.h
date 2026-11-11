@@ -15,6 +15,7 @@
 #include <vector>
 #include <optional>
 #include <string_view>
+#include <mutex>
 
 namespace quickdns {
 
@@ -185,6 +186,7 @@ private:
     void configure_doh_server(const std::wstring& server_ip, const std::wstring& doh_template);
     void configure_interface_doh(const std::wstring& adapter_id, const std::vector<std::wstring>& servers, const std::wstring& doh_template);
 
+    mutable std::mutex error_mutex_;
     mutable std::wstring last_error_;
     HMODULE m_hIpHlp = nullptr;
     HMODULE m_hDnsApi = nullptr;

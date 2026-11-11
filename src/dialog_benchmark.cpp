@@ -787,7 +787,7 @@ void BenchmarkDialog::update_verdict() {
             bestFastPing = it.avg_ping;
             bestFastIdx = static_cast<int>(i);
         }
-        if (it.reliability >= 85.0f && it.jitter < bestStableIdx) {
+        if (it.reliability >= 85.0f && it.jitter < bestJitter) {
             bestJitter = it.jitter;
             bestStableIdx = static_cast<int>(i);
         }
