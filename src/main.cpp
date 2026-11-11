@@ -8,6 +8,7 @@
 #include <string_view>
 #include "ui_main.h"
 #include "dns_manager.h"
+#include "app_updater.h"
 
 #pragma comment(lib, "gdiplus.lib")
 
@@ -72,6 +73,7 @@ int WINAPI wWinMain(
     int showCmd = nCmdShow;
     bool isMinimizedLaunch = false;
     bool noElevate = false;
+    bool isUpdatedLaunch = false;
     if (argv) {
         for (int i = 1; i < argc; ++i) {
             std::wstring_view arg(argv[i]);
@@ -80,9 +82,30 @@ int WINAPI wWinMain(
                 isMinimizedLaunch = true;
             } else if (arg == L"--no-elevate") {
                 noElevate = true;
+            } else if (arg == L"--updated" || arg == L"--restart") {
+                isUpdatedLaunch = true;
             }
         }
         LocalFree(argv);
+    }
+
+    // 0. Update hand-off handling:
+    // If launched after an in-place auto-update, wait for the previous process instance
+    // (its main window and single-instance mutex) to fully exit before checking single-instance.
+    if (isUpdatedLaunch) {
+        for (int i = 0; i < 50; ++i) {
+            HWND hOldWnd = FindWindowW(MAIN_WINDOW_CLASS_NAME, nullptr);
+            HANDLE hOldMutex = OpenMutexW(SYNCHRONIZE, FALSE, SINGLE_INSTANCE_MUTEX_NAME);
+            if (hOldMutex != nullptr) {
+                CloseHandle(hOldMutex);
+            }
+            if (!hOldWnd && !hOldMutex) {
+                break;
+            }
+            Sleep(100);
+        }
+        // Once previous instance is completely gone, delete the .old binary
+        quickdns::AppUpdater::cleanup_previous_update();
     }
 
     // 1. Single Instance check:

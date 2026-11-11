@@ -73,7 +73,7 @@ jobs:
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        name: QuickDNS v2.0.3 - Code Review Fixes, JSON Updater Parser, Thread Safety & WinHTTP Hardening
+        name: QuickDNS v2.0.4 - Reliable Auto-Updater, Single-Instance Race Fix & Process Hand-off
         body_path: artifacts/RELEASE_NOTES.md
         files: |
           artifacts/QuickDNS.exe

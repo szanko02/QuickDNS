@@ -1,23 +1,23 @@
-### QuickDNS v2.0.3
+### QuickDNS v2.0.4
 
-Maintenance and hardening release delivering code review fixes, JSON update payload parsing via nlohmann/json, enhanced thread-safety across DNS management routines, WinHTTP redirect restrictions, and UI resource protections:
+Reliability and stability release delivering an auto-updater overhaul, Windows Defender file-lock resilience, atomic replacement retry loops, single-instance process hand-off, and detailed error diagnostics:
 
-- **Benchmark Stability Verdict Fix**: Fixed jitter comparison in `BenchmarkDialog::update_verdict` (`it.jitter < bestJitter` instead of `bestStableIdx`), ensuring the most stable DNS server is accurately identified.
-- **Static DNS Registry Fallback**: Tracked IPv4 and IPv6 registry fallback success in `DnsManager::set_static_dns` and required both protocols to succeed (`!v4_ok || !v6_ok`) to prevent false-positive status reports on partial configuration failure.
-- **JSON Update Parser**: Replaced manual string slicing in `AppUpdater::check_github_update` with `nlohmann::json::parse`, properly unescaping changelog `\r\n` sequences and avoiding 400-char URL truncation.
-- **Thread-Safe Error Reporting**: Protected `DnsManager::last_error_` across UI and worker threads using `std::mutex`.
-- **SmartDNS URL & Redirect Hardening**: Validated `http://` and `https://` schemes before `ShellExecuteW` in `SmartDnsDialog::on_open_website` and enforced `WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP` in `SmartDnsVerifier`.
-- **UI Resource & Concurrency Guards**: Added atomic concurrency guard `m_isVerifyingSmartDns` for tray SmartDNS checks, `GlobalFree` cleanup on clipboard lock/set failures, and `GetModuleFileNameW` truncation checks.
+- **Defender File-Lock Resilience & Retry Logic**: Implemented retry loops with back-off in `AppUpdater::perform_file_replacement` around `.old` file deletion, module renaming, and downloaded executable placement, preventing transient `ERROR_SHARING_VIOLATION` (32) and `ERROR_ACCESS_DENIED` (5) locks by Windows Defender or antivirus scanners.
+- **Atomic Rollback on Replace Failure**: Added safe fallback to `CopyFileW` and guaranteed atomic rollback from `.old` if moving the downloaded executable fails, preventing missing binaries.
+- **Single-Instance Race Fix & Process Hand-off**: Introduced `--updated` command-line switch allowing the restarted instance to wait up to 5 seconds for previous window instances and named mutexes to release, preventing immediate exit upon restart.
+- **Process Spawn Hardening**: Migrated update restart from `ShellExecuteW` to direct `CreateProcessW` with working directory preservation and `ShellExecuteW` fallback, ensuring elevated token inheritance.
+- **Deferred Cleanup of Previous Executables**: Enhanced `AppUpdater::cleanup_previous_update` with retry loops during startup hand-off to reliably remove temporary `.old` binaries once the former process terminates.
+- **Detailed Updater Error Diagnostics**: Exposed descriptive error strings with Win32 error codes in `apply_update_and_restart` and `ui_main.cpp` for instant troubleshooting if file system or permission issues occur.
 
-**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v2.0.2...v2.0.3
+**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v2.0.3...v2.0.4
 
 ---
 
 #### Описание изменений (Русский)
 
-- **Исправление вердикта стабильности бенчмарка**: Исправлено сравнение джиттера в `BenchmarkDialog::update_verdict` (`it.jitter < bestJitter` вместо `bestStableIdx`), гарантируя точный выбор наиболее стабильного DNS-сервера.
-- **Fallback статического DNS в реестр**: Отслеживание успешности fallback-записи IPv4 и IPv6 в реестр в `DnsManager::set_static_dns` с требованием успешности обоих протоколов (`!v4_ok || !v6_ok`).
-- **JSON-парсер обновлений**: Замена ручного парсинга строк в `AppUpdater::check_github_update` на `nlohmann::json::parse` с корректным разэкранированием переводов строк `\r\n` и устранением лимита обрезки URL в 400 символов.
-- **Потокобезопасная обработка ошибок**: Защита `DnsManager::last_error_` между потоками UI и фоновыми воркерами с помощью `std::mutex`.
-- **Безопасность ссылок SmartDNS и редиректов WinHTTP**: Валидация протоколов `http://` и `https://` перед вызовом `ShellExecuteW` в `SmartDnsDialog::on_open_website` и принудительный запрет небезопасных редиректов HTTPS-to-HTTP (`WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP`) в `SmartDnsVerifier`.
-- **Защита ресурсов UI и параллельного доступа**: Атомарный флаг `m_isVerifyingSmartDns` для предотвращения повторных проверок SmartDNS из трея, освобождение памяти `GlobalFree` при ошибках буфера обмена и проверка переполнения буфера в `GetModuleFileNameW`.
+- **Устойчивость к блокировкам Defender и цикл повторов**: Добавлен цикл повторных попыток с задержкой в `AppUpdater::perform_file_replacement` для удаления старых копий, переименования и перемещения загруженного файла, устраняя сбои `ERROR_SHARING_VIOLATION` (32) и `ERROR_ACCESS_DENIED` (5) при сканировании Защитником Windows.
+- **Атомарный откат при сбое обновления**: Реализован fallback на `CopyFileW` и гарантированный откат к предыдущему файлу из `.old`, если установка нового бинарного файла не удалась.
+- **Устранение гонки единого экземпляра (Single-Instance)**: Добавлен аргумент `--updated`, позволяющий обновленному процессу ожидать до 5 секунд полного завершения работы предыдущего окна и мьютекса перед проверкой единственного экземпляра.
+- **Надежный перезапуск процесса**: Переход на прямой запуск через `CreateProcessW` с сохранением рабочего каталога и fallback на `ShellExecuteW`, обеспечивающий наследование прав администратора.
+- **Очистка устаревших файлов (.old)**: Функция `AppUpdater::cleanup_previous_update` дополнена циклом повторов для гарантированного удаления `.old` файла после завершения старого процесса.
+- **Диагностика ошибок обновления**: В `apply_update_and_restart` и UI добавлены подробные описания ошибок с кодами Win32 API для прозрачной диагностики.

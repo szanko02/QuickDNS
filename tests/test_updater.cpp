@@ -164,6 +164,75 @@ void test_integrity_verification() {
     DeleteFileW(dummyFile.c_str());
 }
 
+static std::string read_file_content(const std::wstring& path) {
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return "";
+    DWORD size = GetFileSize(hFile, nullptr);
+    std::string content(size, '\0');
+    DWORD read = 0;
+    ReadFile(hFile, &content[0], size, &read, nullptr);
+    CloseHandle(hFile);
+    return content;
+}
+
+static bool write_file_content(const std::wstring& path, const std::string& content) {
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    BOOL ok = WriteFile(hFile, content.data(), static_cast<DWORD>(content.size()), &written, nullptr);
+    CloseHandle(hFile);
+    return ok && (written == content.size());
+}
+
+void test_file_replacement_and_rollback() {
+    wchar_t tempPath[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempPath);
+    std::wstring currPath = std::wstring(tempPath) + L"quickdns_test_current.bin";
+    std::wstring newPath  = std::wstring(tempPath) + L"quickdns_test_downloaded.bin";
+    std::wstring oldPath  = std::wstring(tempPath) + L"quickdns_test_current.bin.old";
+
+    // 1. Success case: target -> old, downloaded -> target
+    {
+        write_file_content(currPath, "CURRENT_VERSION_203");
+        write_file_content(newPath,  "NEW_VERSION_204");
+        DeleteFileW(oldPath.c_str());
+
+        std::wstring err;
+        bool ok = AppUpdater::perform_file_replacement(currPath, newPath, oldPath, &err);
+        TEST_CHECK(ok, "perform_file_replacement returns true on valid files");
+        TEST_CHECK(read_file_content(currPath) == "NEW_VERSION_204", "Target file updated to new version content");
+        TEST_CHECK(read_file_content(oldPath) == "CURRENT_VERSION_203", "Old backup file contains previous version content");
+        TEST_CHECK(GetFileAttributesW(newPath.c_str()) == INVALID_FILE_ATTRIBUTES, "Downloaded file moved out of download path");
+    }
+
+    // 2. Pre-existing .old file is cleaned up before next update
+    {
+        write_file_content(newPath, "NEW_VERSION_205");
+        std::wstring err;
+        bool ok = AppUpdater::perform_file_replacement(currPath, newPath, oldPath, &err);
+        TEST_CHECK(ok, "perform_file_replacement succeeds when .old already exists");
+        TEST_CHECK(read_file_content(currPath) == "NEW_VERSION_205", "Target file updated with existing .old");
+        TEST_CHECK(read_file_content(oldPath) == "NEW_VERSION_204", "Old backup replaced with previous target");
+    }
+
+    // 3. Rollback case: if downloaded file is missing or invalid, target is restored from .old
+    {
+        std::wstring missingNew = std::wstring(tempPath) + L"quickdns_nonexistent_download.bin";
+        DeleteFileW(missingNew.c_str());
+
+        std::wstring err;
+        bool ok = AppUpdater::perform_file_replacement(currPath, missingNew, oldPath, &err);
+        TEST_CHECK(!ok, "perform_file_replacement fails when downloaded file is missing");
+        TEST_CHECK(!err.empty(), "Error diagnostics populated: " + std::string(err.begin(), err.end()));
+        TEST_CHECK(read_file_content(currPath) == "NEW_VERSION_205", "Target file safely restored to original via rollback");
+    }
+
+    // Clean up temporary test files
+    DeleteFileW(currPath.c_str());
+    DeleteFileW(newPath.c_str());
+    DeleteFileW(oldPath.c_str());
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "     QuickDNS App Updater Tests" << std::endl;
@@ -173,6 +242,7 @@ int main() {
     test_version_comparison();
     test_allowed_hosts();
     test_integrity_verification();
+    test_file_replacement_and_rollback();
     test_github_api_query();
 
     std::cout << "========================================" << std::endl;

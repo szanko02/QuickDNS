@@ -2258,11 +2258,15 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
                 res->errorMessage = L"Целостность файла обновления не подтверждена (неверный SHA-256 или поврежденный файл). Установка отменена.";
                 res->errorTitle = L"Ошибка проверки целостности";
             } else {
-                bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe);
+                std::wstring updaterError;
+                bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe, &updaterError);
                 if (!restarted) {
                     DeleteFileW(tempExe.c_str());
                     res->success = false;
                     res->errorMessage = L"Не удалось применить обновление автоматически.";
+                    if (!updaterError.empty()) {
+                        res->errorMessage += L"\n" + updaterError;
+                    }
                     res->errorTitle = L"Ошибка обновления";
                 } else {
                     res->success = true;

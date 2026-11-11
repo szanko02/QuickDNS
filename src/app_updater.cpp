@@ -598,31 +598,162 @@ bool AppUpdater::download_file(
     return success;
 }
 
-bool AppUpdater::apply_update_and_restart(const std::wstring& downloadedExePath) {
+bool AppUpdater::perform_file_replacement(
+    const std::wstring& targetExePath,
+    const std::wstring& downloadedExePath,
+    const std::wstring& oldExePath,
+    std::wstring* outError)
+{
+    auto set_err = [&](const std::wstring& actionDesc, DWORD err) {
+        if (outError) {
+            *outError = actionDesc + L" (код ошибки: " + std::to_wstring(err) + L")";
+        }
+    };
+
+    auto retry_op = [](const std::function<bool()>& op, int maxAttempts, DWORD sleepMs) -> bool {
+        for (int i = 0; i < maxAttempts; ++i) {
+            if (op()) return true;
+            Sleep(sleepMs);
+        }
+        return false;
+    };
+
+    // 1. Remove previous old backup file if it exists
+    if (GetFileAttributesW(oldExePath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        bool delOldOk = retry_op([&]() {
+            return DeleteFileW(oldExePath.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND;
+        }, 20, 150);
+
+        if (!delOldOk) {
+            DWORD err = GetLastError();
+            set_err(L"Не удалось удалить предыдущую резервную копию (.old)", err);
+            return false;
+        }
+    }
+
+    // 2. Rename current target executable -> oldExePath
+    bool renameTargetOk = retry_op([&]() {
+        return MoveFileExW(targetExePath.c_str(), oldExePath.c_str(),
+                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    }, 20, 150);
+
+    if (!renameTargetOk) {
+        DWORD err = GetLastError();
+        set_err(L"Не удалось создать резервную копию текущего файла (.old)", err);
+        return false;
+    }
+
+    // 3. Move downloaded executable -> targetExePath
+    bool moveNewOk = retry_op([&]() {
+        return MoveFileExW(downloadedExePath.c_str(), targetExePath.c_str(),
+                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    }, 20, 150);
+
+    if (!moveNewOk) {
+        // Fallback: CopyFileW followed by DeleteFileW
+        moveNewOk = retry_op([&]() {
+            if (CopyFileW(downloadedExePath.c_str(), targetExePath.c_str(), FALSE)) {
+                if (!DeleteFileW(downloadedExePath.c_str())) {
+                    MoveFileExW(downloadedExePath.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+                }
+                return true;
+            }
+            return false;
+        }, 10, 150);
+    }
+
+    if (!moveNewOk) {
+        DWORD err = GetLastError();
+        set_err(L"Не удалось установить новый исполняемый файл", err);
+
+        // Rollback: restore oldExePath -> targetExePath
+        retry_op([&]() {
+            return MoveFileExW(oldExePath.c_str(), targetExePath.c_str(),
+                              MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+        }, 20, 150);
+
+        return false;
+    }
+
+    return true;
+}
+
+bool AppUpdater::apply_update_and_restart(const std::wstring& downloadedExePath, std::wstring* outError) {
     wchar_t currentExe[MAX_PATH] = {0};
     DWORD exeLen = GetModuleFileNameW(nullptr, currentExe, MAX_PATH);
     if (exeLen == 0 || exeLen >= MAX_PATH) {
+        if (outError) *outError = L"Не удалось определить путь к текущему исполняемому файлу.";
         return false;
     }
 
-    std::wstring oldExe = std::wstring(currentExe) + L".old";
+    std::wstring exePath(currentExe);
+    std::wstring exeDir;
+    size_t lastSlash = exePath.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos) {
+        exeDir = exePath.substr(0, lastSlash);
+    }
 
-    // 1. Rename running QuickDNS.exe -> QuickDNS.exe.old
-    DeleteFileW(oldExe.c_str());
-    if (!MoveFileExW(currentExe, oldExe.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+    std::wstring oldExe = exePath + L".old";
+
+    // 1 & 2. Atomically replace file with retries and rollback
+    if (!perform_file_replacement(exePath, downloadedExePath, oldExe, outError)) {
         return false;
     }
 
-    // 2. Move downloaded new exe into place
-    if (!MoveFileExW(downloadedExePath.c_str(), currentExe, MOVEFILE_REPLACE_EXISTING)) {
-        // Rollback
-        MoveFileExW(oldExe.c_str(), currentExe, MOVEFILE_REPLACE_EXISTING);
-        return false;
+    // 3. Launch newly updated application with --updated argument
+    std::wstring cmdLine = L"\"" + exePath + L"\" --updated";
+    std::vector<wchar_t> cmdBuffer(cmdLine.begin(), cmdLine.end());
+    cmdBuffer.push_back(L'\0');
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+
+    bool launched = false;
+    DWORD launchErr = ERROR_SUCCESS;
+
+    if (CreateProcessW(
+            exePath.c_str(),
+            cmdBuffer.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            0,
+            nullptr,
+            exeDir.empty() ? nullptr : exeDir.c_str(),
+            &si,
+            &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        launched = true;
+    } else {
+        launchErr = GetLastError();
+        // Fallback to ShellExecuteW
+        HINSTANCE hInst = ShellExecuteW(
+            nullptr,
+            L"open",
+            currentExe,
+            L"--updated",
+            exeDir.empty() ? nullptr : exeDir.c_str(),
+            SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(hInst) > 32) {
+            launched = true;
+        } else {
+            launchErr = static_cast<DWORD>(reinterpret_cast<INT_PTR>(hInst));
+        }
     }
 
-    // 3. Launch newly updated application
-    HINSTANCE hInst = ShellExecuteW(nullptr, L"open", currentExe, nullptr, nullptr, SW_SHOW);
-    if (reinterpret_cast<INT_PTR>(hInst) <= 32) {
+    if (!launched) {
+        if (outError) {
+            *outError = L"Не удалось запустить обновленное приложение (код ошибки: " + std::to_wstring(launchErr) + L")";
+        }
+        // Rollback: restore oldExe -> currentExe
+        for (int i = 0; i < 20; ++i) {
+            if (MoveFileExW(oldExe.c_str(), currentExe, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                break;
+            }
+            Sleep(150);
+        }
         return false;
     }
 
@@ -633,10 +764,16 @@ bool AppUpdater::apply_update_and_restart(const std::wstring& downloadedExePath)
 
 void AppUpdater::cleanup_previous_update() {
     wchar_t currentExe[MAX_PATH] = {};
-    if (GetModuleFileNameW(nullptr, currentExe, MAX_PATH) > 0) {
+    DWORD exeLen = GetModuleFileNameW(nullptr, currentExe, MAX_PATH);
+    if (exeLen > 0 && exeLen < MAX_PATH) {
         std::wstring oldExe = std::wstring(currentExe) + L".old";
         if (GetFileAttributesW(oldExe.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            DeleteFileW(oldExe.c_str());
+            for (int i = 0; i < 20; ++i) {
+                if (DeleteFileW(oldExe.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) {
+                    break;
+                }
+                Sleep(100);
+            }
         }
     }
 }

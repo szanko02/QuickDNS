@@ -12,8 +12,8 @@ namespace quickdns {
 constexpr const char* APP_VERSION = OVERRIDE_APP_VERSION;
 constexpr const wchar_t* APP_VERSION_W = OVERRIDE_APP_VERSION_W;
 #else
-constexpr const char* APP_VERSION = "2.0.3";
-constexpr const wchar_t* APP_VERSION_W = L"2.0.3";
+constexpr const char* APP_VERSION = "2.0.4";
+constexpr const wchar_t* APP_VERSION_W = L"2.0.4";
 #endif
 
 struct ReleaseInfo {
@@ -46,8 +46,18 @@ public:
         std::function<void(DWORD downloaded, DWORD total)> onProgress = nullptr
     );
 
-    // Replaces running executable with downloaded one and restarts the process
-    static bool apply_update_and_restart(const std::wstring& downloadedExePath);
+    // Replaces running executable with downloaded one and restarts the process.
+    // Optionally populates outError with diagnostic details on failure.
+    static bool apply_update_and_restart(const std::wstring& downloadedExePath, std::wstring* outError = nullptr);
+
+    // Atomically replaces targetExePath with downloadedExePath using oldExePath as backup,
+    // retrying on sharing/locking errors and rolling back on failure.
+    static bool perform_file_replacement(
+        const std::wstring& targetExePath,
+        const std::wstring& downloadedExePath,
+        const std::wstring& oldExePath,
+        std::wstring* outError = nullptr
+    );
 
     // Cleans up QuickDNS.exe.old if it exists from a previous update
     static void cleanup_previous_update();
