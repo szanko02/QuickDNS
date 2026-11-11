@@ -21,14 +21,17 @@ These rules are persistent for this project. Apply on every prompt.
   2. Then Make it Right: reproduce, fix root cause, sequence in verifiable units.
   3. Follow Practice: match codebase style, maintain tests, clean boundaries.
 
-### 4. /subagents & /boost
-- State routine first: Solo or Delegation.
-- Use Delegation routine for coding and investigation tasks:
-  - Delegate coding to DeepCoder (`invoke_subagent` with `TypeName='DeepCoder'`, `Workspace='inherit'`).
-  - Delegate investigation to DeepInvestigator (`invoke_subagent` with `TypeName='DeepInvestigator'`, `Workspace='inherit'`).
-  - No pre-work before first subagent call.
-  - Independently verify results before accepting. Spawn additional rounds if needed.
-- Use Solo routine only for simple tasks and meta-configuration.
+### 4. /swarm & Dynamic Model / Reasoning Selection
+- Always use `/swarm` as the default execution mode for coding, debugging, verification, and release tasks.
+- Select worker models (`gemini-3.8-flash-*`, `gemini-4-argon-*`, `claude-sonnet-5-5-*`, `claude-opus-5-5-*`) and reasoning effort levels (`low`, `medium`, `high`) strictly based on task complexity and need:
+  - **Simple / Routine Tasks (docs, version bumps, release packaging, build/test verifiers, straightforward fixes)**:
+    - Prefer `gemini-3.8-flash-low` or `gemini-3.8-flash-medium` (use `gemini-3.8-flash-high` for multi-file edits or thorough test verification).
+  - **Medium-to-Complex Feature Development & Refactoring (UI components, Win32/GDI+ rendering, networking logic)**:
+    - Use `gemini-4-argon-low`, `gemini-4-argon-medium`, or `gemini-4-argon-high` according to reasoning depth required.
+  - **High-Complexity Architecture, Subtle Race Conditions & Security-Critical Reviews**:
+    - Use `claude-sonnet-5-5` (`low`/`medium`/`high`) or `claude-opus-5-5` (`low`/`medium`/`high`) sparingly.
+    - Because Claude models (`claude-opus-5-5` and `claude-sonnet-5-5`) have very small quota limits, do not use them for routine work; reserve them for the hardest tasks and always check `swarm{action:"models"}` quota first.
+- Always scale reasoning tier (`low` -> `medium` -> `high`) to the minimum level necessary for reliable completion.
 
 ### 5. Release Management & GitHub Releases Text
 - Never publish empty or auto-generated release notes: Every version release must have a formatted title and changelog body matching past releases (`v2.0.0`, `v2.0.1`, `v2.0.2`).

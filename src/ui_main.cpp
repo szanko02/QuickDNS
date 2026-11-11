@@ -2,6 +2,7 @@
 #include "dialog_add_profile.h"
 #include "dialog_benchmark.h"
 #include "dialog_smartdns.h"
+#include "dialog_ai_check.h"
 #include "smartdns_verifier.h"
 #include "app_updater.h"
 #include "encoding_utils.h"
@@ -34,7 +35,7 @@ namespace {
     constexpr const wchar_t* GRAPH_CLASS_NAME  = L"QuickDNS_SparklineGraph";
 
     constexpr int WINDOW_CLIENT_WIDTH  = 580;
-    constexpr int WINDOW_CLIENT_HEIGHT = 760;
+    constexpr int WINDOW_CLIENT_HEIGHT = 804;
 
     struct ButtonAnimationState {
         float hover = 0.0f;
@@ -443,7 +444,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     switch (uMsg) {
     case WM_GETMINMAXINFO: {
         auto* pMMI = reinterpret_cast<MINMAXINFO*>(lParam);
-        RECT rcMin = { 0, 0, 520, 720 };
+        RECT rcMin = { 0, 0, 520, 764 };
         AdjustWindowRectEx(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE));
         pMMI->ptMinTrackSize.x = rcMin.right - rcMin.left;
         pMMI->ptMinTrackSize.y = rcMin.bottom - rcMin.top;
@@ -528,6 +529,10 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         }
         if (wmId == IDC_BTN_SMARTDNS_CATALOG) {
             open_smartdns_catalog_dialog();
+            return 0;
+        }
+        if (wmId == IDC_BTN_AI_CHECK) {
+            open_ai_check_dialog();
             return 0;
         }
         if (wmId == IDC_BTN_RESET_DHCP) {
@@ -710,6 +715,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         EnableWindow(m_hBtnApply, TRUE);
         EnableWindow(m_hBtnBenchmark, TRUE);
         if (m_hBtnSmartDnsCatalog) EnableWindow(m_hBtnSmartDnsCatalog, TRUE);
+        if (m_hBtnAiCheck) EnableWindow(m_hBtnAiCheck, TRUE);
         EnableWindow(m_hBtnResetDhcp, TRUE);
         EnableWindow(m_hBtnFlushDns, TRUE);
         if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, TRUE);
@@ -1017,6 +1023,9 @@ void MainWindow::setup_fonts() {
     if (m_hBtnIpPool) {
         SendMessageW(m_hBtnIpPool, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
     }
+    if (m_hBtnAiCheck) {
+        SendMessageW(m_hBtnAiCheck, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
+    }
 }
 
 void MainWindow::create_controls() {
@@ -1238,6 +1247,13 @@ void MainWindow::create_controls() {
         m_hWnd, (HMENU)IDC_BTN_SMARTDNS_CATALOG, m_hInstance, nullptr);
     startY += 34 + 10;
 
+    m_hBtnAiCheck = CreateWindowExW(0, WC_BUTTONW, L"Проверка доступности ИИ (ChatGPT, Claude, Gemini, Copilot)",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX, startY, contentWidth, 34,
+        m_hWnd, (HMENU)IDC_BTN_AI_CHECK, m_hInstance, nullptr);
+    SendMessageW(m_hBtnAiCheck, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
+    startY += 34 + 10;
+
     m_hBtnResetDhcp = CreateWindowExW(0, WC_BUTTONW, L"Сброс на DHCP (Авто)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX, startY, halfWidth, 34,
@@ -1289,6 +1305,7 @@ void MainWindow::create_controls() {
     attach_button_effects(m_hBtnThemeToggle, 10);
     attach_button_effects(m_hBtnCheckUpdate, 15);
     attach_button_effects(m_hBtnIpPool, 16);
+    attach_button_effects(m_hBtnAiCheck, 17);
 }
 
 void MainWindow::reposition_controls() {
@@ -1394,6 +1411,9 @@ void MainWindow::reposition_controls() {
 
     if (m_hBtnBenchmark) SetWindowPos(m_hBtnBenchmark, nullptr, marginX, startY, halfWidth, 34, SWP_NOZORDER);
     if (m_hBtnSmartDnsCatalog) SetWindowPos(m_hBtnSmartDnsCatalog, nullptr, col2X, startY, halfWidth, 34, SWP_NOZORDER);
+    startY += 34 + 10;
+
+    if (m_hBtnAiCheck) SetWindowPos(m_hBtnAiCheck, nullptr, marginX, startY, contentWidth, 34, SWP_NOZORDER);
     startY += 34 + 10;
 
     if (m_hBtnResetDhcp) SetWindowPos(m_hBtnResetDhcp, nullptr, marginX, startY, halfWidth, 34, SWP_NOZORDER);
@@ -1542,8 +1562,8 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
             hoverBorder = m_isDarkMode ? RGB(85, 125, 175) : RGB(55, 95, 140);
             textCol = pal.btnPrimaryText;
         }
-    } else if (pDis->CtlID == IDC_BTN_BENCHMARK) {
-        // Subdued Steel Speed Test Button
+    } else if (pDis->CtlID == IDC_BTN_BENCHMARK || pDis->CtlID == IDC_BTN_AI_CHECK) {
+        // Subdued Steel Speed Test / AI Check Button
         if (isDisabled) {
             baseBg = m_isDarkMode ? RGB(32, 40, 58) : RGB(218, 224, 238);
             baseBorder = m_isDarkMode ? RGB(46, 56, 78) : RGB(188, 196, 218);
@@ -1619,7 +1639,7 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
 
     SetBkMode(hdcMem, TRANSPARENT);
     SetTextColor(hdcMem, textCol);
-    HFONT textFont = (pDis->CtlID == IDC_BTN_APPLY || pDis->CtlID == IDC_BTN_BENCHMARK) ? m_hFontBold : 
+    HFONT textFont = (pDis->CtlID == IDC_BTN_APPLY || pDis->CtlID == IDC_BTN_BENCHMARK || pDis->CtlID == IDC_BTN_AI_CHECK) ? m_hFontBold : 
                      ((pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH || pDis->CtlID == IDC_BTN_IP_POOL) ? m_hFontSmall : m_hFontRegular);
     HGDIOBJ oldFont = SelectObject(hdcMem, textFont);
 
@@ -2435,6 +2455,7 @@ void MainWindow::apply_selected_dns() {
     EnableWindow(m_hBtnApply, FALSE);
     EnableWindow(m_hBtnBenchmark, FALSE);
     if (m_hBtnSmartDnsCatalog) EnableWindow(m_hBtnSmartDnsCatalog, FALSE);
+    if (m_hBtnAiCheck) EnableWindow(m_hBtnAiCheck, FALSE);
     EnableWindow(m_hBtnResetDhcp, FALSE);
     EnableWindow(m_hBtnFlushDns, FALSE);
     if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, FALSE);
@@ -2503,6 +2524,7 @@ void MainWindow::reset_to_dhcp() {
     EnableWindow(m_hBtnApply, FALSE);
     EnableWindow(m_hBtnBenchmark, FALSE);
     if (m_hBtnSmartDnsCatalog) EnableWindow(m_hBtnSmartDnsCatalog, FALSE);
+    if (m_hBtnAiCheck) EnableWindow(m_hBtnAiCheck, FALSE);
     EnableWindow(m_hBtnResetDhcp, FALSE);
     EnableWindow(m_hBtnFlushDns, FALSE);
     if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, FALSE);
@@ -2597,6 +2619,28 @@ void MainWindow::open_smartdns_catalog_dialog() {
             on_profile_selected();
         }
         update_status_card();
+    }
+}
+
+void MainWindow::open_ai_check_dialog() {
+    auto selectedId = quickdns::AiCheckDialog::show(
+        m_hWnd,
+        m_hInstance,
+        m_profiles,
+        m_configManager->get_active_profile_id(),
+        m_isDarkMode
+    );
+    if (selectedId.has_value()) {
+        std::string chosenId = selectedId.value();
+        for (size_t i = 0; i < m_profiles.size(); ++i) {
+            if (m_profiles[i].id == chosenId) {
+                m_selectedProfileIndex = static_cast<int>(i);
+                ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                on_profile_selected();
+                apply_selected_dns();
+                break;
+            }
+        }
     }
 }
 

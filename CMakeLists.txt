@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QuickDNS VERSION 2.0.5 LANGUAGES C CXX)
+project(QuickDNS VERSION 2.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,6 +34,8 @@ if(MSVC)
         uuid.lib
         gdiplus.lib
         bcrypt.lib
+        secur32.lib
+        crypt32.lib
     )
 else()
     set(WIN32_LIBS
@@ -53,6 +55,8 @@ else()
         uuid
         gdiplus
         bcrypt
+        secur32
+        crypt32
     )
 endif()
 
@@ -63,6 +67,7 @@ add_library(quickdns_core STATIC
     src/config_manager.cpp
     src/smartdns_verifier.cpp
     src/app_updater.cpp
+    src/ai_checker.cpp
 )
 target_include_directories(quickdns_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -78,6 +83,7 @@ set(APP_SOURCES
     src/dialog_add_profile.cpp
     src/dialog_benchmark.cpp
     src/dialog_smartdns.cpp
+    src/dialog_ai_check.cpp
     res/resource.rc
 )
 
@@ -130,6 +136,12 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_updater.cpp")
     add_executable(test_updater tests/test_updater.cpp ${DIAG_RC})
     target_link_libraries(test_updater PRIVATE quickdns_core ${WIN32_LIBS})
     add_test(NAME TestUpdater COMMAND test_updater)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ai_checker.cpp")
+    add_executable(test_ai_checker tests/test_ai_checker.cpp ${DIAG_RC})
+    target_link_libraries(test_ai_checker PRIVATE quickdns_core ${WIN32_LIBS})
+    add_test(NAME TestAiChecker COMMAND test_ai_checker)
 endif()
 
 # Mark tests that perform live network/DNS/HTTP operations

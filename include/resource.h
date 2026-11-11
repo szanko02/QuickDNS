@@ -29,6 +29,7 @@
 #define IDC_BTN_SMARTDNS_CATALOG    1026
 #define IDC_BTN_CHECK_UPDATE        1027
 #define IDC_BTN_WIN_NETWORK         1028
+#define IDC_BTN_AI_CHECK            1029
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101
@@ -70,3 +71,10 @@
 #define IDM_POOL_SECONDARY_BASE     4150
 #define IDM_POOL_SECONDARY_NONE     4200
 #define IDM_POOL_AUTO_PING          4201
+
+// AI Check Dialog Controls
+#define IDC_LIST_AI_CHECK           5001
+#define IDC_BTN_AI_RECHECK          5002
+#define IDC_BTN_AI_APPLY            5003
+#define IDC_BTN_AI_CLOSE            5004
+
