@@ -1,23 +1,19 @@
-### QuickDNS v2.0.4
+### QuickDNS v2.0.5
 
-Reliability and stability release delivering an auto-updater overhaul, Windows Defender file-lock resilience, atomic replacement retry loops, single-instance process hand-off, and detailed error diagnostics:
+Feature release adding the dedicated `Без межаў DNS (РФ)` preset for Russian users, multi-IP pool (`ip_pool`) persistence and migration across all profiles, an interactive IP pool selector on the main window, and measured latency pool pickers inside the SmartDNS catalog:
 
-- **Defender File-Lock Resilience & Retry Logic**: Implemented retry loops with back-off in `AppUpdater::perform_file_replacement` around `.old` file deletion, module renaming, and downloaded executable placement, preventing transient `ERROR_SHARING_VIOLATION` (32) and `ERROR_ACCESS_DENIED` (5) locks by Windows Defender or antivirus scanners.
-- **Atomic Rollback on Replace Failure**: Added safe fallback to `CopyFileW` and guaranteed atomic rollback from `.old` if moving the downloaded executable fails, preventing missing binaries.
-- **Single-Instance Race Fix & Process Hand-off**: Introduced `--updated` command-line switch allowing the restarted instance to wait up to 5 seconds for previous window instances and named mutexes to release, preventing immediate exit upon restart.
-- **Process Spawn Hardening**: Migrated update restart from `ShellExecuteW` to direct `CreateProcessW` with working directory preservation and `ShellExecuteW` fallback, ensuring elevated token inheritance.
-- **Deferred Cleanup of Previous Executables**: Enhanced `AppUpdater::cleanup_previous_update` with retry loops during startup hand-off to reliably remove temporary `.old` binaries once the former process terminates.
-- **Detailed Updater Error Diagnostics**: Exposed descriptive error strings with Win32 error codes in `apply_update_and_restart` and `ui_main.cpp` for instant troubleshooting if file system or permission issues occur.
+- **Bezmezhau DNS (RF) Preset**: Added dedicated built-in profile `Без межаў DNS (РФ)` (`185.236.10.189`, `31.58.216.201`, DoH `https://sync.bezmezhau.com/dns-query`) and automatic `sync.bezmezhau.com` hostname resolution in `SmartDnsVerifier`.
+- **Multi-IP Pool Architecture (`ip_pool`)**: Extended `DnsProfile` and JSON config persistence with `ip_pool` arrays across all SmartDNS and standard presets, automatically migrating existing `profiles.json` files and merging newly verified alive IPs into the pool.
+- **Main Window IP Pool Picker**: Added `Пул IP ▾` button and popup selector on the main window IP row to switch Primary/Secondary DNS from the profile's pool, configure single-IP mode, or run one-click latency auto-selection.
+- **SmartDNS Catalog IP Pool Picker**: Added pool count badges (`[Пул: N IP]`) on catalog cards and a `Пул IP ▾` picker showing measured ping latencies (`ms`) for every pool address.
 
-**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v2.0.3...v2.0.4
+**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v2.0.4...v2.0.5
 
 ---
 
 #### Описание изменений (Русский)
 
-- **Устойчивость к блокировкам Defender и цикл повторов**: Добавлен цикл повторных попыток с задержкой в `AppUpdater::perform_file_replacement` для удаления старых копий, переименования и перемещения загруженного файла, устраняя сбои `ERROR_SHARING_VIOLATION` (32) и `ERROR_ACCESS_DENIED` (5) при сканировании Защитником Windows.
-- **Атомарный откат при сбое обновления**: Реализован fallback на `CopyFileW` и гарантированный откат к предыдущему файлу из `.old`, если установка нового бинарного файла не удалась.
-- **Устранение гонки единого экземпляра (Single-Instance)**: Добавлен аргумент `--updated`, позволяющий обновленному процессу ожидать до 5 секунд полного завершения работы предыдущего окна и мьютекса перед проверкой единственного экземпляра.
-- **Надежный перезапуск процесса**: Переход на прямой запуск через `CreateProcessW` с сохранением рабочего каталога и fallback на `ShellExecuteW`, обеспечивающий наследование прав администратора.
-- **Очистка устаревших файлов (.old)**: Функция `AppUpdater::cleanup_previous_update` дополнена циклом повторов для гарантированного удаления `.old` файла после завершения старого процесса.
-- **Диагностика ошибок обновления**: В `apply_update_and_restart` и UI добавлены подробные описания ошибок с кодами Win32 API для прозрачной диагностики.
+- **Профиль Без межаў DNS (РФ)**: Добавлен выделенный встроенный пресет `Без межаў DNS (РФ)` (`185.236.10.189`, `31.58.216.201`, DoH `https://sync.bezmezhau.com/dns-query`) и автоматическое разрешение хоста `sync.bezmezhau.com` в `SmartDnsVerifier`.
+- **Архитектура пула IP-адресов (`ip_pool`)**: Структура `DnsProfile` и JSON-конфигурация дополнены массивом `ip_pool` для всех SmartDNS и базовых профилей с автоматической миграцией существующих `profiles.json` и сохранением проверенных рабочих IP.
+- **Выбор IP из пула в главном окне**: В строке IP-адресов главного окна добавлена кнопка `Пул IP ▾` с меню быстрого переключения основного и дополнительного DNS из пула, режима одного IP и автоподбора пары с минимальным пингом.
+- **Пул IP в каталоге SmartDNS**: На карточки каталога добавлены индикаторы размера пула (`[Пул: N IP]`) и меню `Пул IP ▾` с отображением измеренной задержки (`мс`) для каждого адреса в пуле.

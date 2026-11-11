@@ -44,6 +44,13 @@ struct DownloadUpdateResult {
 
 struct SmartDnsTrayResult {
     int found_new = 0;
+    bool is_single_pool_ping = false;
+    std::string profile_id;
+    std::wstring profile_name;
+    std::string best_primary_ip;
+    std::string best_secondary_ip;
+    int best_primary_latency = -1;
+    std::vector<std::string> alive_ips;
 };
 
 } // namespace quickdns
@@ -115,6 +122,7 @@ private:
     void open_smartdns_catalog_dialog();
     void open_windows_network_settings();
     void copy_text_to_clipboard(const std::wstring& text);
+    void show_ip_pool_picker();
 
     // Tray Menu
     void show_tray_context_menu();
@@ -147,6 +155,7 @@ private:
     HWND m_hLblProfile = nullptr;
     HWND m_hLblIp = nullptr;
     HWND m_hEditProfileIp = nullptr;
+    HWND m_hBtnIpPool = nullptr;
     HWND m_hBtnCopyIp = nullptr;
     HWND m_hLblDoh = nullptr;
     HWND m_hEditProfileDoh = nullptr;

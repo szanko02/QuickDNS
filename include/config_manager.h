@@ -23,6 +23,7 @@ struct DnsProfile {
     bool is_smart_dns = false;
     std::string website_url;
     std::string unblocked_summary;
+    std::vector<std::string> ip_pool;
 
     bool operator==(const DnsProfile& other) const = default;
 };

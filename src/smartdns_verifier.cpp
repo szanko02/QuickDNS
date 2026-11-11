@@ -248,9 +248,12 @@ std::vector<std::string> SmartDnsVerifier::discover_candidate_ips(const DnsProfi
         }
     };
 
-    // 1. Initial configured IPs
+    // 1. Initial configured IPs and IP pool
     add_candidate(profile.primary_ipv4);
     add_candidate(profile.secondary_ipv4);
+    for (const auto& ip : profile.ip_pool) {
+        add_candidate(ip);
+    }
 
     // 2. Resolve Hostname from doh_template
     std::string dohHost = extract_host_from_url(profile.doh_template);
@@ -275,6 +278,12 @@ std::vector<std::string> SmartDnsVerifier::discover_candidate_ips(const DnsProfi
         for (const auto& ip : resolve_hostname_ips("us.geohide.ru")) add_candidate(ip);
     } else if (profile.id.find("bezmezhau") != std::string::npos) {
         for (const auto& ip : resolve_hostname_ips("dns.bezmezhau.com")) add_candidate(ip);
+        for (const auto& ip : resolve_hostname_ips("sync.bezmezhau.com")) add_candidate(ip);
+        for (const auto& ip : resolve_hostname_ips("bezmezhau.com")) add_candidate(ip);
+        add_candidate("185.236.10.189");
+        add_candidate("143.20.64.55");
+        add_candidate("31.58.216.201");
+        add_candidate("181.215.40.49");
     } else if (profile.id.find("zapret") != std::string::npos) {
         for (const auto& ip : resolve_hostname_ips("dns.zapret.moe")) add_candidate(ip);
     } else if (profile.id.find("malw") != std::string::npos) {
@@ -622,25 +631,69 @@ std::vector<SmartDnsVerificationResult> SmartDnsVerifier::verify_profiles(
 
 int SmartDnsVerifier::apply_best_ips(ConfigManager& config, const std::vector<SmartDnsVerificationResult>& results) {
     int updated_count = 0;
+    bool any_saved = false;
     auto profiles = config.get_all_profiles();
 
     for (const auto& res : results) {
-        if (!res.ip_updated || res.best_primary_ip.empty()) continue;
-
         for (auto& p : profiles) {
             if (p.id == res.profile_id) {
-                if (p.primary_ipv4 != res.best_primary_ip || p.secondary_ipv4 != res.best_secondary_ip) {
-                    p.primary_ipv4 = res.best_primary_ip;
-                    p.secondary_ipv4 = res.best_secondary_ip;
+                bool profile_modified = false;
+
+                std::vector<DnsIpCandidate> alive;
+                for (const auto& c : res.candidate_ips) {
+                    if (c.is_alive && c.latency_ms > 0 && is_valid_public_ipv4(c.ip)) {
+                        alive.push_back(c);
+                    }
+                }
+                std::sort(alive.begin(), alive.end(), [](const DnsIpCandidate& a, const DnsIpCandidate& b) {
+                    return a.latency_ms < b.latency_ms;
+                });
+
+                std::vector<std::string> merged_pool;
+                auto add_to_pool = [&](const std::string& ip) {
+                    if (!ip.empty() && is_valid_public_ipv4(ip) &&
+                        std::find(merged_pool.begin(), merged_pool.end(), ip) == merged_pool.end()) {
+                        merged_pool.push_back(ip);
+                    }
+                };
+
+                for (const auto& c : alive) {
+                    add_to_pool(c.ip);
+                }
+                if (!res.best_primary_ip.empty()) {
+                    add_to_pool(res.best_primary_ip);
+                }
+                if (!res.best_secondary_ip.empty()) {
+                    add_to_pool(res.best_secondary_ip);
+                }
+                for (const auto& ip : p.ip_pool) {
+                    add_to_pool(ip);
+                }
+
+                if (p.ip_pool != merged_pool) {
+                    p.ip_pool = std::move(merged_pool);
+                    profile_modified = true;
+                }
+
+                if (res.ip_updated && !res.best_primary_ip.empty()) {
+                    if (p.primary_ipv4 != res.best_primary_ip || p.secondary_ipv4 != res.best_secondary_ip) {
+                        p.primary_ipv4 = res.best_primary_ip;
+                        p.secondary_ipv4 = res.best_secondary_ip;
+                        profile_modified = true;
+                        updated_count++;
+                    }
+                }
+
+                if (profile_modified) {
                     config.update_profile(p);
-                    updated_count++;
+                    any_saved = true;
                 }
                 break;
             }
         }
     }
 
-    if (updated_count > 0) {
+    if (any_saved) {
         config.save_to_file();
     }
 

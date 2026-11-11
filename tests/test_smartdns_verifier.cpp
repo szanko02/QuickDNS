@@ -97,6 +97,37 @@ void test_candidate_discovery() {
     }
     TEST_CHECK(hasPrimary, "Candidates include configured primary IP");
     TEST_CHECK(hasSecondary, "Candidates include configured secondary IP");
+
+    // Verify Bezmezhau and Bezmezhau RU candidate discovery includes RF server 185.236.10.189
+    DnsProfile bezProfile;
+    bezProfile.id = "bezmezhau";
+    bezProfile.name = "Без межаў DNS";
+    bezProfile.primary_ipv4 = "181.215.40.49";
+    bezProfile.secondary_ipv4 = "143.20.64.55";
+    bezProfile.doh_template = "https://dns.bezmezhau.com/dns-query";
+    auto bezCandidates = SmartDnsVerifier::discover_candidate_ips(bezProfile);
+    bool hasRfInBez = false;
+    for (const auto& ip : bezCandidates) {
+        if (ip == "185.236.10.189") hasRfInBez = true;
+    }
+    TEST_CHECK(hasRfInBez, "Bezmezhau candidates include RF IP 185.236.10.189");
+
+    DnsProfile bezRuProfile;
+    bezRuProfile.id = "bezmezhau_ru";
+    bezRuProfile.name = "Без межаў DNS (РФ)";
+    bezRuProfile.primary_ipv4 = "185.236.10.189";
+    bezRuProfile.secondary_ipv4 = "31.58.216.201";
+    bezRuProfile.doh_template = "https://sync.bezmezhau.com/dns-query";
+    bezRuProfile.ip_pool = {"185.236.10.189", "31.58.216.201", "143.20.64.55", "181.215.40.49"};
+    auto bezRuCandidates = SmartDnsVerifier::discover_candidate_ips(bezRuProfile);
+    bool hasRfInBezRu = false;
+    bool hasSecInBezRu = false;
+    for (const auto& ip : bezRuCandidates) {
+        if (ip == "185.236.10.189") hasRfInBezRu = true;
+        if (ip == "31.58.216.201") hasSecInBezRu = true;
+    }
+    TEST_CHECK(hasRfInBezRu, "Bezmezhau RU candidates include RF primary IP 185.236.10.189");
+    TEST_CHECK(hasSecInBezRu, "Bezmezhau RU candidates include secondary IP 31.58.216.201");
 }
 
 void test_live_udp_dns_verification() {

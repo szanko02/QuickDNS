@@ -264,6 +264,26 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
         m_allEntries.push_back(std::move(e));
     }
 
+    // 4b. Без межаў DNS (РФ)
+    {
+        SmartDnsEntry e;
+        e.profile_id = "bezmezhau_ru";
+        e.name = L"Без межаў DNS (РФ)";
+        e.website_url = L"https://bezmezhau.com/";
+        e.primary_ipv4 = L"185.236.10.189";
+        e.secondary_ipv4 = L"31.58.216.201";
+        e.doh_template = L"https://sync.bezmezhau.com/dns-query";
+        e.location = L"РФ / Европа";
+        e.description = L"Выделенный сервер Без межаў для пользователей из России (sync.bezmezhau.com).";
+        e.categories = {
+            { L"Нейросети и AI", { L"ChatGPT", L"Anthropic Claude", L"Microsoft Copilot" } },
+            { L"Медиа и Соцсети", { L"YouTube", L"Discord", L"Spotify", L"X (Twitter)", L"Instagram", L"Reddit", L"TikTok", L"Twitch", L"Netflix" } },
+            { L"Защита", { L"Блокировка рекламы", L"Защита от слежки и трекеров" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
     // 5. Malw.link DNS
     {
         SmartDnsEntry e;
@@ -456,6 +476,37 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
             }
             e.is_active = (e.profile_id == m_currentActiveId);
             m_allEntries.push_back(std::move(e));
+        }
+    }
+
+    // Sync primary/secondary IPs and populate ip_pool from loaded profiles
+    for (auto& entry : m_allEntries) {
+        const DnsProfile* matchedProfile = nullptr;
+        for (const auto& p : profiles) {
+            if (p.id == entry.profile_id) {
+                matchedProfile = &p;
+                break;
+            }
+        }
+
+        if (matchedProfile && !matchedProfile->primary_ipv4.empty()) {
+            entry.primary_ipv4 = utf8_to_wide(matchedProfile->primary_ipv4);
+            entry.secondary_ipv4 = utf8_to_wide(matchedProfile->secondary_ipv4);
+        }
+
+        auto addPoolIp = [&](const std::wstring& ip) {
+            if (ip.empty()) return;
+            if (std::find(entry.ip_pool.begin(), entry.ip_pool.end(), ip) == entry.ip_pool.end()) {
+                entry.ip_pool.push_back(ip);
+            }
+        };
+
+        addPoolIp(entry.primary_ipv4);
+        addPoolIp(entry.secondary_ipv4);
+        if (matchedProfile) {
+            for (const auto& ipStr : matchedProfile->ip_pool) {
+                addPoolIp(utf8_to_wide(ipStr));
+            }
         }
     }
 
@@ -717,25 +768,31 @@ void SmartDnsDialog::create_controls() {
     int curY = listTop + listHeight + 16;
 
     // Bottom Action Buttons
-    int btnApplyW = 175;
-    int btnWebW = 145;
-    int btnVerifyW = 200;
+    int btnApplyW = 165;
+    int btnPickW = 110;
+    int btnWebW = 140;
+    int btnVerifyW = 165;
     int btnCloseW = 95;
-    int gap = 10;
+    int gap = 8;
 
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить этот DNS",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX, curY, btnApplyW, bottomButtonsH,
         m_hWnd, (HMENU)IDC_BTN_SMARTDNS_APPLY, m_hInstance, nullptr);
 
+    m_hBtnPickIp = CreateWindowExW(0, WC_BUTTONW, L"Пул IP \u25BE",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX + btnApplyW + gap, curY, btnPickW, bottomButtonsH,
+        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_PICK_IP, m_hInstance, nullptr);
+
     m_hBtnWebsite = CreateWindowExW(0, WC_BUTTONW, L"Официальный сайт",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + btnApplyW + gap, curY, btnWebW, bottomButtonsH,
+        marginX + btnApplyW + gap + btnPickW + gap, curY, btnWebW, bottomButtonsH,
         m_hWnd, (HMENU)IDC_BTN_SMARTDNS_WEBSITE, m_hInstance, nullptr);
 
     m_hBtnVerify = CreateWindowExW(0, WC_BUTTONW, L"Обновить IP и DoH",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + btnApplyW + gap + btnWebW + gap, curY, btnVerifyW, bottomButtonsH,
+        marginX + btnApplyW + gap + btnPickW + gap + btnWebW + gap, curY, btnVerifyW, bottomButtonsH,
         m_hWnd, (HMENU)IDC_BTN_SMARTDNS_SCRAPE_VERIFY, m_hInstance, nullptr);
 
     m_hBtnClose = CreateWindowExW(0, WC_BUTTONW, L"Закрыть",
@@ -744,6 +801,7 @@ void SmartDnsDialog::create_controls() {
         m_hWnd, (HMENU)IDC_BTN_SMARTDNS_CLOSE, m_hInstance, nullptr);
 
     attach_button_effects(m_hBtnApply, 301);
+    attach_button_effects(m_hBtnPickIp, 305);
     attach_button_effects(m_hBtnWebsite, 302);
     attach_button_effects(m_hBtnVerify, 304);
     attach_button_effects(m_hBtnClose, 303);
@@ -778,15 +836,17 @@ void SmartDnsDialog::reposition_controls() {
     }
 
     int curY = listTop + listHeight + 16;
-    int btnApplyW = 180;
-    int btnWebW = 150;
-    int btnVerifyW = 200;
+    int btnApplyW = 165;
+    int btnPickW = 110;
+    int btnWebW = 140;
+    int btnVerifyW = 165;
     int btnCloseW = 95;
-    int gap = 10;
+    int gap = 8;
 
     if (m_hBtnApply) SetWindowPos(m_hBtnApply, nullptr, marginX, curY, btnApplyW, bottomButtonsH, SWP_NOZORDER);
-    if (m_hBtnWebsite) SetWindowPos(m_hBtnWebsite, nullptr, marginX + btnApplyW + gap, curY, btnWebW, bottomButtonsH, SWP_NOZORDER);
-    if (m_hBtnVerify) SetWindowPos(m_hBtnVerify, nullptr, marginX + btnApplyW + gap + btnWebW + gap, curY, btnVerifyW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnPickIp) SetWindowPos(m_hBtnPickIp, nullptr, marginX + btnApplyW + gap, curY, btnPickW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnWebsite) SetWindowPos(m_hBtnWebsite, nullptr, marginX + btnApplyW + gap + btnPickW + gap, curY, btnWebW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnVerify) SetWindowPos(m_hBtnVerify, nullptr, marginX + btnApplyW + gap + btnPickW + gap + btnWebW + gap, curY, btnVerifyW, bottomButtonsH, SWP_NOZORDER);
     if (m_hBtnClose) SetWindowPos(m_hBtnClose, nullptr, marginX + contentWidth - btnCloseW, curY, btnCloseW, bottomButtonsH, SWP_NOZORDER);
 
     recalculate_item_layouts();
@@ -847,6 +907,7 @@ int SmartDnsDialog::calculate_item_height(const SmartDnsEntry& entry, int cardWi
     // 2. Addresses row (IPv4 + DoH)
     std::wstring addrStr = L"IPv4: " + entry.primary_ipv4;
     if (!entry.secondary_ipv4.empty()) addrStr += L", " + entry.secondary_ipv4;
+    if (entry.ip_pool.size() > 2) addrStr += L"  [Пул: " + std::to_wstring(entry.ip_pool.size()) + L" IP]";
     if (!entry.doh_template.empty()) addrStr += L"   |   DoH: " + entry.doh_template;
     float maxAddrW = static_cast<float>(std::max(200, cardWidth - 36));
     int addrCharsPerLine = std::max(25, static_cast<int>(maxAddrW / 7.5f));
@@ -921,6 +982,140 @@ void SmartDnsDialog::on_apply_selected() {
     }
 }
 
+void SmartDnsDialog::on_pick_ip_from_pool() {
+    if (m_selectedIndex < 0 || m_selectedIndex >= static_cast<int>(m_filteredIndices.size())) {
+        return;
+    }
+
+    size_t realIdx = m_filteredIndices[m_selectedIndex];
+    auto& entry = m_allEntries[realIdx];
+
+    auto ensureInPool = [&](const std::wstring& ip) {
+        if (ip.empty()) return;
+        if (std::find(entry.ip_pool.begin(), entry.ip_pool.end(), ip) == entry.ip_pool.end()) {
+            entry.ip_pool.push_back(ip);
+        }
+    };
+    ensureInPool(entry.primary_ipv4);
+    ensureInPool(entry.secondary_ipv4);
+
+    if (entry.ip_pool.empty()) {
+        return;
+    }
+
+    auto formatIpLabel = [&](const std::wstring& ipWide) -> std::wstring {
+        std::string ipUtf8 = wide_to_utf8(ipWide);
+        std::wstring label = ipWide;
+        for (const auto& c : entry.candidates) {
+            if (c.ip == ipUtf8) {
+                if (c.is_alive && c.latency_ms >= 0) {
+                    label += L" (" + std::to_wstring(c.latency_ms) + L" ms)";
+                } else {
+                    label += L" (тайм-аут)";
+                }
+                break;
+            }
+        }
+        return label;
+    };
+
+    HMENU hMenu = CreatePopupMenu();
+    if (!hMenu) return;
+
+    HMENU hSubPri = CreatePopupMenu();
+    HMENU hSubSec = CreatePopupMenu();
+
+    size_t maxItems = std::min<size_t>(entry.ip_pool.size(), 50);
+    for (size_t i = 0; i < maxItems; ++i) {
+        std::wstring itemLabel = formatIpLabel(entry.ip_pool[i]);
+        UINT priFlags = MF_STRING | ((entry.ip_pool[i] == entry.primary_ipv4) ? MF_CHECKED : 0);
+        AppendMenuW(hSubPri, priFlags, IDM_POOL_PRIMARY_BASE + i, itemLabel.c_str());
+
+        UINT secFlags = MF_STRING | ((entry.ip_pool[i] == entry.secondary_ipv4) ? MF_CHECKED : 0);
+        AppendMenuW(hSubSec, secFlags, IDM_POOL_SECONDARY_BASE + i, itemLabel.c_str());
+    }
+
+    AppendMenuW(hSubSec, MF_SEPARATOR, 0, nullptr);
+    UINT noneFlags = MF_STRING | (entry.secondary_ipv4.empty() ? MF_CHECKED : 0);
+    AppendMenuW(hSubSec, noneFlags, IDM_POOL_SECONDARY_NONE, L"Не использовать (только 1 IP)");
+
+    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubPri), L"Основной DNS (Primary)");
+    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubSec), L"Резервный DNS (Secondary)");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
+    for (size_t i = 0; i < maxItems; ++i) {
+        std::wstring label = formatIpLabel(entry.ip_pool[i]);
+        if (entry.ip_pool[i] == entry.primary_ipv4) {
+            label += L"  [Основной]";
+        } else if (entry.ip_pool[i] == entry.secondary_ipv4) {
+            label += L"  [Резервный]";
+        }
+        UINT flags = MF_STRING | ((entry.ip_pool[i] == entry.primary_ipv4) ? MF_CHECKED : 0);
+        AppendMenuW(hMenu, flags, IDM_POOL_PRIMARY_BASE + i, label.c_str());
+    }
+
+    POINT pt = {};
+    RECT rcBtn = {};
+    if (m_hBtnPickIp && GetWindowRect(m_hBtnPickIp, &rcBtn)) {
+        pt.x = rcBtn.left;
+        pt.y = rcBtn.top;
+    } else {
+        GetCursorPos(&pt);
+    }
+
+    int cmd = TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, m_hWnd, nullptr);
+    DestroyMenu(hMenu);
+
+    bool updated = false;
+    if (cmd >= IDM_POOL_PRIMARY_BASE && cmd < IDM_POOL_PRIMARY_BASE + static_cast<int>(maxItems)) {
+        size_t idx = static_cast<size_t>(cmd - IDM_POOL_PRIMARY_BASE);
+        std::wstring prevPri = entry.primary_ipv4;
+        entry.primary_ipv4 = entry.ip_pool[idx];
+        if (entry.secondary_ipv4 == entry.ip_pool[idx]) {
+            entry.secondary_ipv4 = (prevPri != entry.ip_pool[idx]) ? prevPri : L"";
+        }
+        updated = true;
+    } else if (cmd >= IDM_POOL_SECONDARY_BASE && cmd < IDM_POOL_SECONDARY_BASE + static_cast<int>(maxItems)) {
+        size_t idx = static_cast<size_t>(cmd - IDM_POOL_SECONDARY_BASE);
+        entry.secondary_ipv4 = (entry.ip_pool[idx] == entry.primary_ipv4) ? L"" : entry.ip_pool[idx];
+        updated = true;
+    } else if (cmd == IDM_POOL_SECONDARY_NONE) {
+        entry.secondary_ipv4 = L"";
+        updated = true;
+    }
+
+    if (updated) {
+        std::string newPriUtf8 = wide_to_utf8(entry.primary_ipv4);
+        for (const auto& c : entry.candidates) {
+            if (c.ip == newPriUtf8) {
+                entry.ping_ms = c.is_alive ? c.latency_ms : -1;
+                break;
+            }
+        }
+
+        if (m_pConfig) {
+            auto optProf = m_pConfig->get_profile_by_id(entry.profile_id);
+            if (optProf) {
+                DnsProfile p = *optProf;
+                p.primary_ipv4 = newPriUtf8;
+                p.secondary_ipv4 = wide_to_utf8(entry.secondary_ipv4);
+                p.ip_pool.clear();
+                for (const auto& wIp : entry.ip_pool) {
+                    p.ip_pool.push_back(wide_to_utf8(wIp));
+                }
+                m_pConfig->update_profile(p);
+                m_pConfig->save_to_file();
+            }
+        }
+
+        m_statusText = L"Выбран IP для " + entry.name + L": " + entry.primary_ipv4 +
+                       (entry.secondary_ipv4.empty() ? L"" : (L", " + entry.secondary_ipv4));
+        recalculate_item_layouts();
+        if (m_hListWnd) InvalidateRect(m_hListWnd, nullptr, TRUE);
+        InvalidateRect(m_hWnd, nullptr, FALSE);
+    }
+}
+
 void SmartDnsDialog::on_open_website(size_t index) {
     if (index < m_filteredIndices.size()) {
         size_t realIdx = m_filteredIndices[index];
@@ -960,6 +1155,9 @@ void SmartDnsDialog::on_verify_and_scrape_ips() {
             p.secondary_ipv4 = QuickDns::Encoding::wide_to_utf8(e.secondary_ipv4);
             p.doh_template = QuickDns::Encoding::wide_to_utf8(e.doh_template);
             p.website_url = QuickDns::Encoding::wide_to_utf8(e.website_url);
+            for (const auto& poolIp : e.ip_pool) {
+                p.ip_pool.push_back(QuickDns::Encoding::wide_to_utf8(poolIp));
+            }
             profilesToVerify.push_back(p);
         }
 
@@ -1224,6 +1422,9 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
     // 3. Addresses: IPv4, DoH, Website
     std::wstring addrStr = L"IPv4: " + e.primary_ipv4;
     if (!e.secondary_ipv4.empty()) addrStr += L", " + e.secondary_ipv4;
+    if (e.ip_pool.size() > 2) {
+        addrStr += L"  [Пул: " + std::to_wstring(e.ip_pool.size()) + L" IP]";
+    }
     if (!e.doh_template.empty()) addrStr += L"   |   DoH: " + e.doh_template;
 
     Gdiplus::StringFormat sfAddr;
@@ -1375,6 +1576,10 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             on_apply_selected();
             return 0;
         }
+        if (id == IDC_BTN_SMARTDNS_PICK_IP) {
+            on_pick_ip_from_pool();
+            return 0;
+        }
         if (id == IDC_BTN_SMARTDNS_WEBSITE) {
             on_open_website(static_cast<size_t>(std::max(0, m_selectedIndex)));
             return 0;
@@ -1404,6 +1609,15 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                         e.doh_status = r.doh_result.status_text;
                         e.ping_ms = r.best_primary_latency;
                         e.is_verified = true;
+                        e.candidates = r.candidate_ips;
+                        for (const auto& c : r.candidate_ips) {
+                            if (c.is_alive && !c.ip.empty()) {
+                                std::wstring wIp = QuickDns::Encoding::utf8_to_wide(c.ip);
+                                if (std::find(e.ip_pool.begin(), e.ip_pool.end(), wIp) == e.ip_pool.end()) {
+                                    e.ip_pool.push_back(wIp);
+                                }
+                            }
+                        }
 
                         if (m_pConfig && r.ip_updated && !r.best_primary_ip.empty()) {
                             auto optProfile = m_pConfig->get_profile_by_id(r.profile_id);
@@ -1455,6 +1669,7 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             }
 
             m_statusText = L"Проверка завершена. Обновлено IP провайдеров: " + std::to_wstring(appliedCount);
+            recalculate_item_layouts();
         }
         if (m_verifyThread.joinable()) {
             m_verifyThread.join();

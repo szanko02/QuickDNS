@@ -42,7 +42,20 @@ int main() {
         assert(bezmezhau->primary_ipv4 == "181.215.40.49");
         assert(bezmezhau->doh_template == "https://dns.bezmezhau.com/dns-query");
         assert(bezmezhau->is_smart_dns == true);
+        assert(bezmezhau->ip_pool.size() >= 4);
         std::cout << "[PASS] Bezmezhau preset verified: " << bezmezhau->primary_ipv4 << " (DoH: " << bezmezhau->doh_template << ")" << std::endl;
+
+        auto bezmezhau_ru = cfg.get_profile_by_id("bezmezhau_ru");
+        assert(bezmezhau_ru.has_value());
+        assert(bezmezhau_ru->primary_ipv4 == "185.236.10.189");
+        assert(bezmezhau_ru->secondary_ipv4 == "31.58.216.201");
+        assert(bezmezhau_ru->doh_template == "https://sync.bezmezhau.com/dns-query");
+        assert(bezmezhau_ru->is_smart_dns == true);
+        assert(bezmezhau_ru->is_builtin == true);
+        assert(bezmezhau_ru->ip_pool.size() == 4);
+        assert(bezmezhau_ru->ip_pool[0] == "185.236.10.189");
+        assert(bezmezhau_ru->ip_pool[1] == "31.58.216.201");
+        std::cout << "[PASS] Bezmezhau RU preset verified: " << bezmezhau_ru->primary_ipv4 << " (DoH: " << bezmezhau_ru->doh_template << ")" << std::endl;
 
         auto zapret = cfg.get_profile_by_id("zapret");
         assert(zapret.has_value());
@@ -122,6 +135,7 @@ int main() {
         custom.is_builtin = false;
         custom.is_dhcp = false;
         custom.is_smart_dns = true;
+        custom.ip_pool = {"77.88.8.8", "77.88.8.1", "77.88.8.88"};
 
         assert(cfg.add_profile(custom) == true);
         assert(cfg.get_profile_by_id("my_custom").has_value());
@@ -141,7 +155,9 @@ int main() {
         assert(custom.has_value());
         assert(custom->primary_ipv4 == "77.88.8.8");
         assert(custom->is_smart_dns == true);
-        std::cout << "[PASS] Configuration reloaded from disk with is_smart_dns persistence intact." << std::endl;
+        assert(custom->ip_pool.size() == 3);
+        assert(custom->ip_pool[2] == "77.88.8.88");
+        std::cout << "[PASS] Configuration reloaded from disk with is_smart_dns and ip_pool persistence intact." << std::endl;
 
         // 4. Delete profile
         assert(cfgReloaded.delete_profile("my_custom") == true);
@@ -198,12 +214,19 @@ int main() {
             fixturePath = "C:/Users/SWEETY/QuickDNS/tests/fixtures/profiles_v201.json";
         }
         if (std::filesystem::exists(fixturePath)) {
-            ConfigManager cfgOld(fixturePath);
+            std::filesystem::path tempV201Path = std::filesystem::temp_directory_path() / "quickdns_test_v201.json";
+            std::filesystem::copy_file(fixturePath, tempV201Path, std::filesystem::copy_options::overwrite_existing);
+            ConfigManager cfgOld(tempV201Path);
             assert(cfgOld.get_active_profile_id() == "comss");
             auto comss = cfgOld.get_profile_by_id("comss");
             assert(comss.has_value());
             assert(comss->primary_ipv4 == "83.220.169.155");
-            std::cout << "[PASS] Successfully parsed v2.0.1 fixture config!" << std::endl;
+            assert(comss->ip_pool.size() >= 3);
+            auto bezmezhau_ru = cfgOld.get_profile_by_id("bezmezhau_ru");
+            assert(bezmezhau_ru.has_value());
+            assert(bezmezhau_ru->primary_ipv4 == "185.236.10.189");
+            std::filesystem::remove(tempV201Path);
+            std::cout << "[PASS] Successfully parsed and migrated v2.0.1 fixture config!" << std::endl;
         } else {
             std::cout << "[WARN] Fixture tests/fixtures/profiles_v201.json not found, skipping." << std::endl;
         }

@@ -73,7 +73,7 @@ jobs:
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        name: QuickDNS v2.0.4 - Reliable Auto-Updater, Single-Instance Race Fix & Process Hand-off
+        name: QuickDNS v2.0.5 - Bezmezhau RF Profile, IP Pool Picker UI & Dynamic Pool Persistence
         body_path: artifacts/RELEASE_NOTES.md
         files: |
           artifacts/QuickDNS.exe

@@ -15,7 +15,7 @@
 
 <br/>
 
-### [Скачать релиз v2.0.4 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
+### [Скачать релиз v2.0.5 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
 > Не требует установки. Скачайте архив или файл `QuickDNS.exe` и запустите.
 
 </div>
@@ -69,6 +69,7 @@ QuickDNS автоматизирует этот процесс:
 | **Comss.one DNS** | `[SmartDNS]` | `83.220.169.155` | `212.109.195.93` | `https://dns.comss.one/dns-query` | [dns.comss.one](https://dns.comss.one/) | ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X, AdGuard |
 | **Zapret DNS** | `[SmartDNS]` | `83.217.211.149` | — | `https://dns.zapret.moe/dns-query` | [zapret.moe](https://zapret.moe/) | Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker |
 | **Без межаў DNS** | `[SmartDNS]` | `181.215.40.49` | `143.20.64.55` | `https://dns.bezmezhau.com/dns-query` | [bezmezhau.com](https://bezmezhau.com/) | ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok |
+| **Без межаў DNS (РФ)** | `[SmartDNS]` | `185.236.10.189` | `31.58.216.201` | `https://sync.bezmezhau.com/dns-query` | [bezmezhau.com](https://bezmezhau.com/) | Выделенный сервер для РФ: ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok |
 | **Malw.link DNS** | `[SmartDNS]` | `179.254.166.171` | `164.5.224.81` | `https://dns.malw.link/dns-query` | [info.dns.malw.link](https://info.dns.malw.link/) | ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva |
 | **Astracat DNS** | `[SmartDNS]` | `135.106.217.200` | `185.139.69.24` | `https://dns.astracat.ru/dns-query` | [astracat.ru](https://astracat.ru/) | ChatGPT, Claude, Discord, YouTube, Spotify, Twitter/X, Instagram, Notion |
 | **Mafioznik DNS** | `[SmartDNS]` | `103.27.157.38` | `103.27.157.100` | `https://dns.mafioznik.xyz/dns-query` | [dns.mafioznik.xyz](https://dns.mafioznik.xyz/) | ChatGPT, Discord, YouTube, Steam Community, Spotify, Instagram, Twitter/X |
@@ -88,7 +89,7 @@ QuickDNS автоматизирует этот процесс:
 
 ## Инструкция по использованию
 
-1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v2.0.4-Portable.zip`.
+1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v2.0.5-Portable.zip`.
 2. Запустите **`QuickDNS.exe`** (при первом запуске подтвердите стандартный запрос UAC для доступа к сетевым параметрам).
 3. Программа автоматически выберет ваш активный адаптер (Wi-Fi или Ethernet).
 4. Выберите нужный DNS-профиль из выпадающего списка.

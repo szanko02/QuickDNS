@@ -562,6 +562,10 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             }
             return 0;
         }
+        if (wmId == IDC_BTN_IP_POOL) {
+            show_ip_pool_picker();
+            return 0;
+        }
         if (wmId == IDC_BTN_COPY_IP) {
             wchar_t buf[256] = {0};
             if (m_hEditProfileIp) {
@@ -641,8 +645,45 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     case WM_APP_SMARTDNS_RESULT: {
         m_isVerifyingSmartDns = false;
+        if (m_hBtnIpPool) {
+            SetWindowTextW(m_hBtnIpPool, L"Пул IP \u25BE");
+            bool enablePool = (m_selectedProfileIndex >= 0 &&
+                               m_selectedProfileIndex < static_cast<int>(m_profiles.size()) &&
+                               !m_profiles[m_selectedProfileIndex].is_dhcp);
+            EnableWindow(m_hBtnIpPool, enablePool);
+        }
         std::unique_ptr<quickdns::SmartDnsTrayResult> res(reinterpret_cast<quickdns::SmartDnsTrayResult*>(lParam));
         if (res) {
+            if (res->is_single_pool_ping) {
+                if (!res->best_primary_ip.empty() && res->best_primary_latency >= 0) {
+                    auto optProf = m_configManager->get_profile_by_id(res->profile_id);
+                    if (optProf) {
+                        DnsProfile prof = *optProf;
+                        prof.primary_ipv4 = res->best_primary_ip;
+                        if (!res->best_secondary_ip.empty()) {
+                            prof.secondary_ipv4 = res->best_secondary_ip;
+                        }
+                        for (const auto& ip : res->alive_ips) {
+                            if (!ip.empty() && std::find(prof.ip_pool.begin(), prof.ip_pool.end(), ip) == prof.ip_pool.end()) {
+                                prof.ip_pool.push_back(ip);
+                            }
+                        }
+                        m_configManager->update_profile(prof);
+                        m_configManager->save_to_file();
+                    }
+                    m_profiles = m_configManager->get_all_profiles();
+                    on_profile_selected();
+                    update_status_card();
+                    std::wstring msg = L"Автоподбор пула (" + res->profile_name + L"): " +
+                                       utf8_to_wide(res->best_primary_ip) +
+                                       (res->best_secondary_ip.empty() ? L"" : (L", " + utf8_to_wide(res->best_secondary_ip))) +
+                                       L" \u2022 Задержка: " + std::to_wstring(res->best_primary_latency) + L" мс";
+                    show_tray_notification(L"Пул IP обновлен", msg);
+                } else {
+                    show_tray_notification(L"Автоподбор пула IP", L"Не удалось получить отклик от IP-адресов пула.");
+                }
+                return 0;
+            }
             if (res->found_new > 0) {
                 std::wstring msg = L"Найдены новые IP для " + std::to_wstring(res->found_new) + L" профилей, откройте окно SmartDNS для подтверждения";
                 show_tray_notification(L"QuickDNS SmartDNS", msg.c_str());
@@ -972,6 +1013,10 @@ void MainWindow::setup_fonts() {
     m_hFontGraphVal = CreateFontW(-13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+
+    if (m_hBtnIpPool) {
+        SendMessageW(m_hBtnIpPool, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
+    }
 }
 
 void MainWindow::create_controls() {
@@ -1116,6 +1161,9 @@ void MainWindow::create_controls() {
     int editW = contentWidth - 116;
     int btnCopyW = 106;
     int copyX = marginX + editW + 10;
+    int btnPoolW = 96;
+    int ipEditW = std::max(80, editW - btnPoolW - 8);
+    int poolX = marginX + ipEditW + 8;
 
     // IP Address (Copyable)
     m_hLblIp = CreateWindowExW(0, L"STATIC", L"IP-адреса DNS серверов:",
@@ -1127,9 +1175,15 @@ void MainWindow::create_controls() {
 
     m_hEditProfileIp = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
-        marginX, startY, editW, 26,
+        marginX, startY, ipEditW, 26,
         m_hWnd, (HMENU)IDC_EDIT_PROFILE_IP, m_hInstance, nullptr);
     SendMessageW(m_hEditProfileIp, WM_SETFONT, (WPARAM)m_hFontMonospace, TRUE);
+
+    m_hBtnIpPool = CreateWindowExW(0, WC_BUTTONW, L"Пул IP \u25BE",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        poolX, startY, btnPoolW, 26,
+        m_hWnd, (HMENU)IDC_BTN_IP_POOL, m_hInstance, nullptr);
+    SendMessageW(m_hBtnIpPool, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
 
     m_hBtnCopyIp = CreateWindowExW(0, WC_BUTTONW, L"Копировать IP",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
@@ -1234,6 +1288,7 @@ void MainWindow::create_controls() {
     attach_button_effects(m_hBtnCopyDoh, 9);
     attach_button_effects(m_hBtnThemeToggle, 10);
     attach_button_effects(m_hBtnCheckUpdate, 15);
+    attach_button_effects(m_hBtnIpPool, 16);
 }
 
 void MainWindow::reposition_controls() {
@@ -1307,11 +1362,15 @@ void MainWindow::reposition_controls() {
     int btnCopyW = 120;
     int editW = std::max(100, contentWidth - btnCopyW - 10);
     int copyX = marginX + editW + 10;
+    int btnPoolW = 96;
+    int ipEditW = std::max(80, editW - btnPoolW - 8);
+    int poolX = marginX + ipEditW + 8;
 
     // IP Address (Copyable)
     if (m_hLblIp) SetWindowPos(m_hLblIp, nullptr, marginX, startY, contentWidth, 16, SWP_NOZORDER);
     startY += 22;
-    if (m_hEditProfileIp) SetWindowPos(m_hEditProfileIp, nullptr, marginX, startY, editW, 26, SWP_NOZORDER);
+    if (m_hEditProfileIp) SetWindowPos(m_hEditProfileIp, nullptr, marginX, startY, ipEditW, 26, SWP_NOZORDER);
+    if (m_hBtnIpPool) SetWindowPos(m_hBtnIpPool, nullptr, poolX, startY, btnPoolW, 26, SWP_NOZORDER);
     if (m_hBtnCopyIp) SetWindowPos(m_hBtnCopyIp, nullptr, copyX, startY, btnCopyW, 26, SWP_NOZORDER);
     startY += 40;
 
@@ -1543,7 +1602,7 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
         Gdiplus::GraphicsPath btnPath;
-        float radius = (pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH) ? 6.0f : 8.0f;
+        float radius = (pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH || pDis->CtlID == IDC_BTN_IP_POOL) ? 6.0f : 8.0f;
         AddRoundedRect(btnPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), radius);
 
         Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, GetRValue(bgCol), GetGValue(bgCol), GetBValue(bgCol)));
@@ -1561,7 +1620,7 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     SetBkMode(hdcMem, TRANSPARENT);
     SetTextColor(hdcMem, textCol);
     HFONT textFont = (pDis->CtlID == IDC_BTN_APPLY || pDis->CtlID == IDC_BTN_BENCHMARK) ? m_hFontBold : 
-                     ((pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH) ? m_hFontSmall : m_hFontRegular);
+                     ((pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH || pDis->CtlID == IDC_BTN_IP_POOL) ? m_hFontSmall : m_hFontRegular);
     HGDIOBJ oldFont = SelectObject(hdcMem, textFont);
 
     // Press animation: offset text slightly down & right when pressed!
@@ -2355,6 +2414,9 @@ void MainWindow::on_profile_selected() {
         if (m_hBtnDeleteProfile) {
             EnableWindow(m_hBtnDeleteProfile, !p.is_builtin);
         }
+        if (m_hBtnIpPool) {
+            EnableWindow(m_hBtnIpPool, !p.is_dhcp && !m_isVerifyingSmartDns.load());
+        }
     }
 }
 
@@ -2861,6 +2923,142 @@ void MainWindow::copy_text_to_clipboard(const std::wstring& text) {
         }
     }
     CloseClipboard();
+}
+
+void MainWindow::show_ip_pool_picker() {
+    if (m_selectedProfileIndex < 0 || m_selectedProfileIndex >= static_cast<int>(m_profiles.size())) {
+        return;
+    }
+
+    DnsProfile profile = m_profiles[m_selectedProfileIndex];
+    if (profile.is_dhcp) {
+        return;
+    }
+
+    std::vector<std::string> poolIps;
+    auto addUniqueIp = [&](const std::string& ip) {
+        if (ip.empty()) return;
+        if (std::find(poolIps.begin(), poolIps.end(), ip) == poolIps.end()) {
+            poolIps.push_back(ip);
+        }
+    };
+
+    addUniqueIp(profile.primary_ipv4);
+    addUniqueIp(profile.secondary_ipv4);
+    for (const auto& ip : profile.ip_pool) {
+        addUniqueIp(ip);
+    }
+
+    if (poolIps.empty()) {
+        return;
+    }
+
+    HMENU hMenu = CreatePopupMenu();
+    if (!hMenu) return;
+
+    HMENU hSubPri = CreatePopupMenu();
+    HMENU hSubSec = CreatePopupMenu();
+
+    size_t maxItems = std::min<size_t>(poolIps.size(), 50);
+    for (size_t i = 0; i < maxItems; ++i) {
+        std::wstring ipWide = utf8_to_wide(poolIps[i]);
+        UINT priFlags = MF_STRING | ((poolIps[i] == profile.primary_ipv4) ? MF_CHECKED : 0);
+        AppendMenuW(hSubPri, priFlags, IDM_POOL_PRIMARY_BASE + i, ipWide.c_str());
+
+        UINT secFlags = MF_STRING | ((poolIps[i] == profile.secondary_ipv4) ? MF_CHECKED : 0);
+        AppendMenuW(hSubSec, secFlags, IDM_POOL_SECONDARY_BASE + i, ipWide.c_str());
+    }
+
+    AppendMenuW(hSubSec, MF_SEPARATOR, 0, nullptr);
+    UINT noneFlags = MF_STRING | (profile.secondary_ipv4.empty() ? MF_CHECKED : 0);
+    AppendMenuW(hSubSec, noneFlags, IDM_POOL_SECONDARY_NONE, L"Не использовать (только 1 IP)");
+
+    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubPri), L"Выбрать Основной DNS (Primary)");
+    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubSec), L"Выбрать Резервный DNS (Secondary)");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
+    for (size_t i = 0; i < maxItems; ++i) {
+        std::wstring label = utf8_to_wide(poolIps[i]);
+        if (poolIps[i] == profile.primary_ipv4) {
+            label += L"  [Основной]";
+        } else if (poolIps[i] == profile.secondary_ipv4) {
+            label += L"  [Резервный]";
+        }
+        UINT flags = MF_STRING | ((poolIps[i] == profile.primary_ipv4) ? MF_CHECKED : 0);
+        AppendMenuW(hMenu, flags, IDM_POOL_PRIMARY_BASE + i, label.c_str());
+    }
+
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING, IDM_POOL_AUTO_PING, L"Автоподбор лучшего IP из пула (Пинг)");
+
+    POINT pt = {};
+    RECT rcBtn = {};
+    if (m_hBtnIpPool && GetWindowRect(m_hBtnIpPool, &rcBtn)) {
+        pt.x = rcBtn.left;
+        pt.y = rcBtn.bottom;
+    } else {
+        GetCursorPos(&pt);
+    }
+
+    int cmd = TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, m_hWnd, nullptr);
+    DestroyMenu(hMenu);
+
+    if (cmd >= IDM_POOL_PRIMARY_BASE && cmd < IDM_POOL_PRIMARY_BASE + static_cast<int>(maxItems)) {
+        size_t idx = static_cast<size_t>(cmd - IDM_POOL_PRIMARY_BASE);
+        std::string prevPri = profile.primary_ipv4;
+        profile.primary_ipv4 = poolIps[idx];
+        if (profile.secondary_ipv4 == poolIps[idx]) {
+            profile.secondary_ipv4 = (prevPri != poolIps[idx]) ? prevPri : "";
+        }
+        profile.ip_pool = poolIps;
+        m_configManager->update_profile(profile);
+        m_configManager->save_to_file();
+        m_profiles[m_selectedProfileIndex] = profile;
+        on_profile_selected();
+    } else if (cmd >= IDM_POOL_SECONDARY_BASE && cmd < IDM_POOL_SECONDARY_BASE + static_cast<int>(maxItems)) {
+        size_t idx = static_cast<size_t>(cmd - IDM_POOL_SECONDARY_BASE);
+        profile.secondary_ipv4 = (poolIps[idx] == profile.primary_ipv4) ? "" : poolIps[idx];
+        profile.ip_pool = poolIps;
+        m_configManager->update_profile(profile);
+        m_configManager->save_to_file();
+        m_profiles[m_selectedProfileIndex] = profile;
+        on_profile_selected();
+    } else if (cmd == IDM_POOL_SECONDARY_NONE) {
+        profile.secondary_ipv4 = "";
+        profile.ip_pool = poolIps;
+        m_configManager->update_profile(profile);
+        m_configManager->save_to_file();
+        m_profiles[m_selectedProfileIndex] = profile;
+        on_profile_selected();
+    } else if (cmd == IDM_POOL_AUTO_PING) {
+        if (m_isVerifyingSmartDns.exchange(true)) {
+            return;
+        }
+        if (m_hBtnIpPool) {
+            EnableWindow(m_hBtnIpPool, FALSE);
+            SetWindowTextW(m_hBtnIpPool, L"Пинг...");
+        }
+        profile.ip_pool = poolIps;
+        HWND hWnd = m_hWnd;
+        m_tasks.run([hWnd, profile]() {
+            auto verRes = quickdns::SmartDnsVerifier::verify_profile(profile);
+            auto* pRes = new quickdns::SmartDnsTrayResult();
+            pRes->is_single_pool_ping = true;
+            pRes->profile_id = profile.id;
+            pRes->profile_name = utf8_to_wide(profile.name);
+            pRes->best_primary_ip = verRes.best_primary_ip;
+            pRes->best_secondary_ip = verRes.best_secondary_ip;
+            pRes->best_primary_latency = verRes.best_primary_latency;
+            for (const auto& c : verRes.candidate_ips) {
+                if (c.is_alive && c.latency_ms > 0) {
+                    pRes->alive_ips.push_back(c.ip);
+                }
+            }
+            if (!PostMessageW(hWnd, WM_APP_SMARTDNS_RESULT, 0, reinterpret_cast<LPARAM>(pRes))) {
+                delete pRes;
+            }
+        });
+    }
 }
 
 void MainWindow::show_tray_context_menu() {

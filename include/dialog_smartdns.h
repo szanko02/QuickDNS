@@ -9,6 +9,7 @@
 #include <thread>
 #include <atomic>
 #include "config_manager.h"
+#include "smartdns_verifier.h"
 #include "ui_palette.h"
 
 namespace quickdns {
@@ -32,6 +33,8 @@ struct SmartDnsEntry {
     std::wstring doh_status;
     int ping_ms = -1;
     bool is_verified = false;
+    std::vector<std::wstring> ip_pool;
+    std::vector<DnsIpCandidate> candidates;
 };
 
 class SmartDnsDialog {
@@ -73,6 +76,7 @@ private:
     void populate_smartdns_data(const std::vector<DnsProfile>& profiles);
     void update_filtered_list();
     void on_apply_selected();
+    void on_pick_ip_from_pool();
     void on_open_website(size_t index);
     void on_verify_and_scrape_ips();
     void on_close();
@@ -98,6 +102,7 @@ private:
     HWND m_hListWnd = nullptr;
     HWND m_hSearchEdit = nullptr;
     HWND m_hBtnApply = nullptr;
+    HWND m_hBtnPickIp = nullptr;
     HWND m_hBtnWebsite = nullptr;
     HWND m_hBtnVerify = nullptr;
     HWND m_hBtnClose = nullptr;

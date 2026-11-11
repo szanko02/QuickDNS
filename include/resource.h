@@ -25,9 +25,10 @@
 #define IDC_EDIT_PROFILE_DOH        1022
 #define IDC_BTN_COPY_IP             1023
 #define IDC_BTN_COPY_DOH            1024
-#define IDC_BTN_WIN_NETWORK         1025
+#define IDC_BTN_IP_POOL             1025
 #define IDC_BTN_SMARTDNS_CATALOG    1026
 #define IDC_BTN_CHECK_UPDATE        1027
+#define IDC_BTN_WIN_NETWORK         1028
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101
@@ -52,6 +53,7 @@
 #define IDC_BTN_SMARTDNS_CLOSE      1305
 #define IDC_STATUS_SMARTDNS         1306
 #define IDC_BTN_SMARTDNS_SCRAPE_VERIFY 1307
+#define IDC_BTN_SMARTDNS_PICK_IP    3010
 
 // Tray Menu Commands
 #define IDM_TRAY_SHOW               2001
@@ -62,3 +64,9 @@
 #define IDM_TRAY_CHECK_UPDATE       2006
 #define IDM_TRAY_PRESET_FIRST       2100
 #define IDM_TRAY_PRESET_LAST        2199
+
+// IP Pool Picker Menu Commands
+#define IDM_POOL_PRIMARY_BASE       4100
+#define IDM_POOL_SECONDARY_BASE     4150
+#define IDM_POOL_SECONDARY_NONE     4200
+#define IDM_POOL_AUTO_PING          4201

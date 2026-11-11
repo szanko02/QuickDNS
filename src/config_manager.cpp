@@ -27,7 +27,8 @@ void to_json(json& j, const DnsProfile& p) {
         {"is_dhcp", p.is_dhcp},
         {"is_smart_dns", p.is_smart_dns},
         {"website_url", p.website_url},
-        {"unblocked_summary", p.unblocked_summary}
+        {"unblocked_summary", p.unblocked_summary},
+        {"ip_pool", p.ip_pool}
     };
 }
 
@@ -58,6 +59,21 @@ void from_json(const json& j, DnsProfile& p) {
     p.is_smart_dns = get_bool("is_smart_dns", false);
     p.website_url = get_str("website_url");
     p.unblocked_summary = get_str("unblocked_summary");
+    p.ip_pool.clear();
+    if (j.contains("ip_pool") && j["ip_pool"].is_array()) {
+        for (const auto& item : j["ip_pool"]) {
+            if (item.is_string()) {
+                std::string ip = item.get<std::string>();
+                if (!ip.empty() && std::find(p.ip_pool.begin(), p.ip_pool.end(), ip) == p.ip_pool.end()) {
+                    p.ip_pool.push_back(ip);
+                }
+            }
+        }
+    }
+}
+
+namespace {
+thread_local bool g_migrated_on_load = false;
 }
 
 ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
@@ -88,62 +104,8 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
             m_active_profile_id = "dhcp";
         }
         save_to_file();
-    } else {
-        // Synchronize built-in presets with the latest authoritative IPs and DoH templates
-        auto defaultPresets = get_default_presets();
-        bool updatedAny = false;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            for (auto& p : m_profiles) {
-                if (p.is_builtin) {
-                    for (const auto& def : defaultPresets) {
-                        if (def.id == p.id) {
-                            if (p.primary_ipv4 != def.primary_ipv4 ||
-                                p.secondary_ipv4 != def.secondary_ipv4 ||
-                                p.doh_template != def.doh_template ||
-                                p.name != def.name ||
-                                p.description != def.description ||
-                                p.is_smart_dns != def.is_smart_dns ||
-                                p.website_url != def.website_url ||
-                                p.unblocked_summary != def.unblocked_summary) {
-                                p.primary_ipv4 = def.primary_ipv4;
-                                p.secondary_ipv4 = def.secondary_ipv4;
-                                p.primary_ipv6 = def.primary_ipv6;
-                                p.secondary_ipv6 = def.secondary_ipv6;
-                                p.doh_template = def.doh_template;
-                                p.name = def.name;
-                                p.description = def.description;
-                                p.is_smart_dns = def.is_smart_dns;
-                                p.website_url = def.website_url;
-                                p.unblocked_summary = def.unblocked_summary;
-                                updatedAny = true;
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            for (const auto& def : defaultPresets) {
-                bool found = false;
-                for (const auto& p : m_profiles) {
-                    if (p.id == def.id) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    if (!m_profiles.empty() && m_profiles.back().id == "dhcp") {
-                        m_profiles.insert(m_profiles.end() - 1, def);
-                    } else {
-                        m_profiles.push_back(def);
-                    }
-                    updatedAny = true;
-                }
-            }
-        }
-        if (updatedAny) {
-            save_to_file();
-        }
+    } else if (g_migrated_on_load) {
+        save_to_file();
     }
 }
 
@@ -270,7 +232,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://dns.comss.one/",
-            "ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X"
+            "ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X",
+            {"83.220.169.155", "212.109.195.93", "195.133.25.16"}
         },
         {
             "geohide",
@@ -285,7 +248,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://geohide.ru/",
-            "ChatGPT, Claude, Gemini, Grok, Cursor, DeepL, Spotify, Notion, Canva, Autodesk"
+            "ChatGPT, Claude, Gemini, Grok, Cursor, DeepL, Spotify, Notion, Canva, Autodesk",
+            {"193.233.112.67", "193.233.112.88", "45.144.31.119", "162.248.241.106"}
         },
         {
             "geohide_eu",
@@ -300,7 +264,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://geohide.ru/",
-            "ChatGPT, Claude, Gemini, Grok, Deezer, Spotify, Canva, Notion, JetBrains"
+            "ChatGPT, Claude, Gemini, Grok, Deezer, Spotify, Canva, Notion, JetBrains",
+            {"45.13.237.213", "5.175.161.3", "45.144.31.119", "193.233.112.67", "193.233.112.88"}
         },
         {
             "geohide_us",
@@ -315,7 +280,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://geohide.ru/",
-            "ChatGPT, Claude, Gemini, Copilot, Grok, Spotify, Netflix US, Notion"
+            "ChatGPT, Claude, Gemini, Copilot, Grok, Spotify, Netflix US, Notion",
+            {"192.255.159.241", "192.3.233.253", "162.248.241.106", "45.144.31.119", "193.233.112.67"}
         },
         {
             "bezmezhau",
@@ -330,7 +296,24 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://bezmezhau.com/",
-            "ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok"
+            "ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok",
+            {"181.215.40.49", "143.20.64.55", "31.58.216.201", "185.236.10.189"}
+        },
+        {
+            "bezmezhau_ru",
+            "Без межаў DNS (РФ)",
+            "Без межаў DNS (РФ) - Выделенный сервер для пользователей из России",
+            "185.236.10.189",
+            "31.58.216.201",
+            "",
+            "",
+            "https://sync.bezmezhau.com/dns-query",
+            true,
+            false,
+            true,
+            "https://bezmezhau.com/",
+            "ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok",
+            {"185.236.10.189", "31.58.216.201", "143.20.64.55", "181.215.40.49"}
         },
         {
             "zapret",
@@ -345,7 +328,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://zapret.moe/",
-            "Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker"
+            "Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker",
+            {"83.217.211.149"}
         },
         {
             "malw",
@@ -360,7 +344,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://info.dns.malw.link/",
-            "ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva"
+            "ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva",
+            {"179.254.166.171", "164.5.224.81", "84.21.189.133", "64.188.98.242", "193.23.209.189"}
         },
         {
             "astracat",
@@ -375,7 +360,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://astracat.ru/",
-            "ChatGPT, Claude, Discord, YouTube, Spotify, Twitter/X, Instagram, Notion"
+            "ChatGPT, Claude, Discord, YouTube, Spotify, Twitter/X, Instagram, Notion",
+            {"135.106.217.200", "185.139.69.24", "185.236.104.104", "45.131.186.108"}
         },
         {
             "mafioznik",
@@ -390,7 +376,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://dns.mafioznik.xyz/",
-            "ChatGPT, Discord, YouTube, Steam, Spotify, Instagram, Twitter/X"
+            "ChatGPT, Discord, YouTube, Steam, Spotify, Instagram, Twitter/X",
+            {"103.27.157.38", "103.27.157.100", "45.95.233.23", "109.107.181.65"}
         },
         {
             "shecan",
@@ -405,7 +392,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://shecan.ir/",
-            "Docker Hub, Android Dev, Oracle, NVIDIA, Gradle, Google Services, AMD"
+            "Docker Hub, Android Dev, Oracle, NVIDIA, Gradle, Google Services, AMD",
+            {"178.22.122.100", "185.51.200.2"}
         },
         {
             "controld",
@@ -420,7 +408,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://controld.com/",
-            "ChatGPT, Claude, стриминги, защита от трекеров и фишинга"
+            "ChatGPT, Claude, стриминги, защита от трекеров и фишинга",
+            {"76.76.2.0", "76.76.10.0", "76.76.2.2", "76.76.10.2"}
         },
         {
             "akile",
@@ -435,7 +424,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             true,
             "https://dns.akile.ai/",
-            "Netflix, Disney+, YouTube, ChatGPT, Spotify, TikTok (требуется привязка IP)"
+            "Netflix, Disney+, YouTube, ChatGPT, Spotify, TikTok (требуется привязка IP)",
+            {"66.66.66.66", "108.160.138.51"}
         },
         {
             "cloudflare",
@@ -450,7 +440,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             false,
             "https://1.1.1.1/",
-            ""
+            "",
+            {"1.1.1.1", "1.0.0.1", "1.1.1.2", "1.0.0.2"}
         },
         {
             "google",
@@ -465,7 +456,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             false,
             "https://developers.google.com/speed/public-dns",
-            ""
+            "",
+            {"8.8.8.8", "8.8.4.4"}
         },
         {
             "quad9",
@@ -480,7 +472,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             false,
             "https://quad9.net/",
-            ""
+            "",
+            {"9.9.9.9", "149.112.112.112", "9.9.9.11", "149.112.112.11"}
         },
         {
             "adguard",
@@ -495,7 +488,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             false,
             false,
             "https://adguard-dns.io/",
-            ""
+            "",
+            {"94.140.14.14", "94.140.15.15", "94.140.14.140", "94.140.14.141"}
         },
         {
             "dhcp",
@@ -510,7 +504,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             true,
             false,
             "",
-            ""
+            "",
+            {}
         }
     };
 }
@@ -601,6 +596,7 @@ bool ConfigManager::save_to_file() {
 
 bool ConfigManager::load_from_file() {
     std::lock_guard<std::mutex> lock(m_mutex);
+    g_migrated_on_load = false;
     try {
         if (!std::filesystem::exists(m_config_path)) {
             return false;
@@ -662,6 +658,77 @@ bool ConfigManager::load_from_file() {
                 }
             }
             if (!loaded.empty()) {
+                auto defaultPresets = get_default_presets();
+                for (auto& p : loaded) {
+                    for (const auto& def : defaultPresets) {
+                        if (def.id == p.id) {
+                            p.is_builtin = true;
+                            for (const auto& def_ip : def.ip_pool) {
+                                if (!def_ip.empty() &&
+                                    std::find(p.ip_pool.begin(), p.ip_pool.end(), def_ip) == p.ip_pool.end()) {
+                                    p.ip_pool.push_back(def_ip);
+                                    g_migrated_on_load = true;
+                                }
+                            }
+                            bool primary_in_pool = !p.primary_ipv4.empty() &&
+                                std::find(p.ip_pool.begin(), p.ip_pool.end(), p.primary_ipv4) != p.ip_pool.end();
+                            if ((!primary_in_pool && p.primary_ipv4 != def.primary_ipv4) ||
+                                p.doh_template != def.doh_template ||
+                                p.name != def.name ||
+                                p.description != def.description ||
+                                p.is_smart_dns != def.is_smart_dns ||
+                                p.website_url != def.website_url ||
+                                p.unblocked_summary != def.unblocked_summary) {
+                                if (!primary_in_pool) {
+                                    p.primary_ipv4 = def.primary_ipv4;
+                                    p.secondary_ipv4 = def.secondary_ipv4;
+                                }
+                                p.primary_ipv6 = def.primary_ipv6;
+                                p.secondary_ipv6 = def.secondary_ipv6;
+                                p.doh_template = def.doh_template;
+                                p.name = def.name;
+                                p.description = def.description;
+                                p.is_smart_dns = def.is_smart_dns;
+                                p.website_url = def.website_url;
+                                p.unblocked_summary = def.unblocked_summary;
+                                g_migrated_on_load = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                for (size_t i = 0; i < defaultPresets.size(); ++i) {
+                    const auto& def = defaultPresets[i];
+                    bool found = false;
+                    for (const auto& p : loaded) {
+                        if (p.id == def.id) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        bool inserted = false;
+                        if (i > 0) {
+                            const std::string& prev_id = defaultPresets[i - 1].id;
+                            for (auto it = loaded.begin(); it != loaded.end(); ++it) {
+                                if (it->id == prev_id) {
+                                    loaded.insert(it + 1, def);
+                                    inserted = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!inserted) {
+                            if (!loaded.empty() && loaded.back().id == "dhcp") {
+                                loaded.insert(loaded.end() - 1, def);
+                            } else {
+                                loaded.push_back(def);
+                            }
+                        }
+                        g_migrated_on_load = true;
+                    }
+                }
+
                 m_profiles = std::move(loaded);
                 return true;
             }
