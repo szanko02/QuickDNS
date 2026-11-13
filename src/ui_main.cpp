@@ -3,6 +3,7 @@
 #include "dialog_benchmark.h"
 #include "dialog_smartdns.h"
 #include "dialog_ai_check.h"
+#include "dialog_app_routing.h"
 #include "smartdns_verifier.h"
 #include "app_updater.h"
 #include "encoding_utils.h"
@@ -252,9 +253,9 @@ namespace {
     }
 }
 
-MainWindow::MainWindow()
+MainWindow::MainWindow(const std::filesystem::path& config_path)
     : m_dnsManager(std::make_unique<DnsManager>())
-    , m_configManager(std::make_unique<ConfigManager>())
+    , m_configManager(std::make_unique<ConfigManager>(config_path))
 {
     m_isDarkMode = (m_configManager->get_theme_mode() != "light");
     auto pal = GetPalette(m_isDarkMode);
@@ -533,6 +534,10 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         }
         if (wmId == IDC_BTN_AI_CHECK) {
             open_ai_check_dialog();
+            return 0;
+        }
+        if (wmId == IDC_BTN_APP_ROUTING_DRAFT) {
+            open_app_routing_draft();
             return 0;
         }
         if (wmId == IDC_BTN_RESET_DHCP) {
@@ -1278,9 +1283,13 @@ void MainWindow::create_controls() {
 
     m_hBtnDeleteProfile = CreateWindowExW(0, WC_BUTTONW, L"Удалить профиль",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, contentWidth, 30,
+        marginX, startY, halfWidth, 30,
         m_hWnd, (HMENU)IDC_BTN_DELETE_PROFILE, m_hInstance, nullptr);
     EnableWindow(m_hBtnDeleteProfile, FALSE);
+    m_hBtnAppRoutingDraft = CreateWindowExW(0, WC_BUTTONW, L"Маршрутизация (черновик)",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        marginX + halfWidth + 12, startY, halfWidth, 30,
+        m_hWnd, (HMENU)IDC_BTN_APP_ROUTING_DRAFT, m_hInstance, nullptr);
     startY += 30 + 14;
 
     // 5. Footer Version Badge
@@ -1306,6 +1315,7 @@ void MainWindow::create_controls() {
     attach_button_effects(m_hBtnCheckUpdate, 15);
     attach_button_effects(m_hBtnIpPool, 16);
     attach_button_effects(m_hBtnAiCheck, 17);
+    attach_button_effects(m_hBtnAppRoutingDraft, 18);
 }
 
 void MainWindow::reposition_controls() {
@@ -1424,7 +1434,8 @@ void MainWindow::reposition_controls() {
     if (m_hBtnAddProfile) SetWindowPos(m_hBtnAddProfile, nullptr, col2X, startY, halfWidth, 34, SWP_NOZORDER);
     startY += 34 + 10;
 
-    if (m_hBtnDeleteProfile) SetWindowPos(m_hBtnDeleteProfile, nullptr, marginX, startY, contentWidth, 30, SWP_NOZORDER);
+    if (m_hBtnDeleteProfile) SetWindowPos(m_hBtnDeleteProfile, nullptr, marginX, startY, halfWidth, 30, SWP_NOZORDER);
+    if (m_hBtnAppRoutingDraft) SetWindowPos(m_hBtnAppRoutingDraft, nullptr, col2X, startY, halfWidth, 30, SWP_NOZORDER);
     startY += 30 + 14;
 
     // 5. Footer Version Badge
@@ -2581,6 +2592,16 @@ void MainWindow::open_add_profile_dialog() {
         update_status_card();
         show_tray_notification(L"Профиль добавлен", L"Пользовательский профиль успешно сохранен.");
     }
+}
+
+void MainWindow::open_app_routing_draft() {
+    quickdns::AppRoutingDialog dialog({}, quickdns::enumerate_routing_adapters());
+    if (!dialog.create(m_hInstance, m_hWnd)) {
+        MessageBoxW(m_hWnd, L"Не удалось открыть черновики правил маршрутизации.",
+                    L"QuickDNS", MB_OK | MB_ICONERROR);
+        return;
+    }
+    dialog.show_modal();
 }
 
 void MainWindow::open_benchmark_dialog() {
