@@ -30,6 +30,7 @@
 #define IDC_BTN_CHECK_UPDATE        1027
 #define IDC_BTN_WIN_NETWORK         1028
 #define IDC_BTN_AI_CHECK            1029
+#define IDC_BTN_APP_ROUTING_DRAFT   1030
 
 // Add Profile Dialog Controls
 #define IDC_EDIT_NAME               1101
