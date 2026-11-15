@@ -59,8 +59,9 @@ int main() {
         if (GetEnvironmentVariableW(L"QUICKDNS_EXPECT_PACKAGE_FAMILY", expected_family, 256)) {
             bool found = false;
             for (const auto& package : enumerate_installed_packages())
-                if (CompareStringOrdinal(package.family.c_str(), -1, expected_family, -1, TRUE) == CSTR_EQUAL) found = true;
-            check(found, "installed package enumeration missed expected family");
+                if (CompareStringOrdinal(package.family.c_str(), -1, expected_family, -1, TRUE) == CSTR_EQUAL)
+                    found = std::filesystem::path(package.install_path).is_absolute();
+            check(found, "installed package or install directory is missing");
         }
         std::filesystem::remove(path);
         return 0;

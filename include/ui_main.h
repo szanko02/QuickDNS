@@ -14,6 +14,8 @@
 #include "app_updater.h"
 #include "background_tasks.h"
 #include "resource.h"
+#include "subnet_routes.h"
+#include "split_routing.h"
 
 // Custom window messages
 #define WM_APP_TRAYMSG          (WM_APP + 1)
@@ -121,7 +123,9 @@ private:
     void open_benchmark_dialog();
     void open_smartdns_catalog_dialog();
     void open_ai_check_dialog();
-    void open_app_routing_draft();
+    void open_routing();
+    quickdns::SubnetRoutes m_subnetRoutes;
+    quickdns::SplitRoutingSession m_splitRouting;
     void open_windows_network_settings();
     void copy_text_to_clipboard(const std::wstring& text);
     void show_ip_pool_picker();
@@ -172,7 +176,7 @@ private:
     HWND m_hBtnWinNetwork = nullptr;
     HWND m_hBtnAddProfile = nullptr;
     HWND m_hBtnDeleteProfile = nullptr;
-    HWND m_hBtnAppRoutingDraft = nullptr;
+    HWND m_hBtnRouting = nullptr;
     HWND m_hBtnCheckUpdate = nullptr;
 
     HWND m_hStatusAdapterName = nullptr;

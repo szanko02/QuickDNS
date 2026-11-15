@@ -536,8 +536,8 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             open_ai_check_dialog();
             return 0;
         }
-        if (wmId == IDC_BTN_APP_ROUTING_DRAFT) {
-            open_app_routing_draft();
+        if (wmId == IDC_BTN_ROUTING) {
+            open_routing();
             return 0;
         }
         if (wmId == IDC_BTN_RESET_DHCP) {
@@ -1286,10 +1286,10 @@ void MainWindow::create_controls() {
         marginX, startY, halfWidth, 30,
         m_hWnd, (HMENU)IDC_BTN_DELETE_PROFILE, m_hInstance, nullptr);
     EnableWindow(m_hBtnDeleteProfile, FALSE);
-    m_hBtnAppRoutingDraft = CreateWindowExW(0, WC_BUTTONW, L"Маршрутизация (черновик)",
+    m_hBtnRouting = CreateWindowExW(0, WC_BUTTONW, L"Маршрутизация",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + halfWidth + 12, startY, halfWidth, 30,
-        m_hWnd, (HMENU)IDC_BTN_APP_ROUTING_DRAFT, m_hInstance, nullptr);
+        m_hWnd, (HMENU)IDC_BTN_ROUTING, m_hInstance, nullptr);
     startY += 30 + 14;
 
     // 5. Footer Version Badge
@@ -1315,7 +1315,7 @@ void MainWindow::create_controls() {
     attach_button_effects(m_hBtnCheckUpdate, 15);
     attach_button_effects(m_hBtnIpPool, 16);
     attach_button_effects(m_hBtnAiCheck, 17);
-    attach_button_effects(m_hBtnAppRoutingDraft, 18);
+    attach_button_effects(m_hBtnRouting, 18);
 }
 
 void MainWindow::reposition_controls() {
@@ -1435,7 +1435,7 @@ void MainWindow::reposition_controls() {
     startY += 34 + 10;
 
     if (m_hBtnDeleteProfile) SetWindowPos(m_hBtnDeleteProfile, nullptr, marginX, startY, halfWidth, 30, SWP_NOZORDER);
-    if (m_hBtnAppRoutingDraft) SetWindowPos(m_hBtnAppRoutingDraft, nullptr, col2X, startY, halfWidth, 30, SWP_NOZORDER);
+    if (m_hBtnRouting) SetWindowPos(m_hBtnRouting, nullptr, col2X, startY, halfWidth, 30, SWP_NOZORDER);
     startY += 30 + 14;
 
     // 5. Footer Version Badge
@@ -2594,10 +2594,10 @@ void MainWindow::open_add_profile_dialog() {
     }
 }
 
-void MainWindow::open_app_routing_draft() {
-    quickdns::AppRoutingDialog dialog({}, quickdns::enumerate_routing_adapters());
+void MainWindow::open_routing() {
+    quickdns::AppRoutingDialog dialog({}, quickdns::enumerate_routing_adapters(), std::nullopt, &m_subnetRoutes, &m_splitRouting, m_isDarkMode);
     if (!dialog.create(m_hInstance, m_hWnd)) {
-        MessageBoxW(m_hWnd, L"Не удалось открыть черновики правил маршрутизации.",
+        MessageBoxW(m_hWnd, L"Не удалось открыть окно маршрутизации.",
                     L"QuickDNS", MB_OK | MB_ICONERROR);
         return;
     }

@@ -1,7 +1,9 @@
 # Application routing: design in progress
 
-This document describes proposed behavior. Application routing and its kill switch
-are not implemented. Saving a rule does not protect or route any traffic.
+This document describes the unfinished per-application routing and kill switch.
+Saving an EXE or MSIX draft only stores its configuration. The routing window
+also manages active Windows routes by destination prefix for all applications.
+See the README for subnet routing instructions.
 
 Application routing is an optional feature; existing DNS profile handling is
 independent. Each rule identifies an application and a network adapter using a

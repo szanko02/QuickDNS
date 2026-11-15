@@ -1,4 +1,5 @@
 #include "ui_main.h"
+#include "dialog_app_routing.h"
 #include <objbase.h>
 #include <propidl.h>
 #include <gdiplus.h>
@@ -25,7 +26,15 @@ VOID CALLBACK close_dialog(HWND, UINT, UINT_PTR timer, DWORD) {
     if (!dialog) return;
     wchar_t warning[256]{};
     GetWindowTextW(GetDlgItem(dialog, 8209), warning, 256);
-    dialog_seen = wcsstr(warning, L"не активны") && wcsstr(warning, L"не применяются");
+    const HWND primary = GetDlgItem(dialog, quickdns::SplitPrimary);
+    const HWND subnet = GetDlgItem(dialog, quickdns::SubnetDestination);
+    const bool apps_default = IsWindowVisible(primary) && !IsWindowVisible(subnet);
+    SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(quickdns::RoutingSubnetsPage, BN_CLICKED), 0);
+    const bool subnet_page = IsWindowVisible(subnet) && !IsWindowVisible(primary);
+    SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(quickdns::RoutingAppsPage, BN_CLICKED), 0);
+    dialog_seen = wcsstr(warning, L"Приложение и его сеть") && apps_default && subnet_page &&
+        IsWindowVisible(primary) && !IsWindowVisible(subnet) &&
+        GetDlgItem(dialog, quickdns::SplitStart) && !IsWindowEnabled(GetDlgItem(dialog, quickdns::SplitStop));
     DestroyWindow(dialog);
     KillTimer(nullptr, timer);
 }
@@ -50,11 +59,11 @@ int main() {
         else {
             wchar_t label[256]{};
             GetWindowTextW(button, label, 256);
-            if (!wcsstr(label, L"черновик")) { std::cerr << "draft button is misleading\n"; result = 3; }
+            if (wcscmp(label, L"Маршрутизация") != 0) { std::cerr << "wrong routing button label\n"; result = 3; }
             UINT_PTR timer = SetTimer(nullptr, 0, 50, close_dialog);
             SendMessageW(main, WM_COMMAND, MAKEWPARAM(draft_control_id, BN_CLICKED), reinterpret_cast<LPARAM>(button));
             KillTimer(nullptr, timer);
-            if (!dialog_seen) { std::cerr << "inactive draft dialog was not opened\n"; result = 4; }
+            if (!dialog_seen) { std::cerr << "routing controls or draft status missing\n"; result = 4; }
         }
         if (main) DestroyWindow(main);
     }

@@ -70,6 +70,8 @@ add_library(quickdns_core STATIC
     src/dns_benchmark.cpp
     src/config_manager.cpp
     src/smartdns_verifier.cpp
+    src/subnet_routes.cpp
+    src/split_routing.cpp
     src/app_updater.cpp
     src/ai_checker.cpp
 )
@@ -173,7 +175,7 @@ add_test(NAME TestAppGuardJournal COMMAND test_app_guard_journal)
 
 add_executable(test_dialog_app_routing tests/test_dialog_app_routing.cpp src/dialog_app_routing.cpp src/routing_installed_packages.cpp src/app_routing_config.cpp)
 target_include_directories(test_dialog_app_routing PRIVATE include third_party)
-target_link_libraries(test_dialog_app_routing PRIVATE ${WIN32_LIBS} comdlg32 runtimeobject)
+target_link_libraries(test_dialog_app_routing PRIVATE quickdns_core ${WIN32_LIBS})
 add_test(NAME TestDialogAppRouting COMMAND test_dialog_app_routing)
 
 add_executable(test_routing_packet_policy tests/test_routing_packet_policy.cpp src/routing_packet_policy.cpp)
@@ -265,3 +267,11 @@ endif()
 # Mark tests that perform live network/DNS/HTTP operations
 set_tests_properties(TestBenchmark TestSmartDnsVerifier TestUpdater PROPERTIES LABELS "network")
 set_tests_properties(TestDns TestConfig PROPERTIES TIMEOUT 30)
+
+add_executable(test_app_routing_backend tests/test_app_routing_backend.cpp
+    src/app_routing_backend.cpp src/app_guard_enable.cpp src/app_guard_journal.cpp
+    src/app_route_guard.cpp src/app_policy_lifecycle.cpp src/app_policy_filter_identity.cpp
+    src/app_connection_policy.cpp)
+target_include_directories(test_app_routing_backend PRIVATE include third_party)
+target_link_libraries(test_app_routing_backend PRIVATE ole32 fwpuclnt advapi32)
+add_test(NAME TestAppRoutingBackend COMMAND test_app_routing_backend)
