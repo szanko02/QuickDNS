@@ -20,7 +20,7 @@ BEGIN
             VALUE "FileDescription",  "QuickDNS Diagnostics & Network Tests"
             VALUE "FileVersion",      "1.2.0"
             VALUE "InternalName",     "QuickDNS_Diag"
-            VALUE "LegalCopyright",   "Copyright (c) 2026 Stanislav (sweety)"
+            VALUE "LegalCopyright",   "MIT License"
             VALUE "ProductName",      "QuickDNS Diagnostics"
             VALUE "ProductVersion",   "1.2.0"
         END

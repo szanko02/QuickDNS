@@ -1,52 +1,170 @@
 @echo off
-setlocal
-cd /d "%~dp0"
+setlocal enabledelayedexpansion
 
-if not "%~1"=="" goto mingw
+echo ===================================================
+echo             QuickDNS Windows Builder
+echo ===================================================
 
-:: Prefer Visual Studio's bundled CMake, which supports its installed version.
-set "CMAKE=cmake.exe"
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if exist "%VSWHERE%" (
-    for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
-        if exist "%%I\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" set "CMAKE=%%I\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+:: 1. User-specified compiler bin via argument or env var
+set "COMPILER_BIN="
+if not "%~1"=="" (
+    if exist "%~1\clang++.exe" set "COMPILER_BIN=%~1"
+    if exist "%~1\g++.exe" set "COMPILER_BIN=%~1"
+)
+
+:: 2. Auto-detect from PATH
+if "!COMPILER_BIN!"=="" (
+    for /f "delims=" %%I in ('where clang++.exe 2^>nul') do (
+        if "!COMPILER_BIN!"=="" set "COMPILER_BIN=%%~dpI"
+    )
+)
+if "!COMPILER_BIN!"=="" (
+    for /f "delims=" %%I in ('where g++.exe 2^>nul') do (
+        if "!COMPILER_BIN!"=="" set "COMPILER_BIN=%%~dpI"
     )
 )
 
-set "BUILD_DIR=build\msvc"
-set "APP_EXE=%BUILD_DIR%\Release\QuickDNS.exe"
-"%CMAKE%" -S . -B "%BUILD_DIR%" -A x64
-if errorlevel 1 exit /b 1
-goto build
+:: 3. Auto-detect from WinGet MartinStorsjo.LLVM-MinGW package
+if "!COMPILER_BIN!"=="" (
+    if defined LOCALAPPDATA (
+        for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\MartinStorsjo.LLVM-MinGW*") do (
+            for /d %%B in ("%%D\llvm-mingw*\bin") do (
+                if exist "%%B\clang++.exe" set "COMPILER_BIN=%%B"
+            )
+            if exist "%%D\bin\clang++.exe" set "COMPILER_BIN=%%D\bin"
+        )
+    )
+)
 
-:mingw
-set "CMAKE=cmake.exe"
-set "PATH=%~f1;%PATH%"
-set "CC="
+:: 4. Auto-detect from standard toolchain paths
+if "!COMPILER_BIN!"=="" if exist "C:\llvm-mingw\bin\clang++.exe" set "COMPILER_BIN=C:\llvm-mingw\bin"
+if "!COMPILER_BIN!"=="" if exist "C:\msys64\ucrt64\bin\clang++.exe" set "COMPILER_BIN=C:\msys64\ucrt64\bin"
+if "!COMPILER_BIN!"=="" if exist "C:\msys64\ucrt64\bin\g++.exe" set "COMPILER_BIN=C:\msys64\ucrt64\bin"
+if "!COMPILER_BIN!"=="" if exist "C:\msys64\mingw64\bin\clang++.exe" set "COMPILER_BIN=C:\msys64\mingw64\bin"
+if "!COMPILER_BIN!"=="" if exist "C:\msys64\mingw64\bin\g++.exe" set "COMPILER_BIN=C:\msys64\mingw64\bin"
+if "!COMPILER_BIN!"=="" if exist "%ProgramFiles%\LLVM\bin\clang++.exe" set "COMPILER_BIN=%ProgramFiles%\LLVM\bin"
+
+:: Trim trailing backslash if present
+if "!COMPILER_BIN:~-1!"=="\" set "COMPILER_BIN=!COMPILER_BIN:~0,-1!"
+
+:: 5. Validate compiler
 set "CXX="
+if not "!COMPILER_BIN!"=="" (
+    if exist "!COMPILER_BIN!\clang++.exe" (
+        set "CXX=!COMPILER_BIN!\clang++.exe"
+    ) else if exist "!COMPILER_BIN!\g++.exe" (
+        set "CXX=!COMPILER_BIN!\g++.exe"
+    )
+)
+
+if "!CXX!"=="" (
+    echo [ERROR] No C++20 compiler [clang++ or g++] was found on this system!
+    echo.
+    echo To build QuickDNS, please install LLVM-MinGW or MSYS2:
+    echo   winget install MartinStorsjo.LLVM-MinGW.UCRT
+    echo.
+    echo Or run this script specifying the bin directory:
+    echo   build.bat C:\path\to\llvm-mingw\bin
+    echo ===================================================
+    exit /b 1
+)
+
+:: 6. Locate Resource Compiler (windres / llvm-windres)
 set "RC="
-if exist "%~f1\gcc.exe" set "CC=%~f1\gcc.exe"
-if exist "%~f1\g++.exe" set "CXX=%~f1\g++.exe"
-if exist "%~f1\clang.exe" set "CC=%~f1\clang.exe"
-if exist "%~f1\clang++.exe" set "CXX=%~f1\clang++.exe"
-if exist "%~f1\windres.exe" set "RC=%~f1\windres.exe"
-if exist "%~f1\llvm-windres.exe" set "RC=%~f1\llvm-windres.exe"
-if not defined CC goto missing_toolchain
-if not defined CXX goto missing_toolchain
-if not defined RC goto missing_toolchain
-set "BUILD_DIR=build\mingw"
-set "APP_EXE=%BUILD_DIR%\QuickDNS.exe"
-"%CMAKE%" -S . -B "%BUILD_DIR%" -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CC%" "-DCMAKE_CXX_COMPILER=%CXX%" "-DCMAKE_RC_COMPILER=%RC%"
-if errorlevel 1 exit /b 1
+if exist "!COMPILER_BIN!\windres.exe" (
+    set "RC=!COMPILER_BIN!\windres.exe"
+) else if exist "!COMPILER_BIN!\llvm-windres.exe" (
+    set "RC=!COMPILER_BIN!\llvm-windres.exe"
+) else (
+    for /f "delims=" %%I in ('where windres.exe 2^>nul') do if "!RC!"=="" set "RC=%%I"
+    if "!RC!"=="" for /f "delims=" %%I in ('where llvm-windres.exe 2^>nul') do if "!RC!"=="" set "RC=%%I"
+)
 
-:build
-"%CMAKE%" --build "%BUILD_DIR%" --config Release --parallel 4
-if errorlevel 1 exit /b 1
-copy /y "%APP_EXE%" QuickDNS.exe >nul
-if errorlevel 1 exit /b 1
-echo Built %CD%\QuickDNS.exe
-exit /b 0
+if "!RC!"=="" (
+    echo [ERROR] Resource compiler [windres.exe or llvm-windres.exe] not found!
+    exit /b 1
+)
 
-:missing_toolchain
-echo [ERROR] Expected a C and C++ compiler and windres or llvm-windres in "%~f1".
-exit /b 1
+echo [INFO] Compiler: !CXX!
+echo [INFO] Resource: !RC!
+echo.
+
+set "COMMON_CFLAGS=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wno-unknown-pragmas -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN"
+set "COMMON_LFLAGS=-static -static-libgcc -static-libstdc++"
+
+if not exist "build" mkdir build
+
+echo [1/6] Compiling application icons and resources...
+"!RC!" -I include -I res res\resource.rc -O coff -o build\resource.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Resource compilation failed. & exit /b 1 )
+
+"!RC!" -I include -I res res\resource_diag.rc -O coff -o build\resource_diag.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Diag resource compilation failed. & exit /b 1 )
+
+echo [2/6] Compiling DNS Network Engine, Verifier, Updater and Benchmark...
+"!CXX!" %COMMON_CFLAGS% -I include -c src\dns_manager.cpp -o build\dns_manager.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] DNS manager compilation failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% -I include -c src\dns_benchmark.cpp -o build\dns_benchmark.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] DNS benchmark compilation failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% -I include -c src\smartdns_verifier.cpp -o build\smartdns_verifier.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] SmartDNS verifier compilation failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% -I include -c src\app_updater.cpp -o build\app_updater.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] App updater compilation failed. & exit /b 1 )
+
+echo [3/6] Compiling Config Manager...
+"!CXX!" %COMMON_CFLAGS% -I include -I third_party -c src\config_manager.cpp -o build\config_manager.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Config manager compilation failed. & exit /b 1 )
+
+echo [4/6] Compiling Modern Win32 GUI, Benchmark and Dialogs...
+"!CXX!" %COMMON_CFLAGS% -I include -c src\dialog_add_profile.cpp -o build\dialog_add_profile.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Add Profile Dialog compilation failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% -I include -c src\dialog_benchmark.cpp -o build\dialog_benchmark.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Benchmark Dialog compilation failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% -I include -c src\dialog_smartdns.cpp -o build\dialog_smartdns.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] SmartDNS Dialog compilation failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% -I include -c src\ui_main.cpp -o build\ui_main.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] UI compilation failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% -I include -c src\main.cpp -o build\main.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Main compilation failed. & exit /b 1 )
+
+echo [5/6] Linking QuickDNS.exe with embedded App Icon...
+"!CXX!" %COMMON_CFLAGS% -mwindows -municode %COMMON_LFLAGS% -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dns_benchmark.o build\smartdns_verifier.o build\app_updater.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus -lbcrypt
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking QuickDNS.exe failed. & exit /b 1 )
+if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
+move /Y "%~dp0QuickDNS.exe" "%~dp0QuickDNS.exe.old" >nul 2>&1
+copy /Y build\QuickDNS.exe "%~dp0QuickDNS.exe" >nul
+if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
+
+echo [6/6] Linking Diagnostic tools [test_dns.exe, test_config.exe, test_benchmark.exe, test_smartdns_verifier.exe, test_updater.exe]...
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include tests\test_dns.cpp build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_dns.exe
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_dns.exe failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include -I third_party tests\test_config.cpp build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_config.exe
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_config.exe failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include -I third_party tests\test_benchmark.cpp build\dns_benchmark.o build\dns_manager.o build\config_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_benchmark.exe
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_benchmark.exe failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include -I third_party tests\test_smartdns_verifier.cpp build\smartdns_verifier.o build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -luuid -lole32 -o build\test_smartdns_verifier.exe
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_smartdns_verifier.exe failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include tests\test_updater.cpp build\app_updater.o build\resource_diag.o -lwinhttp -lshell32 -lbcrypt -o build\test_updater.exe
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_updater.exe failed. & exit /b 1 )
+
+echo ===================================================
+echo [SUCCESS] All executables built successfully!
+echo  - Main App:   %~dp0QuickDNS.exe
+echo  - Tests:      %~dp0build\test_dns.exe
+echo                %~dp0build\test_config.exe
+echo                %~dp0build\test_benchmark.exe
+echo                %~dp0build\test_smartdns_verifier.exe
+echo                %~dp0build\test_updater.exe
+echo                %~dp0build\test_smartdns_verifier.exe
+echo ===================================================

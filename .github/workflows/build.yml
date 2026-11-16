@@ -26,7 +26,7 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Configure CMake
-      run: cmake -B build -S . -A x64 -DCMAKE_BUILD_TYPE=Release -DQUICKDNS_EMBED_SING_BOX=ON
+      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
     - name: Build Application & Tests
       run: cmake --build build --config Release
@@ -73,14 +73,12 @@ jobs:
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        name: QuickDNS v2.2.2 - Routing Multiple Apps and Sign-In Browser
+        name: QuickDNS v2.1.0 - AI Services Availability Checker (ChatGPT, Claude, Gemini, Copilot) & Direct TLS/DNS Probing
         body_path: artifacts/RELEASE_NOTES.md
         files: |
           artifacts/QuickDNS.exe
           artifacts/QuickDNS.exe.sha256
           artifacts/*.zip
         generate_release_notes: false
-        fail_on_unmatched_files: true
-        make_latest: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

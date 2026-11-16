@@ -15,7 +15,7 @@ if (-not $Version) {
 }
 
 if (-not $Version) {
-    $Version = "2.2.2"
+    $Version = "2.1.0"
 }
 
 $distDir = Join-Path $rootDir "dist\QuickDNS"
@@ -34,8 +34,8 @@ Copy-Item -Path (Join-Path $rootDir "README.txt") -Destination (Join-Path $distD
 if (Test-Path (Join-Path $rootDir "README.md")) {
     Copy-Item -Path (Join-Path $rootDir "README.md") -Destination (Join-Path $distDir "README.md") -Force
 }
-foreach ($license in @("LICENSE", "LICENSE-MIT")) {
-    Copy-Item -LiteralPath (Join-Path $rootDir $license) -Destination $distDir -Force -ErrorAction Stop
+if (Test-Path (Join-Path $rootDir "LICENSE")) {
+    Copy-Item -Path (Join-Path $rootDir "LICENSE") -Destination (Join-Path $distDir "LICENSE") -Force
 }
 
 $zipPath = Join-Path $rootDir "dist\QuickDNS-v$Version-Portable.zip"
