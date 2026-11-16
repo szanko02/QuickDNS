@@ -73,12 +73,14 @@ jobs:
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        name: QuickDNS v2.2.0 - Experimental Application and Subnet Routing
+        name: QuickDNS v2.2.1 - ChatGPT Split DNS and Built-in Routing Engine
         body_path: artifacts/RELEASE_NOTES.md
         files: |
           artifacts/QuickDNS.exe
           artifacts/QuickDNS.exe.sha256
           artifacts/*.zip
         generate_release_notes: false
+        fail_on_unmatched_files: true
+        make_latest: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
