@@ -5,9 +5,11 @@
 
 namespace quickdns {
 bool has_embedded_routing_engine();
+std::wstring new_split_routing_tun_alias();
 std::string make_split_routing_config(const RoutingAdapter& primary, const RoutingAdapter& secondary,
                                       const std::filesystem::path& app, bool package_directory,
-                                      const std::filesystem::path& log, const std::wstring& package_family = {});
+                                      const std::filesystem::path& log, const std::wstring& package_family = {},
+                                      const std::wstring& tun_alias = L"QuickDNS TUN");
 
 class SplitRoutingSession {
 public:
@@ -31,5 +33,6 @@ private:
     std::filesystem::path config_;
     std::filesystem::path log_;
     std::filesystem::path embedded_directory_;
+    std::wstring tun_alias_;
 };
 }

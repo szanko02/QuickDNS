@@ -23,13 +23,8 @@ $processNames = @('QuickDNS*', 'sing-box', 'codex', 'ChatGPT', 'OpenAI.Codex') +
 try {
     while ($clock.Elapsed.TotalSeconds -lt $DurationSeconds -and !(Test-Path -LiteralPath $stop)) {
         $time = Get-Date -Format o
-        $dnsClientId = $null
-        foreach ($line in (sc.exe queryex Dnscache)) {
-            if ($line -match '^\s*PID\s*:\s*([1-9][0-9]*)\s*$') {
-                $dnsClientId = [int]$Matches[1]
-                break
-            }
-        }
+        $dnsService = Get-CimInstance -ClassName Win32_Service -Filter "Name = 'Dnscache'"
+        $dnsClientId = if ($dnsService.ProcessId -gt 0) { [int]$dnsService.ProcessId }
         $matchedProcesses = @(Get-Process -Name $processNames -ErrorAction SilentlyContinue)
         if ($null -ne $dnsClientId) {
             $matchedProcesses += @(Get-Process -Id $dnsClientId -ErrorAction SilentlyContinue)

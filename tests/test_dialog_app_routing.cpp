@@ -4,26 +4,75 @@
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <shlobj.h>
+#include <shellapi.h>
+#include <algorithm>
+#include <cwchar>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 using namespace quickdns;
 static void check(bool ok, const char* msg) { if (!ok) throw std::runtime_error(msg); }
 int main() {
+    if (int count = 0; auto args = CommandLineToArgvW(GetCommandLineW(), &count)) {
+        if (count == 3 && std::wstring_view(args[1]) == L"--stop-live-engine") {
+            const auto pid = std::wcstoul(args[2], nullptr, 10);
+            LocalFree(args);
+            if (!pid) return 1;
+            FreeConsole();
+            if (!AttachConsole(pid)) return 1;
+            SetConsoleCtrlHandler(nullptr, TRUE);
+            const bool signalled = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) != FALSE;
+            FreeConsole();
+            return signalled ? 0 : 1;
+        }
+        if ((count == 7 || count == 8) && std::wstring_view(args[1]) == L"--write-live-config") {
+            const std::wstring primary_name = args[2], secondary_name = args[3];
+            const std::filesystem::path app = args[4], output = args[5], log = args[6];
+            const std::wstring package_family = count == 8 ? args[7] : L"";
+            LocalFree(args);
+            const auto adapters = enumerate_routing_adapters();
+            const auto find_adapter = [&](const std::wstring& name) {
+                return std::find_if(adapters.begin(), adapters.end(), [&](const RoutingAdapter& adapter) {
+                    return adapter.connected && adapter.name == name;
+                });
+            };
+            const auto primary = find_adapter(primary_name), secondary = find_adapter(secondary_name);
+            if (primary == adapters.end() || secondary == adapters.end() || primary == secondary) {
+                std::cerr << "Specify two distinct connected adapters.\n";
+                return 1;
+            }
+            const auto alias = new_split_routing_tun_alias();
+            if (alias.empty()) return 1;
+            auto config = nlohmann::json::parse(make_split_routing_config(
+                *primary, *secondary, app, !package_family.empty(), log, package_family, alias));
+            config["log"]["level"] = "debug";
+            std::ofstream stream(output, std::ios::binary);
+            stream << config.dump(2);
+            stream.close();
+            return stream ? 0 : 1;
+        }
+        LocalFree(args);
+    }
     const auto path = std::filesystem::temp_directory_path() / (L"quickdns_dialog_" + std::to_wstring(GetCurrentProcessId()) + L".json");
     std::filesystem::remove(path);
     try {
+        const auto alias = new_split_routing_tun_alias();
+        check(alias.starts_with(L"QuickDNS TUN ") && alias != new_split_routing_tun_alias(),
+              "TUN aliases must be unique across sessions");
         PWSTR local_app_data = nullptr;
         check(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local_app_data)),
               "local AppData is unavailable");
         const auto bin = std::filesystem::path(local_app_data) / "OpenAI" / "Codex" / "bin";
         CoTaskMemFree(local_app_data);
-        const auto config = [](const std::wstring& family) {
+        const auto config = [&](const std::wstring& family) {
             RoutingAdapter primary, secondary;
             primary.ipv4_dns = {L"10.6.1.11"};
             secondary.ipv4_dns = {L"143.20.64.55", L"10.6.1.11"};
-            return nlohmann::json::parse(make_split_routing_config(primary, secondary, LR"(C:\WindowsApps\Test)", true, {}, family));
+            return nlohmann::json::parse(make_split_routing_config(primary, secondary, LR"(C:\WindowsApps\Test)", true, {}, family, alias));
         };
         const auto codex = config(L"OpenAI.Codex_2p2nqsd0c76g0");
+        check(codex["inbounds"][0]["interface_name"] == QuickDns::Encoding::wide_to_utf8(alias),
+              "TUN config does not use the session alias");
         check(codex["inbounds"][0]["dns_mode"] == "disabled", "TUN replaces adapter DNS");
         const auto& doh = codex["route"]["rules"][1];
         check(doh.contains("ip_cidr") && doh["ip_cidr"] == nlohmann::json::array({"143.20.64.55/32"}) &&

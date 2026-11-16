@@ -189,7 +189,7 @@ target_include_directories(test_app_guard_journal PRIVATE include third_party)
 target_link_libraries(test_app_guard_journal PRIVATE ole32)
 add_test(NAME TestAppGuardJournal COMMAND test_app_guard_journal)
 
-add_executable(test_dialog_app_routing tests/test_dialog_app_routing.cpp src/dialog_app_routing.cpp src/routing_installed_packages.cpp src/app_routing_config.cpp)
+add_executable(test_dialog_app_routing tests/test_dialog_app_routing.cpp src/dialog_app_routing.cpp src/routing_installed_packages.cpp src/app_routing_config.cpp src/routing_adapters.cpp)
 target_include_directories(test_dialog_app_routing PRIVATE include third_party)
 target_link_libraries(test_dialog_app_routing PRIVATE quickdns_core ${WIN32_LIBS})
 add_test(NAME TestDialogAppRouting COMMAND test_dialog_app_routing)

@@ -12,12 +12,25 @@
 namespace quickdns {
 namespace {
 using nlohmann::json;
-constexpr wchar_t tun_alias[] = L"QuickDNS TUN";
+constexpr std::wstring_view tun_alias_prefix = L"QuickDNS TUN";
 
-bool tun_is_up() {
+bool tun_is_up(const std::wstring& alias) {
     MIB_IF_ROW2 adapter{};
-    return ConvertInterfaceAliasToLuid(tun_alias, &adapter.InterfaceLuid) == NO_ERROR &&
+    return ConvertInterfaceAliasToLuid(alias.c_str(), &adapter.InterfaceLuid) == NO_ERROR &&
            GetIfEntry2(&adapter) == NO_ERROR && adapter.OperStatus == IfOperStatusUp;
+}
+
+bool has_active_quickdns_tun() {
+    MIB_IF_TABLE2* table = nullptr;
+    if (GetIfTable2(&table) != NO_ERROR) return false;
+    const bool active = std::any_of(table->Table, table->Table + table->NumEntries, [](const MIB_IF_ROW2& adapter) {
+        const std::wstring_view alias(adapter.Alias);
+        return adapter.OperStatus == IfOperStatusUp &&
+               (alias == tun_alias_prefix ||
+                (alias.starts_with(tun_alias_prefix) && alias[tun_alias_prefix.size()] == L' '));
+    });
+    FreeMibTable(table);
+    return active;
 }
 
 HRSRC embedded_engine() {
@@ -86,9 +99,19 @@ std::filesystem::path temp_file() {
 
 bool has_embedded_routing_engine() { return embedded_engine() != nullptr; }
 
+std::wstring new_split_routing_tun_alias() {
+    // sing-tun derives the Wintun device GUID from its alias. A previous device
+    // can still be pending removal after a forced engine exit.
+    GUID id{};
+    wchar_t name[40]{};
+    if (FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, name, 40)) return {};
+    return std::wstring(tun_alias_prefix) + L" " + name;
+}
+
 std::string make_split_routing_config(const RoutingAdapter& primary, const RoutingAdapter& secondary,
                                       const std::filesystem::path& app, bool package_directory,
-                                      const std::filesystem::path& log, const std::wstring& package_family) {
+                                      const std::filesystem::path& log, const std::wstring& package_family,
+                                      const std::wstring& tun_alias) {
     const json tun = {
         {"type", "tun"}, {"tag", "quickdns-tun"}, {"interface_name", QuickDns::Encoding::wide_to_utf8(tun_alias)},
         {"address", {"172.19.0.1/30", "fdfe:dcba:9876::1/126"}},
@@ -151,7 +174,7 @@ bool SplitRoutingSession::running() const {
 
 std::wstring SplitRoutingSession::status() const {
     if (running()) {
-        if (tun_is_up())
+        if (tun_is_up(tun_alias_))
             return L"sing-box и TUN запущены. Проверьте маршрут приложения.";
         return L"sing-box запущен. Ожидание адаптера TUN.";
     }
@@ -176,6 +199,7 @@ void SplitRoutingSession::stop() {
     if (job_) CloseHandle(job_);
     if (process_) CloseHandle(process_);
     job_ = process_ = nullptr;
+    tun_alias_.clear();
     if (!config_.empty()) DeleteFileW(config_.c_str());
     if (!log_.empty()) DeleteFileW(log_.c_str());
     config_.clear();
@@ -196,7 +220,7 @@ std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_en
         primary.name.empty() || secondary.name.empty())
         return L"Выберите два разных подключённых адаптера.";
 
-    if (tun_is_up())
+    if (has_active_quickdns_tun())
         return L"Адаптер QuickDNS TUN активен. Проверьте запущенные сеансы.";
 
     std::error_code ec;
@@ -228,9 +252,14 @@ std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_en
         return error;
     }
 
+    tun_alias_ = new_split_routing_tun_alias();
+    if (tun_alias_.empty()) {
+        stop();
+        return L"Не удалось создать имя адаптера TUN.";
+    }
     {
         std::ofstream out(config_, std::ios::binary);
-        out << make_split_routing_config(primary, secondary, app, package_directory, log_, package_family);
+        out << make_split_routing_config(primary, secondary, app, package_directory, log_, package_family, tun_alias_);
         out.close();
         if (!out) {
             stop();
