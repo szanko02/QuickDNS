@@ -29,7 +29,7 @@ BEGIN
             VALUE "FileDescription",  "QuickDNS - Fast DNS Switcher for Windows"
             VALUE "FileVersion",      "2.2.0"
             VALUE "InternalName",     "QuickDNS"
-            VALUE "LegalCopyright",   "MIT License"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Stanislav (sweety)"
             VALUE "OriginalFilename", "QuickDNS.exe"
             VALUE "ProductName",      "QuickDNS"
             VALUE "ProductVersion",   "2.2.0"

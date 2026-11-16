@@ -262,10 +262,15 @@ void AppRoutingDialog::update_adapter_dns(int adapter_control, int dns_control) 
 }
 
 void AppRoutingDialog::create_split_controls() {
-    control(window_, L"STATIC", L"Путь к sing-box.exe", 0, 29, 413, 526, 20);
-    control(window_, L"EDIT", split_routing_->engine.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-            29, 435, 526, 25, SplitEngine);
-    control(window_, L"BUTTON", L"Обзор…", BS_PUSHBUTTON | WS_TABSTOP, 565, 435, 112, 26, SplitBrowse);
+    if (has_embedded_routing_engine()) {
+        control(window_, L"STATIC", L"Движок маршрутизации встроен в QuickDNS.",
+                0, 29, 435, 526, 25, SplitEngine);
+    } else {
+        control(window_, L"STATIC", L"Путь к sing-box.exe", 0, 29, 413, 526, 20);
+        control(window_, L"EDIT", split_routing_->engine.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+                29, 435, 526, 25, SplitEngine);
+        control(window_, L"BUTTON", L"Обзор…", BS_PUSHBUTTON | WS_TABSTOP, 565, 435, 112, 26, SplitBrowse);
+    }
     control(window_, L"BUTTON", L"Запустить", BS_PUSHBUTTON | WS_TABSTOP, 435, 511, 120, 30, SplitStart);
     control(window_, L"BUTTON", L"Остановить", BS_PUSHBUTTON | WS_TABSTOP, 565, 511, 112, 30, SplitStop);
     control(window_, L"STATIC", L"Экспериментальный режим. Строгая изоляция недоступна.",
@@ -312,9 +317,9 @@ void AppRoutingDialog::start_split() {
     }
 
     const bool package_directory = !rule.package_family.empty();
+    const auto family = QuickDns::Encoding::utf8_to_wide(rule.package_family);
     std::wstring path;
     if (package_directory) {
-        const auto family = QuickDns::Encoding::utf8_to_wide(rule.package_family);
         const auto installed = enumerate_installed_packages();
         const auto package = std::find_if(installed.begin(), installed.end(), [&](const auto& p) {
             return CompareStringOrdinal(p.family.c_str(), -1, family.c_str(), -1, TRUE) == CSTR_EQUAL;
@@ -328,17 +333,19 @@ void AppRoutingDialog::start_split() {
         path = QuickDns::Encoding::utf8_to_wide(rule.application_path);
     }
 
-    const auto engine = text(get(SplitEngine));
-    if (engine.empty()) {
+    const bool embedded = has_embedded_routing_engine();
+    const auto engine = embedded ? std::wstring{} : text(get(SplitEngine));
+    if (!embedded && engine.empty()) {
         set_error(L"Выберите sing-box.exe.");
         return;
     }
-    if (MessageBoxW(window_, L"Запустить выбранный sing-box.exe с правами администратора? "
+    if (MessageBoxW(window_, embedded ? L"Запустить встроенный движок? Он создаст TUN и изменит маршруты Windows для этого сеанса."
+                            : L"Запустить выбранный sing-box.exe с правами администратора? "
                               L"Он создаст TUN и изменит маршруты Windows для этого сеанса. "
                               L"Проверьте происхождение файла. Полная изоляция трафика не гарантируется.",
                     L"QuickDNS", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
     const auto result = split_routing_->start(engine, adapters_[static_cast<size_t>(selected_primary)],
-                                              *secondary, path, package_directory);
+                                              *secondary, path, package_directory, family);
     if (result.empty()) refresh_split_status();
     else set_error(result.c_str());
 }
@@ -382,7 +389,7 @@ LRESULT AppRoutingDialog::dispatch(UINT msg, WPARAM wp, LPARAM lp) {
         SendMessageW(kind, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Файл EXE"));
         SendMessageW(kind, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Семейство MSIX"));
         SendMessageW(kind, CB_SETCURSEL, 0, 0);
-        control(window_, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP,
+        control(window_, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
                 213, 48 + offset, 464, 180, RoutingPackages);
         control(window_, L"STATIC", L"Путь EXE или имя семейства пакета", 0, 29, 82 + offset, 510, 20);
         control(window_, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
@@ -461,7 +468,11 @@ LRESULT AppRoutingDialog::dispatch(UINT msg, WPARAM wp, LPARAM lp) {
                 HWND packages = get(RoutingPackages);
                 SendMessageW(packages, CB_RESETCONTENT, 0, 0);
                 for (const auto& package : *packages_) {
-                    const std::wstring label = package.name + L" — " + package.family;
+                    // The OpenAI.Codex MSIX ships an executable named ChatGPT.exe.
+                    const bool openai_codex = CompareStringOrdinal(package.family.c_str(), -1,
+                        L"OpenAI.Codex_2p2nqsd0c76g0", -1, TRUE) == CSTR_EQUAL;
+                    const std::wstring label = (openai_codex ? L"ChatGPT.exe (" + package.name + L")"
+                                                             : package.name) + L" — " + package.family;
                     SendMessageW(packages, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
                 }
             }

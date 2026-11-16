@@ -11,12 +11,12 @@
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=for-the-badge&logo=windows)](https://github.com/szanko02/QuickDNS)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?style=for-the-badge&logo=c%2B%2B)](https://github.com/szanko02/QuickDNS)
 [![Architecture](https://img.shields.io/badge/Arch-x64%20Native-informational?style=for-the-badge)](https://github.com/szanko02/QuickDNS)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-green.svg?style=for-the-badge)](LICENSE)
 
 <br/>
 
 ### [Скачать последний релиз (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
-> QuickDNS работает без установки. Экспериментальная маршрутизация приложений требует отдельно скачанный sing-box; он не входит в архив QuickDNS.
+> QuickDNS работает без установки. В новых сборках со встроенным движком для маршрутизации приложений достаточно одного QuickDNS.exe. В v2.2.0 и сборках без встроенного движка sing-box выбирается вручную.
 
 </div>
 
@@ -107,6 +107,8 @@ QuickDNS автоматизирует этот процесс:
 
 ### Приложения через sing-box
 
+В сборке со встроенным движком QuickDNS автоматически запускает его при нажатии **Запустить**. Шаг скачивания sing-box и указание пути нужны только для v2.2.0 и сборок без встроенного движка.
+
 Пример настройки для настольного ChatGPT через USB-модем и остальных приложений через Wi-Fi. Подключите обе сети до запуска сеанса. Если в QuickDNS активны маршруты по подсетям, удалите их на вкладке **Подсети** перед запуском sing-box.
 
 1. Скачайте архив Windows x64 из [проверенного релиза sing-box 1.14.4](https://github.com/SagerNet/sing-box/releases/tag/v1.14.4) и распакуйте его в отдельную папку.
@@ -137,7 +139,7 @@ TUN — виртуальный сетевой адаптер, через кот�
 
 <details>
 <summary><b>Нужно ли устанавливать дополнительные библиотеки (.NET, Visual C++ Redistributable)?</b></summary>
-Для основных функций DNS устанавливать .NET или Visual C++ Redistributable не требуется: C++ Runtime подключён статически. Для экспериментальной маршрутизации приложений нужен отдельно скачанный sing-box; он не входит в Portable ZIP.
+Для запуска QuickDNS устанавливать .NET или Visual C++ Redistributable не требуется. Сборка со встроенным движком содержит sing-box в самом QuickDNS.exe.
 </details>
 
 <details>
@@ -217,6 +219,8 @@ ctest --test-dir build -C Release --output-on-failure -LE network
 
 ## Лицензия
 
-Проект распространяется под лицензией **[MIT](LICENSE)**.  
-Автор: **Stanislav (sweety)**.  
-Вы можете свободно использовать, модифицировать и распространять его.
+Новые версии QuickDNS распространяются на условиях **[GPL‑3.0‑or‑later](LICENSE)** (GNU GPL версии 3 или любой более поздней версии). Исходный код, ранее опубликованный под MIT, по-прежнему доступен на условиях MIT. Уведомление об авторских правах и текст прежней лицензии сохранены в [LICENSE-MIT](LICENSE-MIT).
+
+При распространении сборки предоставляйте соответствующие ей исходники, включая необходимые файлы сборки. Сторонние компоненты сохраняют собственные лицензии.
+
+Встроенный движок поставляется в неизменённом виде из [релиза sing-box v1.14.4](https://github.com/SagerNet/sing-box/releases/tag/v1.14.4). [Исходный код и лицензия движка](https://github.com/SagerNet/sing-box/tree/v1.14.4). Для локальной сборки с ним добавьте `-DQUICKDNS_EMBED_SING_BOX=ON` при настройке CMake.

@@ -98,6 +98,22 @@ set(APP_SOURCES
 )
 
 add_executable(QuickDNS WIN32 ${APP_SOURCES})
+option(QUICKDNS_EMBED_SING_BOX "Include the pinned Windows x64 routing engine" OFF)
+if(QUICKDNS_EMBED_SING_BOX)
+    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SYSTEM_PROCESSOR MATCHES "^[Aa][Rr][Mm]")
+        message(FATAL_ERROR "The embedded routing engine requires Windows x64")
+    endif()
+    set(engine_dir "${CMAKE_CURRENT_BINARY_DIR}/routing-engine")
+    set(engine_rc "${engine_dir}/embedded_engine.rc")
+    set(engine_exe "${engine_dir}/sing-box.exe")
+    add_custom_command(OUTPUT "${engine_rc}" "${engine_exe}"
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_engine.ps1" "${engine_dir}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_engine.ps1"
+        VERBATIM)
+    set_source_files_properties("${engine_rc}" PROPERTIES OBJECT_DEPENDS "${engine_exe}")
+    target_sources(QuickDNS PRIVATE "${engine_rc}")
+endif()
 target_include_directories(QuickDNS PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
