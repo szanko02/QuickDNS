@@ -1,17 +1,19 @@
-### QuickDNS v2.2.2
+### QuickDNS v2.2.3
 
-QuickDNS can now route several applications through the same secondary network adapter in one session. This lets the desktop ChatGPT app and its sign-in browser use the secondary network together.
+The default Windows x64 executable is compact again. Routing support is available with sing-box next to QuickDNS.exe or with a separate self-contained build.
 
-- **Multiple application rules:** Select several EXE or MSIX rules for the same secondary adapter. The TUN session routes all selected processes through it.
-- **Browser sign-in:** Route the desktop app and the browser that opens its sign-in link through the same adapter. Keep a separate browser executable for work traffic on the primary network.
-- **Split DNS:** ChatGPT domains use the secondary DNS and other names use the primary DNS when split DNS is enabled.
-
-**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v2.2.1...v2.2.2
+- **Default executable and updates:** QuickDNS.exe and QuickDNS.exe.sha256 refer to the build without an embedded engine. Automatic updates install that build.
+- **Portable ZIP:** Extract both executables into the same folder. QuickDNS preselects the adjacent sing-box.exe when no other engine path has been chosen.
+- **Embedded edition:** QuickDNS-Embedded.exe includes sing-box 1.14.4 and has a separate SHA-256 file. Download it manually if you prefer a single executable.
+- **Updating from an embedded release:** Before updating, extract sing-box.exe from the new Portable ZIP into the folder containing QuickDNS.exe if you want to continue using routing after the update.
 
 ---
 
 #### Описание изменений (Русский)
 
-- **Несколько приложений:** можно выбрать несколько правил EXE или MSIX для одного второго адаптера и запустить один сеанс.
-- **Вход в ChatGPT:** приложение и браузер, открывающий страницу входа, могут одновременно использовать вторую сеть. Для корпоративного браузера нужен отдельный EXE.
-- **Раздельный DNS:** при включённом режиме домены ChatGPT используют второй DNS, остальные имена — основной.
+- **Основная сборка:** QuickDNS.exe без встроенного движка используется и для автообновления.
+- **Portable ZIP:** sing-box.exe лежит рядом с QuickDNS.exe и подставляется в поле пути при открытии маршрутизации.
+- **Дополнительная сборка:** QuickDNS-Embedded.exe содержит sing-box и скачивается вручную.
+- **Переход со встроенной сборки:** перед автообновлением распакуйте sing-box.exe из нового Portable ZIP рядом с вашим QuickDNS.exe, чтобы сохранить возможность запуска маршрутизации.
+
+**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v2.2.2...v2.2.3

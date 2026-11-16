@@ -140,6 +140,16 @@ int main() {
             SplitRoutingSession session;
             AppRoutingDialog split_dialog(path, {adapter}, std::vector<InstalledPackage>{}, nullptr, &session);
             check(split_dialog.create(GetModuleHandleW(nullptr)), "split routing dialog failed to initialize");
+            wchar_t expected_engine[32768]{};
+            const auto expected_length = GetEnvironmentVariableW(
+                L"QUICKDNS_EXPECT_COLOCATED_ENGINE", expected_engine, static_cast<DWORD>(std::size(expected_engine)));
+            if (expected_length && expected_length < std::size(expected_engine)) {
+                wchar_t engine_path[32768]{};
+                GetWindowTextW(GetDlgItem(split_dialog.window(), SplitEngine),
+                               engine_path, static_cast<int>(std::size(engine_path)));
+                check(std::filesystem::path(engine_path) == std::filesystem::path(expected_engine),
+                      "the EXE did not preselect the adjacent sing-box.exe");
+            }
             const HWND list = GetDlgItem(split_dialog.window(), RoutingList);
             check((GetWindowLongPtrW(list, GWL_STYLE) & LBS_EXTENDEDSEL) != 0,
                   "the live routing list must support multiple selection");

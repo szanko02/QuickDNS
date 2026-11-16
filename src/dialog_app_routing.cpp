@@ -21,6 +21,16 @@ std::wstring text(HWND control) {
     return value;
 }
 
+std::filesystem::path colocated_engine() {
+    std::wstring executable(32768, L'\0');
+    const auto length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    if (!length || length >= executable.size()) return {};
+    executable.resize(length);
+    const auto engine = std::filesystem::path(executable).parent_path() / L"sing-box.exe";
+    std::error_code error;
+    return std::filesystem::is_regular_file(engine, error) ? engine : std::filesystem::path{};
+}
+
 std::vector<int> selected_rules(HWND list, bool multiple) {
     if (!multiple) {
         const auto index = SendMessageW(list, LB_GETCURSEL, 0, 0);
@@ -286,7 +296,8 @@ void AppRoutingDialog::create_split_controls() {
                 0, 29, 435, 526, 25, SplitEngine);
     } else {
         control(window_, L"STATIC", L"Путь к sing-box.exe", 0, 29, 413, 526, 20);
-        control(window_, L"EDIT", split_routing_->engine.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+        const auto engine = split_routing_->engine.empty() ? colocated_engine() : split_routing_->engine;
+        control(window_, L"EDIT", engine.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
                 29, 435, 526, 25, SplitEngine);
         control(window_, L"BUTTON", L"Обзор…", BS_PUSHBUTTON | WS_TABSTOP, 565, 435, 112, 26, SplitBrowse);
     }

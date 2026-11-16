@@ -26,24 +26,35 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Configure CMake
-      run: cmake -B build -S . -A x64 -DCMAKE_BUILD_TYPE=Release -DQUICKDNS_EMBED_SING_BOX=ON
+      run: |
+        cmake -B build -S . -A x64 -DCMAKE_BUILD_TYPE=Release -DQUICKDNS_EMBED_SING_BOX=OFF
+        cmake -B build-embedded -S . -A x64 -DCMAKE_BUILD_TYPE=Release -DQUICKDNS_EMBED_SING_BOX=ON
 
     - name: Build Application & Tests
-      run: cmake --build build --config Release
+      run: cmake --build build --config Release --parallel 4
+
+    - name: Build Optional Embedded Edition
+      run: cmake --build build-embedded --config Release --target QuickDNS --parallel 4
 
     - name: Run Unit Tests (Exclude Live Network Tests)
       working-directory: build
-      run: ctest -C Release --output-on-failure -LE network
+      shell: pwsh
+      run: |
+        Copy-Item -LiteralPath ../build-embedded/routing-engine/sing-box.exe -Destination Release/sing-box.exe
+        $env:QUICKDNS_EXPECT_COLOCATED_ENGINE = (Resolve-Path Release/sing-box.exe).Path
+        ctest -C Release --output-on-failure -LE network
 
     - name: Package Release
       shell: pwsh
       run: |
-        Copy-Item -Path build/Release/QuickDNS.exe -Destination QuickDNS.exe -Force
-        (Get-FileHash build/Release/QuickDNS.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline QuickDNS.exe.sha256
-        ./scripts/package_release.ps1
+        ./scripts/package_release.ps1 -Executable build/Release/QuickDNS.exe -RoutingEngine build-embedded/routing-engine/sing-box.exe
         New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
-        Copy-Item -Path QuickDNS.exe -Destination release-artifacts/QuickDNS.exe -Force
-        Copy-Item -Path QuickDNS.exe.sha256 -Destination release-artifacts/QuickDNS.exe.sha256 -Force
+        Copy-Item -Path build/Release/QuickDNS.exe -Destination release-artifacts/QuickDNS.exe -Force
+        Copy-Item -Path build-embedded/Release/QuickDNS.exe -Destination release-artifacts/QuickDNS-Embedded.exe -Force
+        foreach ($name in 'QuickDNS.exe', 'QuickDNS-Embedded.exe') {
+            $path = Join-Path release-artifacts $name
+            (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() | Out-File -Encoding ascii -NoNewline "$path.sha256"
+        }
         Copy-Item -Path dist/*.zip -Destination release-artifacts/ -Force
         Copy-Item -Path RELEASE_NOTES.md -Destination release-artifacts/RELEASE_NOTES.md -Force
 
@@ -73,11 +84,13 @@ jobs:
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        name: QuickDNS v2.2.2 - Routing Multiple Apps and Sign-In Browser
+        name: QuickDNS v2.2.3 - Compact Executable and Optional Embedded Routing Engine
         body_path: artifacts/RELEASE_NOTES.md
         files: |
           artifacts/QuickDNS.exe
           artifacts/QuickDNS.exe.sha256
+          artifacts/QuickDNS-Embedded.exe
+          artifacts/QuickDNS-Embedded.exe.sha256
           artifacts/*.zip
         generate_release_notes: false
         fail_on_unmatched_files: true
