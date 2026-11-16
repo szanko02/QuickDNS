@@ -7,6 +7,7 @@ param(
     [string] $DisconnectAdapter,
     [switch] $CheckCodex,
     [switch] $CheckSplitDns,
+    [switch] $CheckMultipleApps,
     [string] $SecondDnsAdapter,
     [string] $PrimaryDnsProbeDomain = 'example.com'
 )
@@ -33,6 +34,9 @@ if ($CheckSplitDns) {
 } elseif (!$LocalAdapter) {
     throw 'Specify -LocalAdapter for the application routing tests.'
 }
+if ($CheckMultipleApps -and ($CheckCodex -or $CheckSplitDns)) {
+    throw 'Run -CheckMultipleApps separately from -CheckCodex and -CheckSplitDns.'
+}
 
 $build = (Resolve-Path -LiteralPath $BuildDirectory).Path
 $generator = Get-ChildItem -LiteralPath $build -Filter test_dialog_app_routing.exe -Recurse |
@@ -47,6 +51,8 @@ $control = Join-Path $work 'control.exe'
 $curl = Join-Path ([Environment]::SystemDirectory) 'curl.exe'
 Copy-Item -LiteralPath $curl -Destination $target
 Copy-Item -LiteralPath $curl -Destination $control
+$authBrowser = Join-Path $work 'auth-browser.exe'
+if ($CheckMultipleApps) { Copy-Item -LiteralPath $curl -Destination $authBrowser }
 
 function Invoke-Probe($Executable, $Label, $PinnedAddress) {
     $arguments = @('-q', '-4', '--noproxy', '*', '--silent', '--show-error', '--fail',
@@ -138,6 +144,8 @@ foreach ($case in $cases) {
         & $generator --write-live-config $case.primary $case.secondary $package $config $log 'OpenAI.Codex_2p2nqsd0c76g0'
     } elseif ($phase -eq 'split-dns') {
         & $generator --write-live-dns-config $case.primary $case.secondary $target $config $log
+    } elseif ($CheckMultipleApps) {
+        & $generator --write-live-multi-config $case.primary $case.secondary $target $config $log $authBrowser
     } else {
         & $generator --write-live-config $case.primary $case.secondary $target $config $log
     }
@@ -171,9 +179,13 @@ foreach ($case in $cases) {
         }
         $ordinary = Invoke-Probe $control "$phase-control-ip" $baseline.remote
         $named = if ($case.target -and !$isCodex) { Invoke-Probe $target "$phase-target-name" }
+        $authRoute = if ($CheckMultipleApps) {
+            (Invoke-Probe $authBrowser "$phase-auth-browser-ip" $baseline.remote).exitCode -eq 0
+        }
 
         if ($selected -ne $case.target -or
             ($ordinary.exitCode -eq 0) -ne $case.control -or
+            ($CheckMultipleApps -and $authRoute -ne $case.target) -or
             ($null -ne $named -and $named.exitCode -ne 0)) {
             $failed++
             continue
@@ -188,6 +200,10 @@ foreach ($case in $cases) {
                 } else {
                     (Invoke-Probe $target "$phase-target-offline" $baseline.remote).exitCode -ne 0
                 }
+                if ($CheckMultipleApps) {
+                    $browserBlocked = (Invoke-Probe $authBrowser "$phase-auth-browser-offline" $baseline.remote).exitCode -ne 0
+                    $blocked = $blocked -and $browserBlocked
+                }
                 $available = Invoke-Probe $control "$phase-control-online" $baseline.remote
                 if (!$blocked -or $available.exitCode -ne 0 -or $process.HasExited) { $failed++ }
             } finally {
@@ -199,6 +215,9 @@ foreach ($case in $cases) {
                     Invoke-CodexProbe "$phase-target-restored"
                 } else {
                     (Invoke-Probe $target "$phase-target-restored" $baseline.remote).exitCode -eq 0
+                }
+                if ($restored -and $CheckMultipleApps) {
+                    $restored = (Invoke-Probe $authBrowser "$phase-auth-browser-restored" $baseline.remote).exitCode -eq 0
                 }
                 if ($restored) { break }
                 Start-Sleep -Seconds 1

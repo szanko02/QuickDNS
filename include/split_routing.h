@@ -2,13 +2,18 @@
 
 #include "routing_adapters.h"
 #include <filesystem>
+#include <span>
 
 namespace quickdns {
 bool has_embedded_routing_engine();
 std::wstring new_split_routing_tun_alias();
+struct SplitRoutingTarget {
+    std::filesystem::path path;
+    std::wstring package_family;
+};
+
 std::string make_split_routing_config(const RoutingAdapter& primary, const RoutingAdapter& secondary,
-                                      const std::filesystem::path& app, bool package_directory,
-                                      const std::filesystem::path& log, const std::wstring& package_family = {},
+                                      std::span<const SplitRoutingTarget> targets, const std::filesystem::path& log,
                                       const std::wstring& tun_alias = L"QuickDNS TUN", bool split_dns = false);
 
 class SplitRoutingSession {
@@ -19,8 +24,8 @@ public:
     SplitRoutingSession& operator=(const SplitRoutingSession&) = delete;
 
     std::wstring start(const std::filesystem::path& engine, const RoutingAdapter& primary,
-                       const RoutingAdapter& secondary, const std::filesystem::path& app,
-                       bool package_directory, const std::wstring& package_family = {}, bool split_dns = false);
+                       const RoutingAdapter& secondary, std::span<const SplitRoutingTarget> targets,
+                       bool split_dns = false);
     void stop();
     bool running() const;
     std::wstring status() const;

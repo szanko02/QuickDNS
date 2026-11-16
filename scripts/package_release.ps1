@@ -15,7 +15,7 @@ if (-not $Version) {
 }
 
 if (-not $Version) {
-    $Version = "2.2.1"
+    $Version = "2.2.2"
 }
 
 $distDir = Join-Path $rootDir "dist\QuickDNS"

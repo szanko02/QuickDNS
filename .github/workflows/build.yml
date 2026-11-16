@@ -73,7 +73,7 @@ jobs:
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        name: QuickDNS v2.2.1 - ChatGPT Split DNS and Built-in Routing Engine
+        name: QuickDNS v2.2.2 - Routing Multiple Apps and Sign-In Browser
         body_path: artifacts/RELEASE_NOTES.md
         files: |
           artifacts/QuickDNS.exe

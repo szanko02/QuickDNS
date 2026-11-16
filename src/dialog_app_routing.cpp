@@ -20,6 +20,25 @@ std::wstring text(HWND control) {
     value.resize(static_cast<size_t>(GetWindowTextW(control, value.data(), size + 1)));
     return value;
 }
+
+std::vector<int> selected_rules(HWND list, bool multiple) {
+    if (!multiple) {
+        const auto index = SendMessageW(list, LB_GETCURSEL, 0, 0);
+        return index < 0 ? std::vector<int>{} : std::vector<int>{static_cast<int>(index)};
+    }
+    const auto count = SendMessageW(list, LB_GETSELCOUNT, 0, 0);
+    if (count <= 0) return {};
+    std::vector<int> rows(static_cast<size_t>(count));
+    const auto actual = SendMessageW(list, LB_GETSELITEMS, count, reinterpret_cast<LPARAM>(rows.data()));
+    if (actual <= 0) return {};
+    rows.resize(static_cast<size_t>(actual));
+    return rows;
+}
+
+void select_rule(HWND list, bool multiple, size_t row) {
+    if (multiple) SendMessageW(list, LB_SETSEL, TRUE, static_cast<LPARAM>(row));
+    else SendMessageW(list, LB_SETCURSEL, row, 0);
+}
 }
 
 HWND AppRoutingDialog::control(HWND parent, const wchar_t* cls, const wchar_t* label, DWORD style,
@@ -294,20 +313,19 @@ void AppRoutingDialog::refresh_split_status() {
 
 void AppRoutingDialog::start_split() {
     const auto get = [this](int id) { return GetDlgItem(window_, id); };
-    const auto selected_rule = SendMessageW(get(RoutingList), LB_GETCURSEL, 0, 0);
+    const auto selected = selected_rules(get(RoutingList), true);
     const auto selected_primary = SendMessageW(get(SplitPrimary), CB_GETCURSEL, 0, 0);
     const auto set_error = [&get](const wchar_t* error) { SetWindowTextW(get(SplitStatus), error); };
-    if (selected_rule < 0 || static_cast<size_t>(selected_rule) >= drafts_.size() ||
+    if (selected.empty() ||
         selected_primary < 0 || static_cast<size_t>(selected_primary) >= adapters_.size()) {
-        set_error(L"Выберите правило приложения и основной адаптер.");
+        set_error(L"Выберите приложения и основной адаптер.");
         return;
     }
     if (subnet_routes_ && !subnet_routes_->routes().empty()) {
         set_error(L"Удалите маршруты по подсетям перед запуском sing-box.");
         return;
     }
-    const auto& rule = drafts_[static_cast<size_t>(selected_rule)];
-    const auto adapter_id = QuickDns::Encoding::utf8_to_wide(rule.adapter_id);
+    const auto adapter_id = QuickDns::Encoding::utf8_to_wide(drafts_[static_cast<size_t>(selected.front())].adapter_id);
     const auto secondary = std::find_if(adapters_.begin(), adapters_.end(), [&](const auto& a) {
         return CompareStringOrdinal(a.id.c_str(), -1, adapter_id.c_str(), -1, TRUE) == CSTR_EQUAL;
     });
@@ -316,21 +334,29 @@ void AppRoutingDialog::start_split() {
         return;
     }
 
-    const bool package_directory = !rule.package_family.empty();
-    const auto family = QuickDns::Encoding::utf8_to_wide(rule.package_family);
-    std::wstring path;
-    if (package_directory) {
-        const auto installed = enumerate_installed_packages();
-        const auto package = std::find_if(installed.begin(), installed.end(), [&](const auto& p) {
-            return CompareStringOrdinal(p.family.c_str(), -1, family.c_str(), -1, TRUE) == CSTR_EQUAL;
-        });
-        if (package != installed.end()) path = package->install_path;
-        if (path.empty()) {
-            set_error(L"Каталог установленного пакета MSIX недоступен.");
+    std::optional<std::vector<InstalledPackage>> installed;
+    std::vector<SplitRoutingTarget> targets;
+    for (const auto row : selected) {
+        const auto& rule = drafts_[static_cast<size_t>(row)];
+        const auto id = QuickDns::Encoding::utf8_to_wide(rule.adapter_id);
+        if (CompareStringOrdinal(id.c_str(), -1, adapter_id.c_str(), -1, TRUE) != CSTR_EQUAL) {
+            set_error(L"У всех выбранных приложений должен быть один второй адаптер.");
             return;
         }
-    } else {
-        path = QuickDns::Encoding::utf8_to_wide(rule.application_path);
+        auto family = QuickDns::Encoding::utf8_to_wide(rule.package_family);
+        if (family.empty()) {
+            targets.push_back({QuickDns::Encoding::utf8_to_wide(rule.application_path), {}});
+            continue;
+        }
+        if (!installed) installed = enumerate_installed_packages();
+        const auto package = std::find_if(installed->begin(), installed->end(), [&](const auto& p) {
+            return CompareStringOrdinal(p.family.c_str(), -1, family.c_str(), -1, TRUE) == CSTR_EQUAL;
+        });
+        if (package == installed->end() || package->install_path.empty()) {
+            set_error(L"Каталог одного из выбранных пакетов MSIX недоступен.");
+            return;
+        }
+        targets.push_back({package->install_path, std::move(family)});
     }
 
     const bool embedded = has_embedded_routing_engine();
@@ -346,7 +372,7 @@ void AppRoutingDialog::start_split() {
                     L"QuickDNS", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
     const bool split_dns = SendMessageW(get(SplitChatGptDns), BM_GETCHECK, 0, 0) == BST_CHECKED;
     const auto result = split_routing_->start(engine, adapters_[static_cast<size_t>(selected_primary)],
-                                              *secondary, path, package_directory, family, split_dns);
+                                              *secondary, targets, split_dns);
     if (result.empty()) refresh_split_status();
     else set_error(result.c_str());
 }
@@ -383,7 +409,7 @@ LRESULT AppRoutingDialog::dispatch(UINT msg, WPARAM wp, LPARAM lp) {
         }
         const int offset = split_routing_ ? 139 : subnet_routes_ ? 51 : 0;
         if (split_routing_) create_primary_control();
-        control(window_, L"STATIC", split_routing_ ? L"Приложение и его сеть"
+        control(window_, L"STATIC", split_routing_ ? L"Правила приложений. Ctrl+щелчок выбирает несколько."
                                                    : inactive, 0, 29, 18 + offset, 645, 27, RoutingStatus);
         HWND kind = control(window_, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP,
                             29, 48 + offset, 174, 160, RoutingKind);
@@ -407,7 +433,8 @@ LRESULT AppRoutingDialog::dispatch(UINT msg, WPARAM wp, LPARAM lp) {
         if (split_routing_)
             control(window_, L"STATIC", L"", SS_ENDELLIPSIS, 211, 134 + offset, 466, 20, RoutingAdapterDns);
         control(window_, L"BUTTON", L"Добавить", BS_PUSHBUTTON | WS_TABSTOP, 565, 154 + offset, 112, 27, RoutingAdd);
-        control(window_, L"LISTBOX", L"", WS_BORDER | LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP,
+        control(window_, L"LISTBOX", L"", WS_BORDER | LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP |
+                (split_routing_ ? LBS_EXTENDEDSEL : 0),
                 29, 190 + offset, 526, split_routing_ ? 58 : 160, RoutingList);
         control(window_, L"BUTTON", L"Удалить", BS_PUSHBUTTON | WS_TABSTOP, 565, 190 + offset, 112, 27, RoutingRemove);
         control(window_, L"BUTTON", L"Сохранить", BS_PUSHBUTTON | WS_TABSTOP,
@@ -421,7 +448,7 @@ LRESULT AppRoutingDialog::dispatch(UINT msg, WPARAM wp, LPARAM lp) {
         select_page(false);
         refresh();
         if (split_routing_ && drafts_.size() == 1)
-            SendMessageW(get(RoutingList), LB_SETCURSEL, 0, 0);
+            select_rule(get(RoutingList), true, 0);
         return 0;
     }
     case WM_COMMAND:
@@ -508,17 +535,22 @@ LRESULT AppRoutingDialog::dispatch(UINT msg, WPARAM wp, LPARAM lp) {
             else rule.application_path = identity;
             auto next = drafts_; next.push_back(rule);
             if (!store_.replace_rules(next)) { SetWindowTextW(get(RoutingStatus), L"Неверное или повторяющееся правило. Черновики не активны."); return 0; }
+            const auto selected = selected_rules(get(RoutingList), split_routing_ != nullptr);
             drafts_ = std::move(next);
             refresh();
-            SendMessageW(get(RoutingList), LB_SETCURSEL, drafts_.size() - 1, 0);
+            if (split_routing_)
+                for (const auto row : selected) select_rule(get(RoutingList), true, static_cast<size_t>(row));
+            select_rule(get(RoutingList), split_routing_ != nullptr, drafts_.size() - 1);
             SetWindowTextW(get(RoutingStatus), split_routing_ ? L"Правило добавлено. Выберите основной адаптер."
                                                             : inactive);
             return 0;
         }
         case RoutingRemove: {
-            const auto index = SendMessageW(get(RoutingList), LB_GETCURSEL, 0, 0);
-            if (index < 0 || static_cast<size_t>(index) >= drafts_.size()) return 0;
-            auto next = drafts_; next.erase(next.begin() + index);
+            auto selected = selected_rules(get(RoutingList), split_routing_ != nullptr);
+            if (selected.empty()) return 0;
+            std::sort(selected.rbegin(), selected.rend());
+            auto next = drafts_;
+            for (const auto index : selected) next.erase(next.begin() + index);
             if (store_.replace_rules(next)) { drafts_ = std::move(next); refresh(); }
             return 0;
         }

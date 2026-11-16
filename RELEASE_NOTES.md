@@ -1,21 +1,17 @@
-### QuickDNS v2.2.1
+### QuickDNS v2.2.2
 
-This Windows x64 release packages the routing engine in QuickDNS.exe and adds optional split DNS for ChatGPT during an application routing session.
+QuickDNS can now route several applications through the same secondary network adapter in one session. This lets the desktop ChatGPT app and its sign-in browser use the secondary network together.
 
-- **Split DNS:** ChatGPT domains use the DNS server of the second adapter. Other names use the primary adapter's DNS. The policy applies to the Windows resolver for the lifetime of the TUN session.
-- **Portable routing:** The EXE embeds the verified sing-box 1.14.4 engine. Select one EXE or MSIX package per session. A separate browser executable can be selected for ChatGPT on the web.
-- **Reliable restart:** Each session uses a new Wintun adapter name, avoiding startup hangs when a previous device is still pending removal.
-- **Verification:** Windows live tests exercised two active adapters, selected application routing, DNS selection, and disconnect and recovery. The README documents the two-adapter setup and the limits of TUN routing.
+- **Multiple application rules:** Select several EXE or MSIX rules for the same secondary adapter. The TUN session routes all selected processes through it.
+- **Browser sign-in:** Route the desktop app and the browser that opens its sign-in link through the same adapter. Keep a separate browser executable for work traffic on the primary network.
+- **Split DNS:** ChatGPT domains use the secondary DNS and other names use the primary DNS when split DNS is enabled.
 
-Application routing is experimental. Traffic outside the TUN and app-specific encrypted DNS can follow other paths. Windows resumes normal routing when the engine stops.
-
-**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v2.2.0...v2.2.1
+**Full Changelog**: https://github.com/szanko02/QuickDNS/compare/v2.2.1...v2.2.2
 
 ---
 
 #### Описание изменений (Русский)
 
-- **Раздельный DNS:** домены ChatGPT используют DNS второго адаптера, остальные имена — DNS основного. Правило действует на системный DNS Windows во время сеанса.
-- **Portable:** sing-box 1.14.4 встроен в QuickDNS.exe. Можно выбрать одно приложение или отдельный браузер за сеанс.
-- **Повторный запуск:** каждый сеанс получает новое имя адаптера Wintun. Устранено зависание при повторном запуске со старым именем.
-- **Проверка:** на Windows проверены две активные сети, выбор DNS, отключение второго адаптера и восстановление. Порядок настройки описан в README.
+- **Несколько приложений:** можно выбрать несколько правил EXE или MSIX для одного второго адаптера и запустить один сеанс.
+- **Вход в ChatGPT:** приложение и браузер, открывающий страницу входа, могут одновременно использовать вторую сеть. Для корпоративного браузера нужен отдельный EXE.
+- **Раздельный DNS:** при включённом режиме домены ChatGPT используют второй DNS, остальные имена — основной.

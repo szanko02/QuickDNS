@@ -27,10 +27,12 @@ int main() {
         }
         const std::wstring_view command = count > 1 ? args[1] : L"";
         const bool split_dns = command == L"--write-live-dns-config";
-        if ((count == 7 || count == 8) && (command == L"--write-live-config" || split_dns)) {
+        const bool multiple = command == L"--write-live-multi-config";
+        if ((count == 7 || count == 8) && (command == L"--write-live-config" || split_dns || (multiple && count == 8))) {
             const std::wstring primary_name = args[2], secondary_name = args[3];
             const std::filesystem::path app = args[4], output = args[5], log = args[6];
-            const std::wstring package_family = count == 8 ? args[7] : L"";
+            std::vector<SplitRoutingTarget> targets{{app, count == 8 && !multiple ? args[7] : L""}};
+            if (multiple) targets.push_back({args[7], {}});
             LocalFree(args);
             const auto adapters = enumerate_routing_adapters();
             const auto find_adapter = [&](const std::wstring& name) {
@@ -46,7 +48,7 @@ int main() {
             const auto alias = new_split_routing_tun_alias();
             if (alias.empty()) return 1;
             auto config = nlohmann::json::parse(make_split_routing_config(
-                *primary, *secondary, app, !package_family.empty(), log, package_family, alias, split_dns));
+                *primary, *secondary, targets, log, alias, split_dns));
             config["log"]["level"] = "debug";
             std::ofstream stream(output, std::ios::binary);
             stream << config.dump(2);
@@ -70,7 +72,8 @@ int main() {
             RoutingAdapter primary, secondary;
             primary.ipv4_dns = {L"10.6.1.11"};
             secondary.ipv4_dns = {L"143.20.64.55", L"10.6.1.11"};
-            return nlohmann::json::parse(make_split_routing_config(primary, secondary, LR"(C:\WindowsApps\Test)", true, {}, family, alias));
+            const SplitRoutingTarget targets[] = {{LR"(C:\WindowsApps\Test)", family}};
+            return nlohmann::json::parse(make_split_routing_config(primary, secondary, targets, {}, alias));
         };
         const auto codex = config(L"OpenAI.Codex_2p2nqsd0c76g0");
         check(codex["inbounds"][0]["interface_name"] == QuickDns::Encoding::wide_to_utf8(alias),
@@ -103,8 +106,10 @@ int main() {
         corporate.ipv4_dns = {L"10.6.1.11"};
         external.name = L"Ethernet 6";
         external.ipv4_dns = {L"143.20.64.55"};
-        const auto split = nlohmann::json::parse(make_split_routing_config(
-            corporate, external, LR"(C:\ChatGPT.exe)", false, {}, {}, alias, true));
+        const SplitRoutingTarget targets[] = {
+            {LR"(C:\WindowsApps\ChatGPT)", L"OpenAI.ChatGPT_test"}, {LR"(C:\Auth Browser\browser.exe)", {}}
+        };
+        const auto split = nlohmann::json::parse(make_split_routing_config(corporate, external, targets, {}, alias, true));
         const auto& dns_policy = split["dns"];
         check(split["inbounds"][0]["dns_mode"] == "hijack" && split["inbounds"][0]["strict_route"] == true,
               "TUN is not handling Windows DNS for split DNS");
@@ -118,6 +123,13 @@ int main() {
         check(split["route"]["rules"].size() == 3 && split["route"]["rules"][0]["outbound"] == "secondary" &&
               split["route"]["rules"][1]["outbound"] == "primary",
               "Split DNS changes application routing or keeps the legacy DNS bypass");
+        const auto& rules = split["route"]["rules"][0]["process_path_regex"];
+        const std::regex package_rule(rules[0].get<std::string>().substr(4), std::regex::icase);
+        const std::regex browser_rule(rules[1].get<std::string>().substr(4), std::regex::icase);
+        check(rules.size() == 2 && std::regex_search(R"(C:\WindowsApps\ChatGPT\ChatGPT.exe)", package_rule) &&
+              std::regex_search(R"(C:\Auth Browser\browser.exe)", browser_rule) &&
+              !std::regex_search(R"(C:\Work Browser\browser.exe)", browser_rule),
+              "ChatGPT and its authentication browser must both match without including the work browser");
         check(config(L"Other.Package_family")["route"]["rules"][0]["process_path_regex"].size() == 1,
               "Codex runtime was added to an unrelated package route");
         RoutingAdapter adapter;
@@ -128,6 +140,9 @@ int main() {
             SplitRoutingSession session;
             AppRoutingDialog split_dialog(path, {adapter}, std::vector<InstalledPackage>{}, nullptr, &session);
             check(split_dialog.create(GetModuleHandleW(nullptr)), "split routing dialog failed to initialize");
+            const HWND list = GetDlgItem(split_dialog.window(), RoutingList);
+            check((GetWindowLongPtrW(list, GWL_STYLE) & LBS_EXTENDEDSEL) != 0,
+                  "the live routing list must support multiple selection");
             const HWND checkbox = GetDlgItem(split_dialog.window(), SplitChatGptDns);
             check(checkbox && (GetWindowLongPtrW(checkbox, GWL_STYLE) & BS_TYPEMASK) == BS_AUTOCHECKBOX &&
                   SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_UNCHECKED,

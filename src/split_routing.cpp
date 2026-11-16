@@ -134,8 +134,7 @@ std::wstring new_split_routing_tun_alias() {
 }
 
 std::string make_split_routing_config(const RoutingAdapter& primary, const RoutingAdapter& secondary,
-                                      const std::filesystem::path& app, bool package_directory,
-                                      const std::filesystem::path& log, const std::wstring& package_family,
+                                      std::span<const SplitRoutingTarget> targets, const std::filesystem::path& log,
                                       const std::wstring& tun_alias, bool split_dns) {
     const json tun = {
         {"type", "tun"}, {"tag", "quickdns-tun"}, {"interface_name", QuickDns::Encoding::wide_to_utf8(tun_alias)},
@@ -147,13 +146,16 @@ std::string make_split_routing_config(const RoutingAdapter& primary, const Routi
         {"bind_interface", QuickDns::Encoding::wide_to_utf8(primary.name)}};
     const json secondary_outbound = {{"type", "direct"}, {"tag", "secondary"},
         {"bind_interface", QuickDns::Encoding::wide_to_utf8(secondary.name)}};
-    auto app_paths = json::array({path_regex(app, package_directory)});
-    if (package_directory && _wcsicmp(package_family.c_str(), L"OpenAI.Codex_2p2nqsd0c76g0") == 0) {
-        const auto local_app_data = known_folder(FOLDERID_LocalAppData);
-        if (!local_app_data.empty()) {
-            // The Codex MSIX launches a versioned backend from outside the package.
-            app_paths.push_back(path_regex(local_app_data / L"OpenAI" / L"Codex" / L"bin", true) +
-                                R"([0-9a-f]{16}[\\/]codex\.exe$)");
+    auto app_paths = json::array();
+    for (const auto& target : targets) {
+        app_paths.push_back(path_regex(target.path, !target.package_family.empty()));
+        if (_wcsicmp(target.package_family.c_str(), L"OpenAI.Codex_2p2nqsd0c76g0") == 0) {
+            const auto local_app_data = known_folder(FOLDERID_LocalAppData);
+            if (!local_app_data.empty()) {
+                // The Codex MSIX launches a versioned backend from outside the package.
+                app_paths.push_back(path_regex(local_app_data / L"OpenAI" / L"Codex" / L"bin", true) +
+                                    R"([0-9a-f]{16}[\\/]codex\.exe$)");
+            }
         }
     }
     const json rule = {{"process_path_regex", std::move(app_paths)},
@@ -243,8 +245,8 @@ void SplitRoutingSession::stop() {
 }
 
 std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_engine, const RoutingAdapter& primary,
-                                        const RoutingAdapter& secondary, const std::filesystem::path& app,
-                                        bool package_directory, const std::wstring& package_family, bool split_dns) {
+                                        const RoutingAdapter& secondary, std::span<const SplitRoutingTarget> targets,
+                                        bool split_dns) {
     if (running()) return L"Сначала остановите текущий сеанс.";
     stop();
     if (primary.id == secondary.id || !primary.connected || !secondary.connected ||
@@ -256,10 +258,14 @@ std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_en
     if (has_active_quickdns_tun())
         return L"Адаптер QuickDNS TUN активен. Проверьте запущенные сеансы.";
 
+    if (targets.empty()) return L"Выберите хотя бы одно приложение.";
     std::error_code ec;
-    if (!app.is_absolute() || !(package_directory ? std::filesystem::is_directory(app, ec)
-                                                   : std::filesystem::is_regular_file(app, ec)))
-        return L"Приложение или каталог пакета не найден.";
+    for (const auto& target : targets) {
+        if (!target.path.is_absolute() ||
+            !(target.package_family.empty() ? std::filesystem::is_regular_file(target.path, ec)
+                                            : std::filesystem::is_directory(target.path, ec)))
+            return L"Одно из выбранных приложений или каталог пакета не найден.";
+    }
 
     auto executable = selected_engine;
     if (const auto resource = embedded_engine()) {
@@ -292,7 +298,7 @@ std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_en
     }
     {
         std::ofstream out(config_, std::ios::binary);
-        out << make_split_routing_config(primary, secondary, app, package_directory, log_, package_family, tun_alias_, split_dns);
+        out << make_split_routing_config(primary, secondary, targets, log_, tun_alias_, split_dns);
         out.close();
         if (!out) {
             stop();

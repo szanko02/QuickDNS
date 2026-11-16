@@ -32,7 +32,7 @@ VOID CALLBACK close_dialog(HWND, UINT, UINT_PTR timer, DWORD) {
     SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(quickdns::RoutingSubnetsPage, BN_CLICKED), 0);
     const bool subnet_page = IsWindowVisible(subnet) && !IsWindowVisible(primary);
     SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(quickdns::RoutingAppsPage, BN_CLICKED), 0);
-    dialog_seen = wcsstr(warning, L"Приложение и его сеть") && apps_default && subnet_page &&
+    dialog_seen = wcsstr(warning, L"Ctrl+щелчок") && apps_default && subnet_page &&
         IsWindowVisible(primary) && !IsWindowVisible(subnet) &&
         GetDlgItem(dialog, quickdns::SplitStart) && !IsWindowEnabled(GetDlgItem(dialog, quickdns::SplitStop));
     DestroyWindow(dialog);
