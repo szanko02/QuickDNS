@@ -25,7 +25,9 @@ int main() {
             FreeConsole();
             return signalled ? 0 : 1;
         }
-        if ((count == 7 || count == 8) && std::wstring_view(args[1]) == L"--write-live-config") {
+        const std::wstring_view command = count > 1 ? args[1] : L"";
+        const bool split_dns = command == L"--write-live-dns-config";
+        if ((count == 7 || count == 8) && (command == L"--write-live-config" || split_dns)) {
             const std::wstring primary_name = args[2], secondary_name = args[3];
             const std::filesystem::path app = args[4], output = args[5], log = args[6];
             const std::wstring package_family = count == 8 ? args[7] : L"";
@@ -44,7 +46,7 @@ int main() {
             const auto alias = new_split_routing_tun_alias();
             if (alias.empty()) return 1;
             auto config = nlohmann::json::parse(make_split_routing_config(
-                *primary, *secondary, app, !package_family.empty(), log, package_family, alias));
+                *primary, *secondary, app, !package_family.empty(), log, package_family, alias, split_dns));
             config["log"]["level"] = "debug";
             std::ofstream stream(output, std::ios::binary);
             stream << config.dump(2);
@@ -96,12 +98,43 @@ int main() {
               "versioned Codex runtime does not match");
         check(!std::regex_search(QuickDns::Encoding::wide_to_utf8((bin / "c38161ad8494f88c" / "other.exe").native()), runtime),
               "unrelated binary matches the Codex route");
+        RoutingAdapter corporate, external;
+        corporate.name = L"Ethernet 2";
+        corporate.ipv4_dns = {L"10.6.1.11"};
+        external.name = L"Ethernet 6";
+        external.ipv4_dns = {L"143.20.64.55"};
+        const auto split = nlohmann::json::parse(make_split_routing_config(
+            corporate, external, LR"(C:\ChatGPT.exe)", false, {}, {}, alias, true));
+        const auto& dns_policy = split["dns"];
+        check(split["inbounds"][0]["dns_mode"] == "hijack" && split["inbounds"][0]["strict_route"] == true,
+              "TUN is not handling Windows DNS for split DNS");
+        check(dns_policy["final"] == "primary-dns" && dns_policy["rules"][0]["server"] == "secondary-dns" &&
+              dns_policy["rules"][0]["domain_suffix"][0] == "chatgpt.com",
+              "ChatGPT DNS does not use the second adapter or the default DNS is not corporate");
+        const auto& servers = dns_policy["servers"];
+        check(servers[0]["server"] == "10.6.1.11" && servers[0]["bind_interface"] == "Ethernet 2" &&
+              servers[1]["server"] == "143.20.64.55" && servers[1]["bind_interface"] == "Ethernet 6",
+              "Split DNS upstream binding is incorrect");
+        check(split["route"]["rules"].size() == 3 && split["route"]["rules"][0]["outbound"] == "secondary" &&
+              split["route"]["rules"][1]["outbound"] == "primary",
+              "Split DNS changes application routing or keeps the legacy DNS bypass");
         check(config(L"Other.Package_family")["route"]["rules"][0]["process_path_regex"].size() == 1,
               "Codex runtime was added to an unrelated package route");
         RoutingAdapter adapter;
         adapter.id = L"{01234567-89AB-CDEF-0123-456789ABCDEF}";
         adapter.name = L"Disconnected adapter";
         adapter.connected = false;
+        {
+            SplitRoutingSession session;
+            AppRoutingDialog split_dialog(path, {adapter}, std::vector<InstalledPackage>{}, nullptr, &session);
+            check(split_dialog.create(GetModuleHandleW(nullptr)), "split routing dialog failed to initialize");
+            const HWND checkbox = GetDlgItem(split_dialog.window(), SplitChatGptDns);
+            check(checkbox && (GetWindowLongPtrW(checkbox, GWL_STYLE) & BS_TYPEMASK) == BS_AUTOCHECKBOX &&
+                  SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_UNCHECKED,
+                  "split DNS checkbox is missing, unusable, or enabled by default");
+            SendMessageW(checkbox, BM_CLICK, 0, 0);
+            check(SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED, "split DNS checkbox does not toggle");
+        }
         AppRoutingDialog dialog(path, {adapter}, std::vector<InstalledPackage>{{L"OpenAI.Codex", L"OpenAI.Codex_2p2nqsd0c76g0"}});
         check(dialog.create(GetModuleHandleW(nullptr)), "dialog failed to initialize");
         const HWND window = dialog.window();

@@ -15,7 +15,8 @@ enum RoutingDialogControl { RoutingKind = 8201, RoutingIdentity, RoutingBrowse, 
                             RoutingList, RoutingAdd, RoutingRemove, RoutingSave, RoutingStatus, RoutingPackages,
                             SubnetDestination, SubnetGateway, SubnetAdapter, SubnetAdd, SubnetList,
                             SubnetRemove, SubnetStatus, SplitPrimary, SplitEngine, SplitBrowse, SplitStart, SplitStop, SplitStatus,
-                            RoutingAppsPage, RoutingSubnetsPage, SplitNotice, SplitPrimaryLabel, SplitPrimaryDns, RoutingAdapterDns };
+                            RoutingAppsPage, RoutingSubnetsPage, SplitNotice, SplitPrimaryLabel, SplitPrimaryDns, RoutingAdapterDns,
+                            SplitChatGptDns };
 struct InstalledPackage { std::wstring name; std::wstring family; std::wstring install_path{}; };
 std::vector<InstalledPackage> enumerate_installed_packages();
 

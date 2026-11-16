@@ -95,6 +95,31 @@ std::filesystem::path temp_file() {
     if (!size || size >= MAX_PATH || !GetTempFileNameW(base, L"qds", 0, path)) return {};
     return path;
 }
+
+const std::wstring& adapter_resolver(const RoutingAdapter& adapter) {
+    static const std::wstring empty;
+    if (!adapter.ipv4_dns.empty()) return adapter.ipv4_dns.front();
+    return adapter.ipv6_dns.empty() ? empty : adapter.ipv6_dns.front();
+}
+
+json split_dns_config(const RoutingAdapter& primary, const RoutingAdapter& secondary) {
+    const auto server = [](const RoutingAdapter& adapter, const char* tag) {
+        return json{{"type", "udp"}, {"tag", tag},
+                    {"server", QuickDns::Encoding::wide_to_utf8(adapter_resolver(adapter))},
+                    {"bind_interface", QuickDns::Encoding::wide_to_utf8(adapter.name)}};
+    };
+    // OpenAI network recommendations for ChatGPT on web and apps, article 9247338.
+    const json chatgpt = {
+        {"domain_suffix", {"chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com",
+                           "oaistatsig.com"}},
+        {"domain", {"challenges.cloudflare.com", "cdn.openaimerge.com", "cdn.workos.com",
+                    "forwarder.workos.com", "images.workoscdn.com", "setup.workos.com",
+                    "workos.imgix.net"}},
+        {"action", "route"}, {"server", "secondary-dns"}
+    };
+    return {{"servers", json::array({server(primary, "primary-dns"), server(secondary, "secondary-dns")})},
+            {"rules", json::array({chatgpt})}, {"final", "primary-dns"}};
+}
 }
 
 bool has_embedded_routing_engine() { return embedded_engine() != nullptr; }
@@ -111,11 +136,11 @@ std::wstring new_split_routing_tun_alias() {
 std::string make_split_routing_config(const RoutingAdapter& primary, const RoutingAdapter& secondary,
                                       const std::filesystem::path& app, bool package_directory,
                                       const std::filesystem::path& log, const std::wstring& package_family,
-                                      const std::wstring& tun_alias) {
+                                      const std::wstring& tun_alias, bool split_dns) {
     const json tun = {
         {"type", "tun"}, {"tag", "quickdns-tun"}, {"interface_name", QuickDns::Encoding::wide_to_utf8(tun_alias)},
         {"address", {"172.19.0.1/30", "fdfe:dcba:9876::1/126"}},
-        {"dns_mode", "disabled"},
+        {"dns_mode", split_dns ? "hijack" : "disabled"},
         {"auto_route", true}, {"strict_route", true}, {"stack", "mixed"}
     };
     const json primary_outbound = {{"type", "direct"}, {"tag", "primary"},
@@ -137,32 +162,38 @@ std::string make_split_routing_config(const RoutingAdapter& primary, const Routi
         {"action", "route"}, {"outbound", "primary"}};
     const json reject = {{"action", "reject"}};
     auto rules = json::array({rule});
-    auto secondary_dns = json::array();
-    for (const auto& server : secondary.ipv4_dns) {
-        if (std::find(primary.ipv4_dns.begin(), primary.ipv4_dns.end(), server) == primary.ipv4_dns.end())
-            secondary_dns.push_back(QuickDns::Encoding::wide_to_utf8(server) + "/32");
+    if (!split_dns) {
+        auto secondary_dns = json::array();
+        for (const auto& server : secondary.ipv4_dns) {
+            if (std::find(primary.ipv4_dns.begin(), primary.ipv4_dns.end(), server) == primary.ipv4_dns.end())
+                secondary_dns.push_back(QuickDns::Encoding::wide_to_utf8(server) + "/32");
+        }
+        if (!secondary_dns.empty()) {
+            // Windows can perform DoH on behalf of the application from a system process.
+            rules.push_back({{"process_name", {"svchost.exe"}}, {"ip_cidr", secondary_dns},
+                             {"port", {443}}, {"action", "route"}, {"outbound", "secondary"}});
+            rules.push_back({{"ip_cidr", std::move(secondary_dns)}, {"port", {53}},
+                             {"network", {"tcp", "udp"}}, {"action", "route"}, {"outbound", "secondary"}});
+        }
+        auto primary_dns = json::array();
+        for (const auto& server : primary.ipv4_dns)
+            primary_dns.push_back(QuickDns::Encoding::wide_to_utf8(server) + "/32");
+        if (!primary_dns.empty())
+            rules.push_back({{"ip_cidr", std::move(primary_dns)}, {"port", {53}},
+                             {"network", {"tcp", "udp"}}, {"action", "route"}, {"outbound", "primary"}});
     }
-    if (!secondary_dns.empty()) {
-        // Windows can perform DoH on behalf of the application from a system process.
-        rules.push_back({{"process_name", {"svchost.exe"}}, {"ip_cidr", secondary_dns},
-                         {"port", {443}}, {"action", "route"}, {"outbound", "secondary"}});
-        rules.push_back({{"ip_cidr", std::move(secondary_dns)}, {"port", {53}},
-                         {"network", {"tcp", "udp"}}, {"action", "route"}, {"outbound", "secondary"}});
-    }
-    auto primary_dns = json::array();
-    for (const auto& server : primary.ipv4_dns)
-        primary_dns.push_back(QuickDns::Encoding::wide_to_utf8(server) + "/32");
-    if (!primary_dns.empty())
-        rules.push_back({{"ip_cidr", std::move(primary_dns)}, {"port", {53}},
-                         {"network", {"tcp", "udp"}}, {"action", "route"}, {"outbound", "primary"}});
     rules.push_back(primary_rule);
     rules.push_back(reject);
-    const json config = {
+    json config = {
         {"log", {{"level", "warn"}, {"output", QuickDns::Encoding::wide_to_utf8(log.native())}}},
         {"inbounds", json::array({tun})}, {"outbounds", json::array({primary_outbound, secondary_outbound})},
         {"route", {{"rules", std::move(rules)}, {"final", "primary"},
                    {"default_interface", QuickDns::Encoding::wide_to_utf8(primary.name)}}}
     };
+    if (split_dns) {
+        config["dns"] = split_dns_config(primary, secondary);
+        config["route"]["default_domain_resolver"] = "primary-dns";
+    }
     return config.dump(2, ' ', false, json::error_handler_t::replace);
 }
 
@@ -213,12 +244,14 @@ void SplitRoutingSession::stop() {
 
 std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_engine, const RoutingAdapter& primary,
                                         const RoutingAdapter& secondary, const std::filesystem::path& app,
-                                        bool package_directory, const std::wstring& package_family) {
+                                        bool package_directory, const std::wstring& package_family, bool split_dns) {
     if (running()) return L"Сначала остановите текущий сеанс.";
     stop();
     if (primary.id == secondary.id || !primary.connected || !secondary.connected ||
         primary.name.empty() || secondary.name.empty())
         return L"Выберите два разных подключённых адаптера.";
+    if (split_dns && (adapter_resolver(primary).empty() || adapter_resolver(secondary).empty()))
+        return L"Для раздельного DNS на обоих адаптерах должны быть указаны DNS-серверы.";
 
     if (has_active_quickdns_tun())
         return L"Адаптер QuickDNS TUN активен. Проверьте запущенные сеансы.";
@@ -259,7 +292,7 @@ std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_en
     }
     {
         std::ofstream out(config_, std::ios::binary);
-        out << make_split_routing_config(primary, secondary, app, package_directory, log_, package_family, tun_alias_);
+        out << make_split_routing_config(primary, secondary, app, package_directory, log_, package_family, tun_alias_, split_dns);
         out.close();
         if (!out) {
             stop();

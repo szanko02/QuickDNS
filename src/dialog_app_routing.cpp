@@ -26,7 +26,7 @@ HWND AppRoutingDialog::control(HWND parent, const wchar_t* cls, const wchar_t* l
                                int x, int y, int width, int height, int id) {
     const bool button = wcscmp(cls, L"BUTTON") == 0;
     const bool combo = wcscmp(cls, L"COMBOBOX") == 0;
-    if (button) style |= BS_OWNERDRAW;
+    if (button && (style & BS_TYPEMASK) == BS_PUSHBUTTON) style |= BS_OWNERDRAW;
     if (combo) style |= CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;
     HWND result = CreateWindowExW(0, cls, label, WS_CHILD | WS_VISIBLE | style, x, y, width, height,
                                   parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
@@ -275,8 +275,8 @@ void AppRoutingDialog::create_split_controls() {
     control(window_, L"BUTTON", L"Остановить", BS_PUSHBUTTON | WS_TABSTOP, 565, 511, 112, 30, SplitStop);
     control(window_, L"STATIC", L"Экспериментальный режим. Строгая изоляция недоступна.",
             0, 29, 468, 645, 20, SplitNotice);
-    control(window_, L"STATIC", L"Системный DNS и трафик вне TUN используют маршруты Windows.",
-            0, 29, 488, 645, 20);
+    control(window_, L"BUTTON", L"DNS доменов ChatGPT через второй адаптер (для всей системы на время сеанса)",
+            BS_AUTOCHECKBOX | WS_TABSTOP, 29, 488, 645, 20, SplitChatGptDns);
     control(window_, L"STATIC", L"", 0, 29, 516, 393, 42, SplitStatus);
     refresh_split_status();
     SetTimer(window_, SplitStatus, 500, nullptr);
@@ -287,7 +287,7 @@ void AppRoutingDialog::refresh_split_status() {
     const auto status = split_routing_->status();
     if (text(status_control) != status) SetWindowTextW(status_control, status.c_str());
     const bool running = split_routing_->running();
-    for (int id : {SplitPrimary, SplitEngine, SplitBrowse, SplitStart})
+    for (int id : {SplitPrimary, SplitEngine, SplitBrowse, SplitStart, SplitChatGptDns})
         EnableWindow(GetDlgItem(window_, id), !running);
     EnableWindow(GetDlgItem(window_, SplitStop), running);
 }
@@ -344,8 +344,9 @@ void AppRoutingDialog::start_split() {
                               L"Он создаст TUN и изменит маршруты Windows для этого сеанса. "
                               L"Проверьте происхождение файла. Полная изоляция трафика не гарантируется.",
                     L"QuickDNS", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
+    const bool split_dns = SendMessageW(get(SplitChatGptDns), BM_GETCHECK, 0, 0) == BST_CHECKED;
     const auto result = split_routing_->start(engine, adapters_[static_cast<size_t>(selected_primary)],
-                                              *secondary, path, package_directory, family);
+                                              *secondary, path, package_directory, family, split_dns);
     if (result.empty()) refresh_split_status();
     else set_error(result.c_str());
 }

@@ -9,7 +9,7 @@ std::wstring new_split_routing_tun_alias();
 std::string make_split_routing_config(const RoutingAdapter& primary, const RoutingAdapter& secondary,
                                       const std::filesystem::path& app, bool package_directory,
                                       const std::filesystem::path& log, const std::wstring& package_family = {},
-                                      const std::wstring& tun_alias = L"QuickDNS TUN");
+                                      const std::wstring& tun_alias = L"QuickDNS TUN", bool split_dns = false);
 
 class SplitRoutingSession {
 public:
@@ -20,7 +20,7 @@ public:
 
     std::wstring start(const std::filesystem::path& engine, const RoutingAdapter& primary,
                        const RoutingAdapter& secondary, const std::filesystem::path& app,
-                       bool package_directory, const std::wstring& package_family = {});
+                       bool package_directory, const std::wstring& package_family = {}, bool split_dns = false);
     void stop();
     bool running() const;
     std::wstring status() const;
