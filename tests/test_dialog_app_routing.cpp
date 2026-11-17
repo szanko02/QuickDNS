@@ -28,10 +28,13 @@ int main() {
         const std::wstring_view command = count > 1 ? args[1] : L"";
         const bool split_dns = command == L"--write-live-dns-config";
         const bool multiple = command == L"--write-live-multi-config";
-        if ((count == 7 || count == 8) && (command == L"--write-live-config" || split_dns || (multiple && count == 8))) {
+        const bool web = command == L"--write-live-web-config" && count == 8;
+        if ((count == 7 || count == 8) && (command == L"--write-live-config" || split_dns || web || (multiple && count == 8))) {
             const std::wstring primary_name = args[2], secondary_name = args[3];
             const std::filesystem::path app = args[4], output = args[5], log = args[6];
-            std::vector<SplitRoutingTarget> targets{{app, count == 8 && !multiple ? args[7] : L""}};
+            std::vector<SplitRoutingTarget> targets{{app, count == 8 && !multiple && !web ? args[7] : L""}};
+            std::vector<std::string> domains;
+            if (web) domains.push_back(QuickDns::Encoding::wide_to_utf8(args[7]));
             if (multiple) targets.push_back({args[7], {}});
             LocalFree(args);
             const auto adapters = enumerate_routing_adapters();
@@ -48,7 +51,7 @@ int main() {
             const auto alias = new_split_routing_tun_alias();
             if (alias.empty()) return 1;
             auto config = nlohmann::json::parse(make_split_routing_config(
-                *primary, *secondary, targets, log, alias, split_dns));
+                *primary, *secondary, targets, log, alias, split_dns, domains, web));
             config["log"]["level"] = "debug";
             std::ofstream stream(output, std::ios::binary);
             stream << config.dump(2);
@@ -137,13 +140,57 @@ int main() {
         adapter.name = L"Disconnected adapter";
         adapter.connected = false;
         {
+            RoutingAdapter primary, secondary;
+            primary.name = L"LAN";
+            primary.dns_suffix = L"company.example";
+            primary.ipv4_dns = {L"10.0.0.53"};
+            secondary.name = L"WAN";
+            secondary.ipv4_dns = {L"192.0.2.53"};
+            const std::array<std::string, 1> domains{"github.com"};
+            const auto sites = nlohmann::json::parse(make_split_routing_config(
+                primary, secondary, {}, {}, L"Test TUN", false, domains, true));
+            const auto& site_rules = sites["route"]["rules"];
+            check(site_rules[0]["action"] == "sniff" && site_rules[1]["domain_suffix"][0] == "github.com" &&
+                  site_rules[1]["outbound"] == "secondary" && site_rules[2]["outbound"] == "primary" &&
+                  site_rules[3]["ip_is_private"] == true && site_rules[4]["outbound"] == "secondary",
+                  "domain and external web rules must preserve corporate routing");
+            check(sites["dns"]["final"] == "secondary-dns" && sites["dns"]["rules"][2]["server"] == "primary-dns",
+                  "public and corporate DNS must use their respective adapters");
+            const auto listed_only = nlohmann::json::parse(make_split_routing_config(
+                primary, secondary, {}, {}, L"Test TUN", false, domains));
+            check(listed_only["dns"]["final"] == "primary-dns" &&
+                  listed_only["dns"]["rules"][0]["server"] == "selected-domains" &&
+                  listed_only["outbounds"][1]["domain_resolver"] == "secondary-dns",
+                  "a listed domain must keep its identity and use secondary DNS without the public web option");
+        }
+        {
             SplitRoutingSession session;
             AppRoutingDialog split_dialog(path, {adapter}, std::vector<InstalledPackage>{}, nullptr, &session);
             check(split_dialog.create(GetModuleHandleW(nullptr)), "split routing dialog failed to initialize");
+            check(!GetDlgItem(split_dialog.window(), SplitPublicWeb) && !GetDlgItem(split_dialog.window(), SplitChatGptDns),
+                  "routing options managed automatically must not be shown");
+            const auto top = [&](int id) {
+                RECT bounds{};
+                check(GetWindowRect(GetDlgItem(split_dialog.window(), id), &bounds), "missing routing control");
+                return bounds.top;
+            };
+            check(top(SplitPrimary) == top(RoutingAdapterCombo) && top(SplitPrimary) < top(RoutingAdd) &&
+                  top(RoutingAdd) < top(RoutingList) && top(RoutingList) < top(SplitEngine),
+                  "network, rule, and engine controls are out of order");
+            const HWND engine = GetDlgItem(split_dialog.window(), SplitEngine);
+            const HWND browse = GetDlgItem(split_dialog.window(), SplitBrowse);
+            const bool embedded = has_embedded_routing_engine();
+            const auto engine_style = GetWindowLongPtrW(engine, GWL_STYLE);
+            check(engine && browse && (engine_style & WS_VISIBLE) &&
+                  (GetWindowLongPtrW(browse, GWL_STYLE) & WS_VISIBLE),
+                  "the engine path and Browse button must be visible on the applications page");
+            check((!IsWindowEnabled(browse)) == embedded &&
+                  ((engine_style & ES_READONLY) != 0) == embedded,
+                  "only the external engine build may edit or browse for sing-box.exe");
             wchar_t expected_engine[32768]{};
             const auto expected_length = GetEnvironmentVariableW(
                 L"QUICKDNS_EXPECT_COLOCATED_ENGINE", expected_engine, static_cast<DWORD>(std::size(expected_engine)));
-            if (expected_length && expected_length < std::size(expected_engine)) {
+            if (!embedded && expected_length && expected_length < std::size(expected_engine)) {
                 wchar_t engine_path[32768]{};
                 GetWindowTextW(GetDlgItem(split_dialog.window(), SplitEngine),
                                engine_path, static_cast<int>(std::size(engine_path)));
@@ -153,12 +200,16 @@ int main() {
             const HWND list = GetDlgItem(split_dialog.window(), RoutingList);
             check((GetWindowLongPtrW(list, GWL_STYLE) & LBS_EXTENDEDSEL) != 0,
                   "the live routing list must support multiple selection");
-            const HWND checkbox = GetDlgItem(split_dialog.window(), SplitChatGptDns);
-            check(checkbox && (GetWindowLongPtrW(checkbox, GWL_STYLE) & BS_TYPEMASK) == BS_AUTOCHECKBOX &&
-                  SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_UNCHECKED,
-                  "split DNS checkbox is missing, unusable, or enabled by default");
-            SendMessageW(checkbox, BM_CLICK, 0, 0);
-            check(SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED, "split DNS checkbox does not toggle");
+            check((GetWindowLongPtrW(list, GWL_STYLE) & WS_VSCROLL) != 0, "rules list must scroll");
+            SendMessageW(GetDlgItem(split_dialog.window(), SplitPrimary), CB_SETCURSEL, 0, 0);
+            SendMessageW(GetDlgItem(split_dialog.window(), RoutingAdapterCombo), CB_SETCURSEL, 0, 0);
+            check(!GetDlgItem(split_dialog.window(), SplitDomains), "domain input must be hidden");
+            SendMessageW(split_dialog.window(), WM_COMMAND, MAKEWPARAM(RoutingSave, BN_CLICKED), 0);
+            AppRoutingConfigStore saved_settings(path);
+            const auto id = QuickDns::Encoding::wide_to_utf8(adapter.id);
+            check(saved_settings.load() && saved_settings.settings.primary_id == id &&
+                  saved_settings.settings.secondary_id == id,
+                  "saving the routing configuration must persist both networks");
         }
         AppRoutingDialog dialog(path, {adapter}, std::vector<InstalledPackage>{{L"OpenAI.Codex", L"OpenAI.Codex_2p2nqsd0c76g0"}});
         check(dialog.create(GetModuleHandleW(nullptr)), "dialog failed to initialize");

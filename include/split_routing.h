@@ -14,7 +14,8 @@ struct SplitRoutingTarget {
 
 std::string make_split_routing_config(const RoutingAdapter& primary, const RoutingAdapter& secondary,
                                       std::span<const SplitRoutingTarget> targets, const std::filesystem::path& log,
-                                      const std::wstring& tun_alias = L"QuickDNS TUN", bool split_dns = false);
+                                      const std::wstring& tun_alias = L"QuickDNS TUN", bool split_dns = false,
+                                      std::span<const std::string> domains = {}, bool public_web = false);
 
 class SplitRoutingSession {
 public:
@@ -25,12 +26,13 @@ public:
 
     std::wstring start(const std::filesystem::path& engine, const RoutingAdapter& primary,
                        const RoutingAdapter& secondary, std::span<const SplitRoutingTarget> targets,
-                       bool split_dns = false);
+                       bool split_dns = false, std::span<const std::string> domains = {}, bool public_web = false);
     void stop();
     bool running() const;
     std::wstring status() const;
     std::filesystem::path engine;
     std::wstring primary_id;
+    std::wstring secondary_id;
 
 private:
     HANDLE process_ = nullptr;

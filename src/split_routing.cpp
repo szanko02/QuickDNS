@@ -102,7 +102,8 @@ const std::wstring& adapter_resolver(const RoutingAdapter& adapter) {
     return adapter.ipv6_dns.empty() ? empty : adapter.ipv6_dns.front();
 }
 
-json split_dns_config(const RoutingAdapter& primary, const RoutingAdapter& secondary) {
+json split_dns_config(const RoutingAdapter& primary, const RoutingAdapter& secondary, bool split_dns,
+                      std::span<const std::string> domains, bool public_web) {
     const auto server = [](const RoutingAdapter& adapter, const char* tag) {
         return json{{"type", "udp"}, {"tag", tag},
                     {"server", QuickDns::Encoding::wide_to_utf8(adapter_resolver(adapter))},
@@ -117,8 +118,26 @@ json split_dns_config(const RoutingAdapter& primary, const RoutingAdapter& secon
                     "workos.imgix.net"}},
         {"action", "route"}, {"server", "secondary-dns"}
     };
-    return {{"servers", json::array({server(primary, "primary-dns"), server(secondary, "secondary-dns")})},
-            {"rules", json::array({chatgpt})}, {"final", "primary-dns"}};
+    auto servers = json::array({server(primary, "primary-dns"), server(secondary, "secondary-dns")});
+    auto rules = json::array();
+    if (!domains.empty()) {
+        // Keep each selected DNS name distinguishable even when sites share an IP
+        // or the hostname is absent from the connection's initial packets.
+        servers.push_back({{"type", "fakeip"}, {"tag", "selected-domains"},
+                           {"inet4_range", "198.18.0.0/15"}, {"inet6_range", "2001:2::/48"}});
+        rules.push_back({{"domain_suffix", domains}, {"query_type", {"A", "AAAA"}},
+                         {"action", "route"}, {"server", "selected-domains"}, {"rewrite_ttl", 1}});
+        rules.push_back({{"domain_suffix", domains}, {"action", "route"}, {"server", "secondary-dns"}});
+    }
+    if (split_dns) rules.push_back(chatgpt);
+    if (public_web) {
+        auto local_suffixes = json::array({"local", "in-addr.arpa", "ip6.arpa"});
+        if (!primary.dns_suffix.empty()) local_suffixes.push_back(QuickDns::Encoding::wide_to_utf8(primary.dns_suffix));
+        rules.push_back({{"domain_suffix", std::move(local_suffixes)}, {"domain_regex", {R"(^[^.]+$)"}},
+                         {"action", "route"}, {"server", "primary-dns"}});
+    }
+    return {{"servers", std::move(servers)},
+            {"rules", std::move(rules)}, {"final", public_web ? "secondary-dns" : "primary-dns"}};
 }
 }
 
@@ -135,17 +154,20 @@ std::wstring new_split_routing_tun_alias() {
 
 std::string make_split_routing_config(const RoutingAdapter& primary, const RoutingAdapter& secondary,
                                       std::span<const SplitRoutingTarget> targets, const std::filesystem::path& log,
-                                      const std::wstring& tun_alias, bool split_dns) {
+                                      const std::wstring& tun_alias, bool split_dns,
+                                      std::span<const std::string> domains, bool public_web) {
+    const bool use_split_dns = split_dns || !domains.empty() || public_web;
     const json tun = {
         {"type", "tun"}, {"tag", "quickdns-tun"}, {"interface_name", QuickDns::Encoding::wide_to_utf8(tun_alias)},
         {"address", {"172.19.0.1/30", "fdfe:dcba:9876::1/126"}},
-        {"dns_mode", split_dns ? "hijack" : "disabled"},
+        {"dns_mode", use_split_dns ? "hijack" : "disabled"},
         {"auto_route", true}, {"strict_route", true}, {"stack", "mixed"}
     };
     const json primary_outbound = {{"type", "direct"}, {"tag", "primary"},
         {"bind_interface", QuickDns::Encoding::wide_to_utf8(primary.name)}};
-    const json secondary_outbound = {{"type", "direct"}, {"tag", "secondary"},
+    json secondary_outbound = {{"type", "direct"}, {"tag", "secondary"},
         {"bind_interface", QuickDns::Encoding::wide_to_utf8(secondary.name)}};
+    if (!domains.empty()) secondary_outbound["domain_resolver"] = "secondary-dns";
     auto app_paths = json::array();
     for (const auto& target : targets) {
         app_paths.push_back(path_regex(target.path, !target.package_family.empty()));
@@ -163,8 +185,21 @@ std::string make_split_routing_config(const RoutingAdapter& primary, const Routi
     const json primary_rule = {{"process_path_regex", json::array({".+"})},
         {"action", "route"}, {"outbound", "primary"}};
     const json reject = {{"action", "reject"}};
-    auto rules = json::array({rule});
-    if (!split_dns) {
+    auto rules = json::array();
+    if (!targets.empty()) rules.push_back(rule);
+    if (!domains.empty() || (public_web && !primary.dns_suffix.empty()))
+        rules.push_back({{"action", "sniff"}, {"sniffer", {"http", "tls", "quic"}}});
+    if (!domains.empty())
+        rules.push_back({{"domain_suffix", domains}, {"action", "route"}, {"outbound", "secondary"}});
+    if (public_web) {
+        if (!primary.dns_suffix.empty())
+            rules.push_back({{"domain_suffix", {QuickDns::Encoding::wide_to_utf8(primary.dns_suffix)}},
+                             {"action", "route"}, {"outbound", "primary"}});
+        rules.push_back({{"ip_is_private", true}, {"action", "route"}, {"outbound", "primary"}});
+        rules.push_back({{"port", {80, 443}}, {"network", {"tcp", "udp"}},
+                         {"action", "route"}, {"outbound", "secondary"}});
+    }
+    if (!use_split_dns) {
         auto secondary_dns = json::array();
         for (const auto& server : secondary.ipv4_dns) {
             if (std::find(primary.ipv4_dns.begin(), primary.ipv4_dns.end(), server) == primary.ipv4_dns.end())
@@ -192,9 +227,9 @@ std::string make_split_routing_config(const RoutingAdapter& primary, const Routi
         {"route", {{"rules", std::move(rules)}, {"final", "primary"},
                    {"default_interface", QuickDns::Encoding::wide_to_utf8(primary.name)}}}
     };
-    if (split_dns) {
-        config["dns"] = split_dns_config(primary, secondary);
-        config["route"]["default_domain_resolver"] = "primary-dns";
+    if (use_split_dns) {
+        config["dns"] = split_dns_config(primary, secondary, split_dns, domains, public_web);
+        config["route"]["default_domain_resolver"] = public_web ? "secondary-dns" : "primary-dns";
     }
     return config.dump(2, ' ', false, json::error_handler_t::replace);
 }
@@ -246,19 +281,20 @@ void SplitRoutingSession::stop() {
 
 std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_engine, const RoutingAdapter& primary,
                                         const RoutingAdapter& secondary, std::span<const SplitRoutingTarget> targets,
-                                        bool split_dns) {
+                                        bool split_dns, std::span<const std::string> domains, bool public_web) {
     if (running()) return L"Сначала остановите текущий сеанс.";
     stop();
     if (primary.id == secondary.id || !primary.connected || !secondary.connected ||
         primary.name.empty() || secondary.name.empty())
         return L"Выберите два разных подключённых адаптера.";
-    if (split_dns && (adapter_resolver(primary).empty() || adapter_resolver(secondary).empty()))
+    if ((split_dns || !domains.empty() || public_web) &&
+        (adapter_resolver(primary).empty() || adapter_resolver(secondary).empty()))
         return L"Для раздельного DNS на обоих адаптерах должны быть указаны DNS-серверы.";
 
     if (has_active_quickdns_tun())
         return L"Адаптер QuickDNS TUN активен. Проверьте запущенные сеансы.";
 
-    if (targets.empty()) return L"Выберите хотя бы одно приложение.";
+    if (targets.empty() && domains.empty() && !public_web) return L"Выберите приложение или укажите домен.";
     std::error_code ec;
     for (const auto& target : targets) {
         if (!target.path.is_absolute() ||
@@ -298,7 +334,7 @@ std::wstring SplitRoutingSession::start(const std::filesystem::path& selected_en
     }
     {
         std::ofstream out(config_, std::ios::binary);
-        out << make_split_routing_config(primary, secondary, targets, log_, tun_alias_, split_dns);
+        out << make_split_routing_config(primary, secondary, targets, log_, tun_alias_, split_dns, domains, public_web);
         out.close();
         if (!out) {
             stop();

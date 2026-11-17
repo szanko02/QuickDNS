@@ -95,6 +95,7 @@ bool AppRoutingConfigStore::load() {
         if (path_.empty()) throw std::runtime_error("configuration path unavailable");
         if (!std::filesystem::exists(path_)) {
             rules_.clear();
+            settings = {};
             loaded_ = true;
             return true;
         }
@@ -117,6 +118,8 @@ bool AppRoutingConfigStore::load() {
                             item.value("package_family", std::string{})});
         }
         if (!valid_rules(next)) throw std::runtime_error("invalid or duplicate rule");
+        const auto options = root.value("settings", json::object());
+        settings = {options.value("primary_id", std::string{}), options.value("secondary_id", std::string{})};
         rules_ = std::move(next);
         loaded_ = true;
         return true;
@@ -132,6 +135,7 @@ bool AppRoutingConfigStore::save() const {
     try {
         if (!loaded_) throw std::runtime_error("configuration has not been loaded successfully");
         json root{{"version", 1}, {"rules", json::array()}};
+        root["settings"] = {{"primary_id", settings.primary_id}, {"secondary_id", settings.secondary_id}};
         for (const auto& rule : rules_)
             root["rules"].push_back({{"id", rule.id}, {"application_path", rule.application_path},
                                      {"adapter_id", rule.adapter_id}, {"enabled", rule.enabled},

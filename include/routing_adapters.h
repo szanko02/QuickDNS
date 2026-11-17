@@ -18,6 +18,7 @@ struct RoutingAdapter {
     std::vector<std::wstring> ipv6_gateways;
     std::vector<std::wstring> ipv4_dns;
     std::vector<std::wstring> ipv6_dns;
+    std::wstring dns_suffix;
 };
 
 std::vector<RoutingAdapter> routing_adapters_from_windows(const IP_ADAPTER_ADDRESSES* first);

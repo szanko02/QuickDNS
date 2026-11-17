@@ -13,6 +13,11 @@ struct AppRoutingRule {
     bool operator==(const AppRoutingRule&) const = default;
 };
 
+struct AppRoutingSettings {
+    std::string primary_id;
+    std::string secondary_id;
+};
+
 class AppRoutingConfigStore {
 public:
     explicit AppRoutingConfigStore(std::filesystem::path path = {});
@@ -21,6 +26,7 @@ public:
     bool replace_rules(const std::vector<AppRoutingRule>& rules);
     std::vector<AppRoutingRule> rules() const;
     std::string last_error() const;
+    AppRoutingSettings settings;
 private:
     std::filesystem::path path_;
     std::vector<AppRoutingRule> rules_;

@@ -34,7 +34,7 @@ jobs:
       run: cmake --build build --config Release --parallel 4
 
     - name: Build Optional Embedded Edition
-      run: cmake --build build-embedded --config Release --target QuickDNS --parallel 4
+      run: cmake --build build-embedded --config Release --target QuickDNS test_dialog_app_routing --parallel 4
 
     - name: Run Unit Tests (Exclude Live Network Tests)
       working-directory: build
@@ -43,6 +43,8 @@ jobs:
         Copy-Item -LiteralPath ../build-embedded/routing-engine/sing-box.exe -Destination Release/sing-box.exe
         $env:QUICKDNS_EXPECT_COLOCATED_ENGINE = (Resolve-Path Release/sing-box.exe).Path
         ctest -C Release --output-on-failure -LE network
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        ctest --test-dir ../build-embedded -C Release --output-on-failure -R '^TestDialogAppRouting$'
 
     - name: Package Release
       shell: pwsh
@@ -84,7 +86,7 @@ jobs:
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        name: QuickDNS v2.2.3 - Compact Executable and Optional Embedded Routing Engine
+        name: QuickDNS v2.2.4 - Routing Interface and Secondary Network for Web Traffic
         body_path: artifacts/RELEASE_NOTES.md
         files: |
           artifacts/QuickDNS.exe
@@ -94,6 +96,7 @@ jobs:
           artifacts/*.zip
         generate_release_notes: false
         fail_on_unmatched_files: true
-        make_latest: true
+        prerelease: true
+        make_latest: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

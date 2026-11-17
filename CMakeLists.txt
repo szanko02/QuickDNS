@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QuickDNS VERSION 2.2.3 LANGUAGES C CXX)
+project(QuickDNS VERSION 2.2.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -190,6 +190,9 @@ target_link_libraries(test_app_guard_journal PRIVATE ole32)
 add_test(NAME TestAppGuardJournal COMMAND test_app_guard_journal)
 
 add_executable(test_dialog_app_routing tests/test_dialog_app_routing.cpp src/dialog_app_routing.cpp src/routing_installed_packages.cpp src/app_routing_config.cpp src/routing_adapters.cpp)
+if(QUICKDNS_EMBED_SING_BOX)
+    target_sources(test_dialog_app_routing PRIVATE "${engine_rc}")
+endif()
 target_include_directories(test_dialog_app_routing PRIVATE include third_party)
 target_link_libraries(test_dialog_app_routing PRIVATE quickdns_core ${WIN32_LIBS})
 add_test(NAME TestDialogAppRouting COMMAND test_dialog_app_routing)

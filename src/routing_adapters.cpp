@@ -36,6 +36,7 @@ std::vector<RoutingAdapter> routing_adapters_from_windows(const IP_ADAPTER_ADDRE
         adapter.connected = current->OperStatus == IfOperStatusUp;
         adapter.ipv4_index = current->IfIndex;
         adapter.ipv6_index = current->Ipv6IfIndex;
+        if (current->DnsSuffix) adapter.dns_suffix = current->DnsSuffix;
         for (auto* a = current->FirstUnicastAddress; a; a = a->Next)
             append_address(a->Address, adapter.ipv4_addresses, adapter.ipv6_addresses);
         for (auto* a = current->FirstGatewayAddress; a; a = a->Next)
