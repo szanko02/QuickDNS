@@ -1,10 +1,16 @@
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include <algorithm>
+#include <initializer_list>
+#include <memory>
 #include <windows.h>
 #include <objbase.h>
 #include <propidl.h>
 #include <gdiplus.h>
-#include <algorithm>
 
 namespace quickdns {
 
@@ -120,16 +126,63 @@ inline COLORREF LerpColor(COLORREF c1, COLORREF c2, float t) {
     int r = static_cast<int>(GetRValue(c1) + (GetRValue(c2) - GetRValue(c1)) * t);
     int g = static_cast<int>(GetGValue(c1) + (GetGValue(c2) - GetGValue(c1)) * t);
     int b = static_cast<int>(GetBValue(c1) + (GetBValue(c2) - GetBValue(c1)) * t);
-    return RGB(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255));
+    return RGB((std::clamp)(r, 0, 255), (std::clamp)(g, 0, 255), (std::clamp)(b, 0, 255));
 }
 
 inline void AddRoundedRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius) {
-    float diameter = radius * 2.0f;
+    if (rect.Width <= 0.0f || rect.Height <= 0.0f) {
+        return;
+    }
+    if (radius <= 0.0f) {
+        path.AddRectangle(rect);
+        return;
+    }
+    float diameter = (std::min)({radius * 2.0f, rect.Width, rect.Height});
     path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0f, 90.0f);
     path.AddArc(rect.GetRight() - diameter, rect.Y, diameter, diameter, 270.0f, 90.0f);
     path.AddArc(rect.GetRight() - diameter, rect.GetBottom() - diameter, diameter, diameter, 0.0f, 90.0f);
     path.AddArc(rect.X, rect.GetBottom() - diameter, diameter, diameter, 90.0f, 90.0f);
     path.CloseFigure();
+}
+
+inline const wchar_t* get_display_font_name() {
+    Gdiplus::FontFamily ffDisplay(L"Segoe UI Variable Display");
+    return ffDisplay.IsAvailable() ? L"Segoe UI Variable Display" : L"Segoe UI";
+}
+
+inline std::unique_ptr<Gdiplus::Font> create_display_font(
+    Gdiplus::REAL size,
+    INT style = Gdiplus::FontStyleRegular,
+    Gdiplus::Unit unit = Gdiplus::UnitPixel)
+{
+    Gdiplus::FontFamily ffDisplay(L"Segoe UI Variable Display");
+    if (ffDisplay.IsAvailable()) {
+        return std::make_unique<Gdiplus::Font>(&ffDisplay, size, style, unit);
+    }
+    Gdiplus::FontFamily ffRegular(L"Segoe UI");
+    return std::make_unique<Gdiplus::Font>(&ffRegular, size, style, unit);
+}
+
+inline void clamp_window_to_workarea(int& x, int& y, int& width, int& height, HMONITOR hMon) {
+    RECT rcWork = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+    if (hMon) {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(hMon, &mi)) {
+            rcWork = mi.rcWork;
+        }
+    } else {
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
+    }
+
+    const int workW = rcWork.right - rcWork.left;
+    const int workH = rcWork.bottom - rcWork.top;
+    if (workW > 0 && width > workW) width = workW;
+    if (workH > 0 && height > workH) height = workH;
+    if (x + width > rcWork.right) x = rcWork.right - width;
+    if (y + height > rcWork.bottom) y = rcWork.bottom - height;
+    if (x < rcWork.left) x = rcWork.left;
+    if (y < rcWork.top) y = rcWork.top;
 }
 
 } // namespace quickdns

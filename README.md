@@ -7,7 +7,7 @@
 **Быстрый и нативный переключатель DNS для Windows.**  
 *Fast, lightweight and native Windows DNS switcher with instant presets, dark mode & tray support.*
 
-[![GitHub Release](https://img.shields.io/badge/QuickDNS-v2.1.0-0078D4?style=for-the-badge&logo=github)](https://github.com/szanko02/QuickDNS/releases/tag/v2.1.0)
+[![GitHub Release](https://img.shields.io/github/v/release/szanko02/QuickDNS?style=for-the-badge&logo=github&color=0078D4)](https://github.com/szanko02/QuickDNS/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=for-the-badge&logo=windows)](https://github.com/szanko02/QuickDNS)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?style=for-the-badge&logo=c%2B%2B)](https://github.com/szanko02/QuickDNS)
 [![Architecture](https://img.shields.io/badge/Arch-x64%20Native-informational?style=for-the-badge)](https://github.com/szanko02/QuickDNS)
@@ -15,9 +15,7 @@
 
 <br/>
 
-### [Скачать релиз v2.1.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/tag/v2.1.0)
-
-Обычная версия QuickDNS находится в этой ветке. Версия с маршрутизацией приложений доступна в [отдельной ветке](https://github.com/szanko02/QuickDNS/tree/wip/routing-handoff). Для обычной версии используйте прямую ссылку на v2.1.0. Встроенная проверка обновлений в этой сборке также видит более новые релизы с маршрутизацией.
+### [Скачать релиз v2.3.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
 > Не требует установки. Скачайте архив или файл `QuickDNS.exe` и запустите.
 
 </div>
@@ -26,40 +24,26 @@
 
 ## Назначение
 
-В стандартном интерфейсе Windows для смены DNS необходимо открывать цепочку системных меню: «Параметры» → «Сеть и Интернет» → «Свойства адаптера» → «IP версии 4» → вручную вводить адреса → подтверждать изменения → выполнять очистку кэша через командную строку.
+В стандартном интерфейсе Windows для смены DNS необходимо открывать цепочку системных меню: «Параметры» -> «Сеть и Интернет» -> «Свойства адаптера» -> «IP версии 4» -> вручную вводить адреса -> подтверждать изменения -> выполнять очистку кэша через командную строку.
 
 QuickDNS автоматизирует этот процесс:
-1. Выберите сетевой адаптер и нужный профиль DNS (Comss, GeoHide, Zapret, Cloudflare и др.).
+1. Выберите сетевой адаптер и нужный профиль DNS (Comss.one, GeoHide, Без межаў, Zapret, Cloudflare и др.).
 2. Нажмите **«Применить DNS в 1 клик»** — настройки применятся мгновенно, а кэш DNS будет очищен.
 
 ---
 
 ## Возможности
 
-- **Проверка доступности ИИ-сервисов (AI Availability Checker):** отдельное окно со статусом разблокировки ведущих нейросетей (ChatGPT, Claude, Gemini, Copilot) для каждого DNS-профиля с независимым UDP DNS-резолвом (RFC 1035) и прямой TLS-проверкой сокетов через Schannel без изменения системного DNS.
-- **Каталог SmartDNS с автообновлением IP и DoH:** встроенный сканер и верификатор рабочих адресов SmartDNS (Comss, GeoHide, Zapret, Без межаў и др.) с проверкой через UDP-сокеты и DoH HTTP/2.
-- **Адаптивный современный интерфейс:** полностью отзывчивая верстка всех окон приложения с плавной поддержкой ресайза, темной и светлой темой Fluent Design (Segoe UI Variable), микроанимациями кнопок и чекбоксов.
-- **Интерактивный DNS Benchmark:** замер задержки серверов с фильтрацией SmartDNS, выбором доменов нейросетей (ChatGPT, Claude, Notion, Spotify), непрерывным тестированием и автосохранением истории.
-- **DNS over HTTPS (DoH):** поддержка DoH шаблонов и валидация соединений.
-- **Мгновенное переключение и работа в трее:** смена DNS за доли секунды, автоочистка DNS-кэша (`DnsFlushResolverCache`), контекстное меню в области уведомлений.
-
-* **Смена DNS в один клик:** Мгновенное применение настроек к активному сетевому адаптеру (Ethernet / Wi-Fi) без перезагрузки системы.
-* **Проверка доступности ИИ-сервисов (ChatGPT, Claude, Gemini, Copilot):** Комплексный аудит всех DNS-профилей на доступность нейросетей с обнаружением геоблокировок (Cloudflare/OpenAI 403, unsupported country, Cloudflare CDN-CGI trace) и возможностью применить лучший профиль прямо из окна проверки.
-* **Метки [SmartDNS]:** Визуальная индикация профилей, автоматически проксирующих трафик для разблокировки зарубежных нейросетей (ChatGPT, Claude, Gemini, Copilot), музыки и стримингов (Spotify, YouTube, Deezer, Netflix), сервисов и рабочих платформ (Canva, Notion, Autodesk, JetBrains).
-* **Встроенный интерактивный Каталог SmartDNS:** Отдельное окно с подробными карточками провайдеров, категориями сервисов, поисковым фильтром в реальном времени и кнопками прямого перехода на официальные сайты.
-* **Копируемые IP и редактируемый DoH:** Текстовые поля IP-адресов и шаблона DNS over HTTPS доступны для выделения и копирования, а также для ручного редактирования пользовательского шаблона DoH.
-* **Переход в параметры сети Windows:** Отдельная кнопка прямого вызова системных настроек сети и DHCP Windows в один клик.
-* **Мониторинг задержки и график стабильности:** Встроенный sparkline-график в реальном времени с интервалом обновления 3 секунды и историей пинга за последние 60 секунд.
-* **Тестирование скорости всех серверов:** Многопоточный замер времени отклика на пуле популярных доменов с градацией качества и графиками sparkline.
-* **Предустановленные профили:** Популярные DNS-серверы для ускорения, защиты и обхода региональных ограничений (Comss.one, GeoHide, Без межаў, Zapret, Malw.link, Cloudflare, Google, Quad9, AdGuard).
-* **Добавление собственных профилей:** Диалоговое окно для сохранения пользовательских конфигураций с валидацией IP-адресов и поддержкой DoH-ссылок.
-* **Управление профилями:** Удаление пользовательских профилей в один клик.
-* **Работа в системном трее:** Сворачивание в область уведомлений, контекстное меню быстрого переключения DNS по правому клику без открытия главного окна.
-* **Автоматическая очистка кэша DNS:** Вызов системной функции `DnsFlushResolverCache` после каждой смены конфигурации.
-* **Нейтральный интерфейс со сглаживанием:** Сбалансированная цветовая гамма, рендеринг GDI+ с субпиксельным сглаживанием (Anti-Aliasing), выверенные отступы между элементами управления.
-* **Переключение темной и светлой темы:** Иконка-переключатель в верхнем углу интерфейса с мгновенной сменой палитры, адаптацией заголовка Windows и сохранением выбора в настройках.
-* **Анимация кнопок и курсор-указатель:** Плавное наведение с откликом, тактильная анимация нажатия и курсор в виде указательного пальца при наведении на кнопки.
-* **Легковесность и автономность:** C++20 и Win32 API, статическая линковка, размер исполняемого файла ~1.8 МБ, потребление памяти ~8 МБ RAM в фоновом режиме.
+* **Смена DNS в один клик:** Мгновенное применение IPv4/IPv6 настроек к активному сетевому адаптеру (Ethernet / Wi-Fi) через Windows IP Helper API (`SetInterfaceDnsSettings`) без перезагрузки системы и с автоматической очисткой кэша резолвера (`DnsFlushResolverCache`).
+* **Проверка доступности ИИ-сервисов (ChatGPT, Claude, Gemini, Copilot):** Отдельное окно комплексного аудита всех DNS-профилей с независимым UDP DNS-резолвом (RFC 1035), прямой проверкой TLS 1.2/1.3 через Windows Schannel (без изменения системного DNS), обнаружением геоблокировок (HTTP 403, unsupported country, редиректы, CDN-CGI trace) и применением лучшего профиля в один клик.
+* **Каталог SmartDNS с автообновлением IP и DoH:** Встроенное окно с карточками провайдеров, категориями разблокируемых сервисов (нейросети, стриминги, рабочие платформы), поиском в реальном времени, верификатором рабочих IP-нод и проверкой RFC 8484 DoH.
+* **Пул альтернативных IP-адресов (`ip_pool`):** Выбор резервных и региональных IP-адресов внутри каждого профиля в один клик с автоматическим продвижением самых быстрых рабочих серверов.
+* **Поддержка DNS over HTTPS (DoH):** Настройка и валидация шаблонов DoH (`DohInterfaceSettings` / `DohProfileSettings` для Ethernet и Wi-Fi в Windows 10/11) с редактируемыми и копируемыми полями адресов.
+* **Интерактивный DNS Benchmark и мониторинг пинга:** Многопоточный замер задержки всех серверов с фильтрацией `[SmartDNS]`, выбором целевых доменов, непрерывным тестированием и sparkline-графиком стабильности отклика в реальном времени.
+* **Предустановленные и пользовательские профили:** 18 готовых пресетов (Comss.one, GeoHide RU/EU/US, Без межаў, Без межаў РФ, Zapret, Malw.link, Astracat, Mafioznik, Shecan, Control D, Akile, Cloudflare, Google, Quad9, AdGuard, DHCP), а также добавление и удаление собственных профилей.
+* **Работа в системном трее и быстрый доступ к сети Windows:** Сворачивание в область уведомлений, переключение DNS по правому клику без открытия главного окна и прямая кнопка вызова системных параметров сети Windows.
+* **Адаптивный Fluent-интерфейс (Dark / Light):** Плавное масштабирование под High-DPI (`PerMonitorV2`), рендеринг GDI+ со сглаживанием, переключение темной и светлой темы с адаптацией заголовка DWM и микроанимациями элементов управления.
+* **Безопасное автообновление и автономность:** Нативный C++20 и Win32 API со статической линковкой C++ Runtime (исполняемый файл ~1.3 МБ, потребление ~8 МБ RAM в фоне) и проверкой обновлений по SHA-256 через Windows BCrypt API.
 
 ---
 
@@ -67,21 +51,21 @@ QuickDNS автоматизирует этот процесс:
 
 | Профиль | Тип | Основной DNS (IPv4) | Дополнительный DNS (IPv4) | DNS over HTTPS (DoH) URL | Официальный сайт | Разблокируемые сервисы |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **GeoHide DNS** | `[SmartDNS]` | `193.233.112.67` | `193.233.112.88` | `https://dns.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | ChatGPT, Claude, Gemini, Grok, Cursor, DeepL, Spotify, Notion, Canva, Autodesk, JetBrains |
-| **GeoHide EU (Европа)** | `[SmartDNS]` | `45.13.237.213` | `5.175.161.3` | `https://eu.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | Европейские ноды: ChatGPT, Claude, Gemini, Grok, Deezer, Spotify, Canva, Notion |
+| **Comss.one DNS** | `[SmartDNS]` | `83.220.169.155` | `212.109.195.93` | `https://dns.comss.one/dns-query` | [dns.comss.one](https://dns.comss.one/) | ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X |
+| **GeoHide DNS** | `[SmartDNS]` | `193.233.112.67` | `193.233.112.88` | `https://dns.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | ChatGPT, Claude, Gemini, Grok, Cursor, DeepL, Spotify, Notion, Canva, Autodesk |
+| **GeoHide EU (Европа)** | `[SmartDNS]` | `45.13.237.213` | `5.175.161.3` | `https://eu.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | Европейские ноды: ChatGPT, Claude, Gemini, Grok, Deezer, Spotify, Canva, Notion, JetBrains |
 | **GeoHide US (США)** | `[SmartDNS]` | `192.255.159.241` | `192.3.233.253` | `https://us.geohide.ru/dns-query` | [geohide.ru](https://geohide.ru/) | Серверы США: ChatGPT, Claude, Gemini, Copilot, Grok, Spotify, Netflix US, Notion |
-| **Comss.one DNS** | `[SmartDNS]` | `83.220.169.155` | `212.109.195.93` | `https://dns.comss.one/dns-query` | [dns.comss.one](https://dns.comss.one/) | ChatGPT, Copilot, Claude, Spotify, Canva, Notion, Instagram, Twitter/X, AdGuard |
-| **Zapret DNS** | `[SmartDNS]` | `83.217.211.149` | — | `https://dns.zapret.moe/dns-query` | [zapret.moe](https://zapret.moe/) | Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker |
 | **Без межаў DNS** | `[SmartDNS]` | `181.215.40.49` | `143.20.64.55` | `https://dns.bezmezhau.com/dns-query` | [bezmezhau.com](https://bezmezhau.com/) | ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok |
 | **Без межаў DNS (РФ)** | `[SmartDNS]` | `185.236.10.189` | `31.58.216.201` | `https://sync.bezmezhau.com/dns-query` | [bezmezhau.com](https://bezmezhau.com/) | Выделенный сервер для РФ: ChatGPT, YouTube, Discord, Spotify, Twitter/X, Instagram, Reddit, TikTok |
+| **Zapret DNS** | `[SmartDNS]` | `83.217.211.149` | — | `https://dns.zapret.moe/dns-query` | [zapret.moe](https://zapret.moe/) | Discord, YouTube, ChatGPT, Claude, Instagram, Twitter/X, RuTracker |
 | **Malw.link DNS** | `[SmartDNS]` | `179.254.166.171` | `164.5.224.81` | `https://dns.malw.link/dns-query` | [info.dns.malw.link](https://info.dns.malw.link/) | ChatGPT, Gemini, Spotify, Discord, Instagram, Twitter/X, Notion, Canva |
 | **Astracat DNS** | `[SmartDNS]` | `135.106.217.200` | `185.139.69.24` | `https://dns.astracat.ru/dns-query` | [astracat.ru](https://astracat.ru/) | ChatGPT, Claude, Discord, YouTube, Spotify, Twitter/X, Instagram, Notion |
-| **Mafioznik DNS** | `[SmartDNS]` | `103.27.157.38` | `103.27.157.100` | `https://dns.mafioznik.xyz/dns-query` | [dns.mafioznik.xyz](https://dns.mafioznik.xyz/) | ChatGPT, Discord, YouTube, Steam Community, Spotify, Instagram, Twitter/X |
-| **Shecan DNS** | `[SmartDNS]` | `178.22.122.100` | `185.51.200.2` | `https://free.shecan.ir/dns-query` | [shecan.ir](https://shecan.ir/) | Антисанкционный: Docker Hub, Android Dev, Oracle, NVIDIA, Gradle, Google Services |
-| **Control D (ControlID)** | `[SmartDNS]` | `76.76.2.0` | `76.76.10.0` | `https://freedns.controld.com/p0` | [controld.com](https://controld.com/) | Anycast SmartDNS от Windscribe: ChatGPT, Claude, стриминги, защита от фишинга |
-| **Akile DNS (AKDNS)** | `[SmartDNS]` | `66.66.66.66` | `108.160.138.51` | `https://dns.akile.ai/dns-query` | [dns.akile.ai](https://dns.akile.ai/) | Разблокировка стримингов: Netflix, Disney+, YouTube Premium, Spotify, TikTok |
-| **Cloudflare** | Публичный | `1.1.1.1` | `1.0.0.1` | `https://cloudflare-dns.com/dns-query` | [1.1.1.1](https://1.1.1.1/) | Высокая скорость отклика и повышенная приватность |
-| **Google Public DNS** | Публичный | `8.8.8.8` | `8.8.4.4` | `https://dns.google/dns-query` | [dns.google](https://dns.google/) | Общедоступный стабильный глобальный DNS-резолвер |
+| **Mafioznik DNS** | `[SmartDNS]` | `103.27.157.38` | `103.27.157.100` | `https://dns.mafioznik.xyz/dns-query` | [dns.mafioznik.xyz](https://dns.mafioznik.xyz/) | ChatGPT, Discord, YouTube, Steam, Spotify, Instagram, Twitter/X |
+| **Shecan DNS** | `[SmartDNS]` | `178.22.122.100` | `185.51.200.2` | `https://free.shecan.ir/dns-query` | [shecan.ir](https://shecan.ir/) | Антисанкционный: Docker Hub, Android Dev, Oracle, NVIDIA, Gradle, Google Services, AMD |
+| **Control D (ControlID)** | `[SmartDNS]` | `76.76.2.0` | `76.76.10.0` | `https://freedns.controld.com/p0` | [controld.com](https://controld.com/) | Anycast SmartDNS от Windscribe: ChatGPT, Claude, стриминги, защита от трекеров и фишинга |
+| **Akile DNS (AKDNS)** | `[SmartDNS]` | `66.66.66.66` | `108.160.138.51` | `https://dns.akile.ai/dns-query` | [dns.akile.ai](https://dns.akile.ai/) | Разблокировка стримингов: Netflix, Disney+, YouTube, ChatGPT, Spotify, TikTok |
+| **Cloudflare (1.1.1.1)** | Публичный | `1.1.1.1` | `1.0.0.1` | `https://cloudflare-dns.com/dns-query` | [1.1.1.1](https://1.1.1.1/) | Высокая скорость отклика и повышенная приватность |
+| **Google Public DNS** | Публичный | `8.8.8.8` | `8.8.4.4` | `https://dns.google/dns-query` | [developers.google.com](https://developers.google.com/speed/public-dns) | Общедоступный стабильный глобальный DNS-резолвер |
 | **Quad9 DNS** | Безопасность | `9.9.9.9` | `149.112.112.112` | `https://dns.quad9.net/dns-query` | [quad9.net](https://quad9.net/) | Блокировка вредоносных и фишинговых ресурсов |
 | **AdGuard DNS** | Фильтрация | `94.140.14.14` | `94.140.15.15` | `https://dns.adguard-dns.com/dns-query` | [adguard-dns.io](https://adguard-dns.io/) | Фильтрация рекламы и счетчиков аналитики |
 | **Автоматически (DHCP)** | Системный | *Авто* | *Авто* | — | — | Сброс параметров на стандартный DNS роутера или провайдера |
@@ -93,10 +77,10 @@ QuickDNS автоматизирует этот процесс:
 
 ## Инструкция по использованию
 
-1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/tag/v2.1.0) или архив `QuickDNS-v2.1.0-Portable.zip`.
-2. Запустите **`QuickDNS.exe`** (при первом запуске подтвердите стандартный запрос UAC для доступа к сетевым параметрам).
-3. Программа автоматически выберет ваш активный адаптер (Wi-Fi или Ethernet).
-4. Выберите нужный DNS-профиль из выпадающего списка.
+1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v2.3.0-Portable.zip` со страницы последнего релиза.
+2. Запустите **`QuickDNS.exe`** (при запуске подтвердите стандартный запрос UAC для доступа к сетевым параметрам).
+3. Программа автоматически определит ваш активный адаптер (Wi-Fi или Ethernet).
+4. Выберите нужный DNS-профиль из выпадающего списка (при необходимости выберите альтернативную ноду из пула IP).
 5. Нажмите кнопку **«Применить DNS в 1 клик»** — настройки применятся мгновенно.
 6. Для быстрого переключения сверните программу в трей: кликните правой кнопкой мыши по значку возле часов и выберите нужный сервер.
 
@@ -118,7 +102,7 @@ QuickDNS автоматизирует этот процесс:
 <summary><b>Где сохраняются добавленные профили?</b></summary>
 Пользовательские профили сохраняются в системной директории пользователя в формате JSON:<br/>
 <code>%APPDATA%\QuickDNS\profiles.json</code><br/>
-Файл создается автоматически и синхронизируется в потокобезопасном режиме.
+Файл создается автоматически и синхронизируется в потокобезопасном атомарном режиме.
 </details>
 
 <details>
@@ -128,7 +112,7 @@ QuickDNS автоматизирует этот процесс:
 
 <details>
 <summary><b>Как проверяется целостность и безопасность при автообновлении?</b></summary>
-Обновления скачиваются исключительно по HTTPS с официальных доменов GitHub с проверкой сертификатов TLS. Перед запуском нового исполняемого файла программа загружает файл <code>QuickDNS.exe.sha256</code> из релиза и вычисляет контрольную сумму через Windows BCrypt API. При несовпадении хэша или отсутствии файла подписи обновление блокируется.
+Обновления скачиваются исключительно по HTTPS с официальных доменов GitHub с проверкой сертификатов TLS и целевых редиректов. Перед заменой исполняемого файла программа загружает файл <code>QuickDNS.exe.sha256</code> из релиза и сверяет контрольную сумму через Windows BCrypt API. При несовпадении хэша или отсутствии файла подписи обновление блокируется.
 </details>
 
 ---
@@ -136,11 +120,11 @@ QuickDNS автоматизирует этот процесс:
 ## Архитектура и стек технологий
 
 * **Язык разработки:** C++20 (Win32 API, STL).
-* **Сетевые интерфейсы:** Windows **IP Helper API** (`GetAdaptersAddresses`, `SetInterfaceDnsSettings` для Windows 10 1809+ / Windows 11 с автоматическим fallback на `netsh`).
+* **Сетевые интерфейсы:** Windows **IP Helper API** (`GetAdaptersAddresses`, `SetInterfaceDnsSettings` для Windows 10 1809+ / Windows 11 с fallback на `netsh` и реестр), прямой RFC 1035 UDP резолвер и клиент TLS **Schannel / SSPI**.
 * **Очистка кэша:** Windows **DNS API** (`DnsFlushResolverCache` из `dnsapi.dll`).
-* **Графика и стиль:** Windows **DWM API** (`DwmSetWindowAttribute`), **GDI+** с субпиксельным сглаживанием (`SmoothingModeAntiAlias`), **Common Controls v6**.
-* **Хранилище настроек:** JSON в `%APPDATA%\QuickDNS\profiles.json` (потокобезопасный `std::mutex`, кодировка UTF-8 / UTF-16).
-* **Система сборки:** CMake 3.20+ и скрипт `build.bat` (LLVM-MinGW / MSVC).
+* **Графика и стиль:** Windows **DWM API** (`DwmSetWindowAttribute`), **GDI+** с субпиксельным сглаживанием (`SmoothingModeAntiAlias`), **Common Controls v6**, `PerMonitorV2` DPI.
+* **Хранилище настроек:** JSON в `%APPDATA%\QuickDNS\profiles.json` (`nlohmann/json`, потокобезопасная атомарная запись UTF-8).
+* **Система сборки:** CMake 3.20+ (MSVC / Clang / MinGW) и автономный скрипт `build.bat` (LLVM-MinGW / MSYS2).
 
 ---
 
@@ -150,78 +134,90 @@ QuickDNS автоматизирует этот процесс:
 QuickDNS/
 ├── .github/
 │   └── workflows/
-│       └── build.yml             # Автоматическая сборка в GitHub Actions
+│       └── build.yml                  # CI/CD сборка, CTest и публикация релизов
 ├── include/
-│   ├── ai_checker.h              # Движок проверки доступности нейросетей (ChatGPT, Claude, Gemini, Copilot)
-│   ├── app_updater.h             # Защищенная загрузка и проверка SHA-256 обновлений
-│   ├── config_manager.h          # Управление профилями и JSON-персистентность
-│   ├── dialog_add_profile.h      # Модальное окно добавления своих DNS-профилей
-│   ├── dialog_ai_check.h         # Модальное окно проверки доступности ИИ-сервисов
-│   ├── dialog_benchmark.h        # Диалог многопоточного тестирования скорости DNS
-│   ├── dialog_smartdns.h         # Каталог SmartDNS и разблокируемых сервисов
-│   ├── dns_benchmark.h          # Движок замера пинга серверов
-│   ├── dns_manager.h             # Сетевое ядро, Win32 IPHlpApi и сброс кэша
-│   ├── encoding_utils.h          # Декодирование UTF-8 <-> UTF-16
-│   ├── resource.h                # Идентификаторы ресурсов и контролов
-│   ├── smartdns_verifier.h       # Верификация SmartDNS-нод и валидация IP
-│   ├── ui_main.h                 # Архитектура главного окна и системного трея
-│   ├── ui_palette.h              # Цветовая палитра темной и светлой тем
-│   └── winsock_init.h            # Потокобезопасная глобальная инициализация Winsock
+│   ├── ai_checker.h                   # Движок проверки доступности ИИ (ChatGPT, Claude, Gemini, Copilot)
+│   ├── app_updater.h                  # Защищенная загрузка и проверка SHA-256 обновлений
+│   ├── background_tasks.h             # Пул фоновых потоков с контролируемым завершением
+│   ├── config_manager.h               # Управление профилями, пулами IP и JSON-персистентность
+│   ├── dialog_add_profile.h           # Модальное окно добавления пользовательских DNS-профилей
+│   ├── dialog_ai_check.h              # Модальное окно проверки доступности ИИ-сервисов
+│   ├── dialog_benchmark.h             # Диалог многопоточного тестирования скорости DNS
+│   ├── dialog_smartdns.h              # Каталог SmartDNS и автообновления рабочих нод
+│   ├── dns_benchmark.h                # Движок замера задержки серверов
+│   ├── dns_manager.h                  # Сетевое ядро, Win32 IPHlpApi, DoH и сброс кэша
+│   ├── encoding_utils.h               # Безопасное преобразование UTF-8 <-> UTF-16
+│   ├── resource.h                     # Идентификаторы ресурсов и контролов
+│   ├── smartdns_verifier.h            # Верификация SmartDNS-нод и RFC 8484 DoH
+│   ├── ui_main.h                      # Архитектура главного окна и системного трея
+│   ├── ui_palette.h                   # Цветовая палитра темной и светлой тем
+│   └── winsock_init.h                 # Потокобезопасная инициализация Winsock
 ├── res/
-│   ├── app.manifest              # Манифест UAC requireAdministrator + DPI v2
-│   ├── app_icon.ico              # Фирменная иконка приложения (16x16 - 256x256)
-│   ├── app_logo.png              # Графический прозрачный логотип для документации
-│   ├── default_profiles.json     # Предустановленные профили DNS
-│   ├── resource.rc               # Ресурсы главного приложения
-│   └── resource_diag.rc          # Ресурсы диагностических тестов
+│   ├── app.manifest                   # Манифест UAC requireAdministrator + PerMonitorV2 DPI
+│   ├── app_icon.ico                   # Иконка приложения (16x16 - 256x256)
+│   ├── app_logo.png                   # Прозрачный логотип приложения
+│   ├── default_profiles.json          # Эталонные предустановленные профили DNS
+│   ├── diag_icon.ico                  # Иконка диагностических утилит
+│   ├── resource.rc                    # Ресурсы главного приложения
+│   └── resource_diag.rc               # Ресурсы диагностических тестов
+├── scripts/
+│   ├── make_icons.ps1                 # Генерация мультиразмерных .ico из PNG/JPG
+│   └── package_release.ps1            # Сборка и валидация Portable ZIP архива релиза
 ├── src/
-│   ├── ai_checker.cpp            # Прямой UDP DNS-резолв (RFC 1035) и TLS/HTTPS Schannel пробинг
-│   ├── app_updater.cpp           # Обновление через GitHub API, валидация TLS и BCrypt SHA-256
-│   ├── config_manager.cpp        # Реализация JSON хранилища и встроенных пресетов
-│   ├── dialog_add_profile.cpp    # Реализация модального диалога добавления профиля
-│   ├── dialog_ai_check.cpp       # Графический интерфейс проверки доступности ИИ
-│   ├── dialog_benchmark.cpp      # Реализация окна тестирования DNS
-│   ├── dialog_smartdns.cpp       # Реализация каталога SmartDNS с поиском и карточками
-│   ├── dns_benchmark.cpp         # Реализация движка замера скорости
-│   ├── dns_manager.cpp           # Системные сетевые вызовы Windows
-│   ├── main.cpp                  # Точка входа wWinMain, инициализация GDI+ и COM
-│   ├── smartdns_verifier.cpp     # DNS RFC 1035 wireformat запросы и HTTP DoH замеры
-│   └── ui_main.cpp               # Графический интерфейс, трей, обработка событий
+│   ├── ai_checker.cpp                 # Прямой UDP DNS-резолв (RFC 1035) и TLS/HTTPS Schannel пробинг
+│   ├── app_updater.cpp                # Обновление через GitHub API, валидация URL и BCrypt SHA-256
+│   ├── config_manager.cpp             # Реализация JSON-хранилища, миграции и встроенных пресетов
+│   ├── dialog_add_profile.cpp         # Реализация модального диалога добавления профиля
+│   ├── dialog_ai_check.cpp            # Графический интерфейс проверки доступности ИИ
+│   ├── dialog_benchmark.cpp           # Реализация окна тестирования скорости DNS
+│   ├── dialog_smartdns.cpp            # Реализация каталога SmartDNS с поиском и карточками
+│   ├── dns_benchmark.cpp              # Реализация многопоточного движка бенчмарка
+│   ├── dns_manager.cpp                # Системные сетевые вызовы Windows и настройка DoH
+│   ├── main.cpp                       # Точка входа wWinMain, single-instance, GDI+ и COM
+│   ├── smartdns_verifier.cpp          # DNS wireformat запросы, парсинг и HTTP DoH проверка
+│   └── ui_main.cpp                    # Главное окно, трей, sparkline-мониторинг
 ├── tests/
-│   ├── test_ai_checker.cpp       # Тесты парсинга DNS wireformat, CNAME-цепочек и агрегации ИИ
-│   ├── test_benchmark.cpp        # Тесты движка бенчмарка DNS
-│   ├── test_config.cpp           # Тесты конфигураций и персистентности
-│   ├── test_dns.cpp              # Тесты адаптеров и сброса кэша DNS
-│   ├── test_smartdns_verifier.cpp # Тесты верификатора SmartDNS и DNS wireformat
-│   └── test_updater.cpp          # Тесты модуля обновлений и SHA-256 BCrypt
-├── .gitignore
-├── build.bat                     # Быстрая сборка проекта
-├── CMakeLists.txt                # Скрипт сборки CMake
-├── LICENSE                       # Лицензия MIT
-├── QuickDNS.exe                  # Готовый исполняемый файл
-└── README.md                     # Документация проекта
+│   ├── fixtures/
+│   │   └── profiles_v201.json         # Фикстура миграции конфигурации v2.0.1
+│   ├── test_ai_checker.cpp            # Модульные тесты парсинга DNS wireformat и агрегации ИИ
+│   ├── test_benchmark.cpp             # Тесты санитизации доменов и движка бенчмарка
+│   ├── test_config.cpp                # Тесты конфигураций, миграции и четности пресетов
+│   ├── test_dns.cpp                   # Тесты валидации IPv4/IPv6/DoH и сетевых адаптеров
+│   ├── test_smartdns_verifier.cpp     # Тесты верификатора SmartDNS и пула лучших IP
+│   └── test_updater.cpp               # Тесты SemVer, URL allowlist и SHA-256 BCrypt
+├── third_party/
+│   └── nlohmann/
+│       └── json.hpp                   # Библиотека сериализации JSON
+├── tools/                             # Утилиты генерации графических ассетов
+├── AGENTS.md                          # Правила разработки и оформления релизов
+├── build.bat                          # Автономная сборка через LLVM-MinGW / MSYS2
+├── CMakeLists.txt                     # Конфигурация сборки CMake и тестов CTest
+├── LICENSE                            # Лицензия MIT
+├── README.md                          # Основная документация проекта
+├── README.txt                         # Краткая справка для Portable-архива
+└── RELEASE_NOTES.md                   # Примечания к текущему релизу (EN / RU)
 ```
 
 ---
 
 ## Сборка из исходников
 
-### Вариант 1: Быстрая сборка через `build.bat`
+### Вариант 1: Сборка и запуск тестов через CMake (Visual Studio 2022)
+```cmd
+git clone https://github.com/szanko02/QuickDNS.git
+cd QuickDNS
+cmake -B build -S . -A x64
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure -LE network
+```
+
+### Вариант 2: Быстрая сборка через `build.bat` (LLVM-MinGW / MSYS2)
 ```cmd
 git clone https://github.com/szanko02/QuickDNS.git
 cd QuickDNS
 build.bat
 ```
-*Скрипт скомпилирует ресурсы, сетевое ядро, GUI и создаст готовый `QuickDNS.exe`.*
-
-### Вариант 2: Сборка через CMake (Visual Studio 2022)
-```cmd
-git clone https://github.com/szanko02/QuickDNS.git
-cd QuickDNS
-mkdir build && cd build
-cmake .. -G "Visual Studio 17 2022" -A x64
-cmake --build . --config Release
-```
+*Скрипт скомпилирует ресурсы, сетевое ядро, GUI, модульные тесты и создаст готовый `QuickDNS.exe`.*
 
 ---
 

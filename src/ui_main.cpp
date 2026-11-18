@@ -12,17 +12,23 @@
 #include <sstream>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cctype>
+#include <cwctype>
+#include <string_view>
 #include <objbase.h>
 #include <propidl.h>
 #include <gdiplus.h>
 #include <initguid.h>
 #include <uiautomation.h>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "oleaut32.lib")
+#endif
 
 using QuickDns::Encoding::utf8_to_wide;
 using QuickDns::Encoding::wide_to_utf8;
@@ -36,6 +42,75 @@ namespace {
 
     constexpr int WINDOW_CLIENT_WIDTH  = 580;
     constexpr int WINDOW_CLIENT_HEIGHT = 804;
+
+    inline HMENU CtrlId(int id) {
+        return reinterpret_cast<HMENU>(static_cast<UINT_PTR>(id));
+    }
+
+    UINT query_system_or_monitor_dpi(HMONITOR hMon) {
+        if (HMODULE hShcore = GetModuleHandleW(L"shcore.dll")) {
+            using GetDpiForMonitorFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
+            auto pfnMon = reinterpret_cast<GetDpiForMonitorFn>(
+                reinterpret_cast<void*>(GetProcAddress(hShcore, "GetDpiForMonitor")));
+            if (pfnMon && hMon) {
+                UINT dpiX = 96;
+                UINT dpiY = 96;
+                if (SUCCEEDED(pfnMon(hMon, 0 /* MDT_EFFECTIVE_DPI */, &dpiX, &dpiY)) && dpiX > 0) {
+                    return dpiX;
+                }
+            }
+        }
+        if (HMODULE hUser32 = GetModuleHandleW(L"user32.dll")) {
+            using GetDpiForSystemFn = UINT(WINAPI*)();
+            auto pfnSys = reinterpret_cast<GetDpiForSystemFn>(
+                reinterpret_cast<void*>(GetProcAddress(hUser32, "GetDpiForSystem")));
+            if (pfnSys) {
+                UINT dpi = pfnSys();
+                if (dpi > 0) {
+                    return dpi;
+                }
+            }
+        }
+        HDC hdc = GetDC(nullptr);
+        UINT dpi = 96;
+        if (hdc) {
+            int logPx = GetDeviceCaps(hdc, LOGPIXELSX);
+            if (logPx > 0) {
+                dpi = static_cast<UINT>(logPx);
+            }
+            ReleaseDC(nullptr, hdc);
+        }
+        return dpi;
+    }
+
+    void adjust_window_rect_for_dpi(RECT& rc, DWORD style, DWORD exStyle, UINT dpi) {
+        if (HMODULE hUser32 = GetModuleHandleW(L"user32.dll")) {
+            using AdjustWindowRectExForDpiFn = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+            auto pfnAdjust = reinterpret_cast<AdjustWindowRectExForDpiFn>(
+                reinterpret_cast<void*>(GetProcAddress(hUser32, "AdjustWindowRectExForDpi")));
+            if (pfnAdjust && pfnAdjust(&rc, style, FALSE, exStyle, dpi)) {
+                return;
+            }
+        }
+        AdjustWindowRectEx(&rc, style, FALSE, exStyle);
+    }
+
+    bool has_no_elevate_arg() {
+        int argc = 0;
+        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        if (!argv) {
+            return false;
+        }
+        bool found = false;
+        for (int i = 1; i < argc; ++i) {
+            if (std::wstring_view(argv[i]) == L"--no-elevate") {
+                found = true;
+                break;
+            }
+        }
+        LocalFree(argv);
+        return found;
+    }
 
     struct ButtonAnimationState {
         float hover = 0.0f;
@@ -63,7 +138,10 @@ namespace {
             if (!anim->isTracking) {
                 anim->isTracking = true;
                 anim->targetHover = 1.0f;
-                TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+                TRACKMOUSEEVENT tme{};
+                tme.cbSize = sizeof(TRACKMOUSEEVENT);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hWnd;
                 TrackMouseEvent(&tme);
                 SetTimer(hWnd, 2001, 16, nullptr);
             }
@@ -134,7 +212,10 @@ namespace {
         case WM_MOUSEMOVE: {
             if (!state->isHovered) {
                 state->isHovered = true;
-                TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+                TRACKMOUSEEVENT tme{};
+                tme.cbSize = sizeof(TRACKMOUSEEVENT);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hWnd;
                 TrackMouseEvent(&tme);
                 InvalidateRect(hWnd, nullptr, FALSE);
             }
@@ -161,12 +242,17 @@ namespace {
             GetClientRect(hWnd, &rc);
             int w = rc.right - rc.left;
             int h = rc.bottom - rc.top;
+            if (w <= 0 || h <= 0) {
+                EndPaint(hWnd, &ps);
+                return 0;
+            }
 
             HDC hdcMem = CreateCompatibleDC(hdc);
             HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
             HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
             bool isDark = state->pMain->is_dark_mode();
+            float dpiScale = static_cast<float>(state->pMain->get_dpi()) / 96.0f;
             auto pal = GetPalette(isDark);
 
             {
@@ -180,7 +266,7 @@ namespace {
                 float rW = static_cast<float>(w) - 1.0f;
                 float rH = static_cast<float>(h) - 1.0f;
                 Gdiplus::GraphicsPath boxPath;
-                AddRoundedRect(boxPath, Gdiplus::RectF(0.5f, 0.5f, rW, rH), 6.0f);
+                AddRoundedRect(boxPath, Gdiplus::RectF(0.5f, 0.5f, rW, rH), 6.0f * dpiScale);
 
                 Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
                 g.FillPath(&bgBrush, &boxPath);
@@ -189,45 +275,46 @@ namespace {
                 COLORREF borderCol = (state->isHovered || hasFocus) 
                     ? (isDark ? RGB(96, 165, 250) : RGB(37, 99, 235)) 
                     : pal.cardBorder;
-                float borderWidth = (state->isHovered || hasFocus) ? 1.5f : 1.0f;
+                float borderWidth = ((state->isHovered || hasFocus) ? 1.5f : 1.0f) * dpiScale;
                 Gdiplus::Pen borderPen(Gdiplus::Color(255, GetRValue(borderCol), GetGValue(borderCol), GetBValue(borderCol)), borderWidth);
                 g.DrawPath(&borderPen, &boxPath);
 
                 // Modern downward chevron arrow
-                Gdiplus::Pen arrowPen(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)), 1.8f);
+                Gdiplus::Pen arrowPen(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)), 1.8f * dpiScale);
                 arrowPen.SetStartCap(Gdiplus::LineCapRound);
                 arrowPen.SetEndCap(Gdiplus::LineCapRound);
                 arrowPen.SetLineJoin(Gdiplus::LineJoinRound);
 
-                float ax = static_cast<float>(w) - 18.0f;
-                float ay = static_cast<float>(h) / 2.0f - 1.5f;
+                float ax = static_cast<float>(w) - 18.0f * dpiScale;
+                float ay = static_cast<float>(h) / 2.0f - 1.5f * dpiScale;
+                float arm = 4.5f * dpiScale;
                 Gdiplus::PointF arrowPts[3] = {
-                    Gdiplus::PointF(ax - 4.5f, ay),
-                    Gdiplus::PointF(ax, ay + 4.5f),
-                    Gdiplus::PointF(ax + 4.5f, ay)
+                    Gdiplus::PointF(ax - arm, ay),
+                    Gdiplus::PointF(ax, ay + arm),
+                    Gdiplus::PointF(ax + arm, ay)
                 };
                 g.DrawLines(&arrowPen, arrowPts, 3);
             }
 
             // Draw selected item text
-            int curSel = (int)SendMessageW(hWnd, CB_GETCURSEL, 0, 0);
+            int curSel = static_cast<int>(SendMessageW(hWnd, CB_GETCURSEL, 0, 0));
             std::wstring itemText;
             if (curSel != CB_ERR) {
-                int len = (int)SendMessageW(hWnd, CB_GETLBTEXTLEN, curSel, 0);
+                int len = static_cast<int>(SendMessageW(hWnd, CB_GETLBTEXTLEN, static_cast<WPARAM>(curSel), 0));
                 if (len > 0) {
-                    itemText.resize(len);
-                    SendMessageW(hWnd, CB_GETLBTEXT, curSel, reinterpret_cast<LPARAM>(&itemText[0]));
+                    itemText.resize(static_cast<size_t>(len));
+                    SendMessageW(hWnd, CB_GETLBTEXT, static_cast<WPARAM>(curSel), reinterpret_cast<LPARAM>(itemText.data()));
                 }
             }
 
             SetBkMode(hdcMem, TRANSPARENT);
-            SetTextColor(hdcMem, pal.textPrimary);
+            SetTextColor(hdcMem, IsWindowEnabled(hWnd) ? pal.textPrimary : pal.textMuted);
             HFONT hFont = state->pMain->get_font_regular();
             HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
 
             RECT rcText = rc;
-            rcText.left += 12;
-            rcText.right -= 30; // Leave room for chevron arrow
+            rcText.left += static_cast<int>(12.0f * dpiScale);
+            rcText.right -= static_cast<int>(30.0f * dpiScale); // Leave room for chevron arrow
             DrawTextW(hdcMem, itemText.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
             SelectObject(hdcMem, oldFont);
 
@@ -252,6 +339,26 @@ namespace {
     }
 }
 
+struct MainWindow::ModalDepthGuard {
+    MainWindow* self;
+    explicit ModalDepthGuard(MainWindow* s) : self(s) {
+        ++self->m_modalDepth;
+    }
+    ~ModalDepthGuard() {
+        if (--self->m_modalDepth == 0 &&
+            self->m_deferredUpdateInfo.has_value() &&
+            !self->m_isDestroying.load(std::memory_order_acquire) &&
+            self->m_hWnd && IsWindow(self->m_hWnd))
+        {
+            auto* pDeferred = new quickdns::ReleaseInfo(std::move(*self->m_deferredUpdateInfo));
+            self->m_deferredUpdateInfo.reset();
+            if (!PostMessageW(self->m_hWnd, WM_APP_UPDATE_RESULT, 0, reinterpret_cast<LPARAM>(pDeferred))) {
+                delete pDeferred;
+            }
+        }
+    }
+};
+
 MainWindow::MainWindow()
     : m_dnsManager(std::make_unique<DnsManager>())
     , m_configManager(std::make_unique<ConfigManager>())
@@ -263,9 +370,23 @@ MainWindow::MainWindow()
 }
 
 MainWindow::~MainWindow() {
-    m_tasks.join_all();
+    m_isDestroying.store(true, std::memory_order_release);
     stop_ping_worker();
+    m_tasks.join_all();
     remove_tray_icon();
+
+    if (m_hWnd && IsWindow(m_hWnd)) {
+        drain_pending_app_messages(m_hWnd);
+        SetClassLongPtrW(m_hWnd, GCLP_HBRBACKGROUND, 0);
+    }
+    if (m_hToolTip && IsWindow(m_hToolTip)) {
+        DestroyWindow(m_hToolTip);
+        m_hToolTip = nullptr;
+    }
+    if (m_hInstance) {
+        UnregisterClassW(GRAPH_CLASS_NAME, m_hInstance);
+        UnregisterClassW(WINDOW_CLASS_NAME, m_hInstance);
+    }
 
     if (m_hFontRegular) DeleteObject(m_hFontRegular);
     if (m_hFontBold) DeleteObject(m_hFontBold);
@@ -276,24 +397,98 @@ MainWindow::~MainWindow() {
 
     if (m_hbrBg) DeleteObject(m_hbrBg);
     if (m_hbrCard) DeleteObject(m_hbrCard);
-    if (m_hToolTip) DestroyWindow(m_hToolTip);
+}
+
+HWND MainWindow::get_modal_parent() const {
+    if (!m_hWnd || !IsWindow(m_hWnd)) {
+        return nullptr;
+    }
+    HWND hPopup = GetLastActivePopup(m_hWnd);
+    return (hPopup && IsWindow(hPopup)) ? hPopup : m_hWnd;
+}
+
+void MainWindow::drain_pending_app_messages(HWND hWnd) {
+    if (!hWnd) {
+        return;
+    }
+    MSG msg{};
+    while (PeekMessageW(&msg, hWnd, WM_APP, WM_APP + 16, PM_REMOVE | PM_NOYIELD)) {
+        switch (msg.message) {
+        case WM_APP_UPDATE_RESULT:
+            delete reinterpret_cast<quickdns::ReleaseInfo*>(msg.lParam);
+            break;
+        case WM_APP_DOWNLOAD_RESULT:
+            delete reinterpret_cast<quickdns::DownloadUpdateResult*>(msg.lParam);
+            break;
+        case WM_APP_SMARTDNS_RESULT:
+            delete reinterpret_cast<quickdns::SmartDnsTrayResult*>(msg.lParam);
+            break;
+        case WM_APP_DNS_APPLIED:
+            delete reinterpret_cast<quickdns::DnsApplyResult*>(msg.lParam);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+UINT MainWindow::query_window_dpi(HWND hWnd) const {
+    if (hWnd) {
+        if (HMODULE hUser32 = GetModuleHandleW(L"user32.dll")) {
+            using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+            auto pfnWin = reinterpret_cast<GetDpiForWindowFn>(
+                reinterpret_cast<void*>(GetProcAddress(hUser32, "GetDpiForWindow")));
+            if (pfnWin) {
+                UINT dpi = pfnWin(hWnd);
+                if (dpi > 0) {
+                    return dpi;
+                }
+            }
+        }
+    }
+    HMONITOR hMon = hWnd ? MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST) : nullptr;
+    return query_system_or_monitor_dpi(hMon);
+}
+
+int MainWindow::dpi_scale(int px) const {
+    return MulDiv(px, static_cast<int>(m_dpi), 96);
+}
+
+float MainWindow::dpi_scale_f(float px) const {
+    return px * (static_cast<float>(m_dpi) / 96.0f);
 }
 
 bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
     m_hInstance = hInstance;
     register_window_class();
 
+    POINT cursorPt{};
+    if (!GetCursorPos(&cursorPt)) {
+        cursorPt = { 0, 0 };
+    }
+    HMONITOR hMon = MonitorFromPoint(cursorPt, MONITOR_DEFAULTTONEAREST);
+    m_dpi = query_system_or_monitor_dpi(hMon);
+
     DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
-    RECT wr = { 0, 0, WINDOW_CLIENT_WIDTH, WINDOW_CLIENT_HEIGHT };
-    AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
+    RECT wr = { 0, 0, dpi_scale(WINDOW_CLIENT_WIDTH), dpi_scale(WINDOW_CLIENT_HEIGHT) };
+    adjust_window_rect_for_dpi(wr, dwStyle, 0, m_dpi);
     int winWidth = wr.right - wr.left;
     int winHeight = wr.bottom - wr.top;
 
-    // Center window on screen
-    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-    int posX = (screenWidth - winWidth) / 2;
-    int posY = (screenHeight - winHeight) / 2;
+    // Center window inside target monitor work area and clamp to work area bounds
+    RECT rcWork = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+    if (hMon) {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(hMon, &mi)) {
+            rcWork = mi.rcWork;
+        }
+    } else {
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
+    }
+    int posX = rcWork.left + ((rcWork.right - rcWork.left) - winWidth) / 2;
+    int posY = rcWork.top + ((rcWork.bottom - rcWork.top) - winHeight) / 2;
+    clamp_window_to_workarea(posX, posY, winWidth, winHeight, hMon);
 
     std::wstring winTitle = L"QuickDNS v" + std::wstring(quickdns::APP_VERSION_W) + L" — Быстрая смена DNS в 1 клик";
     m_hWnd = CreateWindowExW(
@@ -313,12 +508,12 @@ bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
         return false;
     }
 
-    // Clean up .old executable from previous update
-    quickdns::AppUpdater::cleanup_previous_update();
+    m_dpi = query_window_dpi(m_hWnd);
 
     apply_modern_theme();
     setup_fonts();
     create_controls();
+    reposition_controls();
     setup_tray_icon();
 
     // Enable inter-process single-instance communication
@@ -444,10 +639,47 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     switch (uMsg) {
     case WM_GETMINMAXINFO: {
         auto* pMMI = reinterpret_cast<MINMAXINFO*>(lParam);
-        RECT rcMin = { 0, 0, 520, 764 };
-        AdjustWindowRectEx(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE));
-        pMMI->ptMinTrackSize.x = rcMin.right - rcMin.left;
-        pMMI->ptMinTrackSize.y = rcMin.bottom - rcMin.top;
+        UINT dpi = query_window_dpi(hWnd);
+        RECT rcMin = { 0, 0, MulDiv(520, static_cast<int>(dpi), 96), MulDiv(764, static_cast<int>(dpi), 96) };
+        adjust_window_rect_for_dpi(rcMin, static_cast<DWORD>(GetWindowLongW(hWnd, GWL_STYLE)),
+                                   static_cast<DWORD>(GetWindowLongW(hWnd, GWL_EXSTYLE)), dpi);
+        int minW = rcMin.right - rcMin.left;
+        int minH = rcMin.bottom - rcMin.top;
+
+        HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+        if (hMon) {
+            MONITORINFO mi{};
+            mi.cbSize = sizeof(mi);
+            if (GetMonitorInfoW(hMon, &mi)) {
+                int workW = mi.rcWork.right - mi.rcWork.left;
+                int workH = mi.rcWork.bottom - mi.rcWork.top;
+                if (workW > 0 && minW > workW) minW = workW;
+                if (workH > 0 && minH > workH) minH = workH;
+            }
+        }
+
+        pMMI->ptMinTrackSize.x = minW;
+        pMMI->ptMinTrackSize.y = minH;
+        return 0;
+    }
+
+    case WM_DPICHANGED: {
+        UINT newDpi = HIWORD(wParam);
+        if (newDpi > 0 && newDpi != m_dpi) {
+            m_dpi = newDpi;
+            setup_fonts();
+        }
+        const auto* pSuggested = reinterpret_cast<const RECT*>(lParam);
+        if (pSuggested) {
+            int x = pSuggested->left;
+            int y = pSuggested->top;
+            int w = pSuggested->right - pSuggested->left;
+            int h = pSuggested->bottom - pSuggested->top;
+            HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+            clamp_window_to_workarea(x, y, w, h, hMon);
+            SetWindowPos(hWnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        reposition_controls();
         return 0;
     }
 
@@ -472,7 +704,8 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
         std::unique_ptr<quickdns::ReleaseInfo> pInfo(reinterpret_cast<quickdns::ReleaseInfo*>(lParam));
         if (!pInfo) {
-            MessageBoxW(hWnd, L"Не удалось связаться с сервером GitHub Releases. Проверьте интернет-соединение.",
+            MessageBoxW(get_modal_parent(),
+                        L"Не удалось связаться с сервером GitHub Releases. Проверьте интернет-соединение.",
                         L"Ошибка обновления", MB_OK | MB_ICONWARNING);
             return 0;
         }
@@ -481,7 +714,12 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
         if (!info.is_newer) {
             std::wstring msg = L"У вас установлена последняя версия QuickDNS (v" + std::wstring(quickdns::APP_VERSION_W) + L").\nОбновлений не требуется.";
-            MessageBoxW(hWnd, msg.c_str(), L"QuickDNS актуален", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(get_modal_parent(), msg.c_str(), L"QuickDNS актуален", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+
+        if (m_modalDepth > 0) {
+            m_deferredUpdateInfo = std::move(info);
             return 0;
         }
 
@@ -490,16 +728,29 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_APP_DOWNLOAD_RESULT: {
+        m_isDownloadingUpdate = false;
         std::unique_ptr<quickdns::DownloadUpdateResult> res(reinterpret_cast<quickdns::DownloadUpdateResult*>(lParam));
+        if (res && res->success) {
+            m_forceExit = true;
+            DestroyWindow(m_hWnd);
+            return 0;
+        }
         if (m_hBtnCheckUpdate) {
             EnableWindow(m_hBtnCheckUpdate, TRUE);
             SetWindowTextW(m_hBtnCheckUpdate, L"Проверить обновления");
         }
         if (res && !res->success && !res->errorMessage.empty()) {
-            MessageBoxW(m_hWnd, res->errorMessage.c_str(),
+            MessageBoxW(get_modal_parent(), res->errorMessage.c_str(),
                         res->errorTitle.empty() ? L"Ошибка" : res->errorTitle.c_str(),
                         MB_OK | MB_ICONERROR);
         }
+        return 0;
+    }
+
+    case WM_APP_EXIT_FOR_UPDATE: {
+        m_isDownloadingUpdate = false;
+        m_forceExit = true;
+        DestroyWindow(m_hWnd);
         return 0;
     }
 
@@ -520,6 +771,9 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             return 0;
         }
         if (wmId == IDC_BTN_CHECK_UPDATE || wmId == IDM_TRAY_CHECK_UPDATE) {
+            if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load()) {
+                return 0;
+            }
             check_manual_update();
             return 0;
         }
@@ -548,17 +802,23 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             return 0;
         }
         if (wmId == IDC_BTN_DELETE_PROFILE) {
+            if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load()) {
+                return 0;
+            }
             if (m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profiles.size())) {
-                const auto& p = m_profiles[m_selectedProfileIndex];
+                const DnsProfile p = m_profiles[m_selectedProfileIndex];
                 if (p.is_builtin) {
-                    MessageBoxW(m_hWnd, L"Встроенные профили нельзя удалить.", L"Информация", MB_OK | MB_ICONINFORMATION);
+                    MessageBoxW(get_modal_parent(), L"Встроенные профили нельзя удалить.", L"Информация", MB_OK | MB_ICONINFORMATION);
                     return 0;
                 }
                 std::wstring pName = utf8_to_wide(p.name);
                 std::wstring confirmMsg = L"Вы уверены, что хотите удалить профиль \"" + pName + L"\"?";
-                if (MessageBoxW(m_hWnd, confirmMsg.c_str(), L"Подтверждение удаления", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                if (MessageBoxW(get_modal_parent(), confirmMsg.c_str(), L"Подтверждение удаления", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                    const bool wasActive = (m_configManager->get_active_profile_id() == p.id);
                     m_configManager->delete_profile(p.id);
-                    m_configManager->set_active_profile_id("dhcp");
+                    if (wasActive) {
+                        m_configManager->set_active_profile_id("dhcp");
+                    }
                     m_configManager->save_to_file();
                     populate_profiles_combobox();
                     update_status_card();
@@ -600,14 +860,23 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             return 0;
         }
         if (wmId == IDM_TRAY_RESET_DHCP) {
+            if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load()) {
+                return 0;
+            }
             reset_to_dhcp();
             return 0;
         }
         if (wmId == IDM_TRAY_FLUSH_DNS) {
+            if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load()) {
+                return 0;
+            }
             flush_dns_cache();
             return 0;
         }
         if (wmId == IDM_TRAY_VERIFY_SMARTDNS) {
+            if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load()) {
+                return 0;
+            }
             if (m_isVerifyingSmartDns.exchange(true)) {
                 break;
             }
@@ -616,17 +885,22 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
                 m_isVerifyingSmartDns = false;
                 break;
             }
-            HWND hWnd = m_hWnd;
-            m_tasks.run([hWnd, profiles]() {
-                auto results = quickdns::SmartDnsVerifier::verify_profiles(profiles);
+            HWND targetWnd = m_hWnd;
+            m_tasks.run([this, targetWnd, profiles]() {
+                auto results = quickdns::SmartDnsVerifier::verify_profiles(profiles, nullptr, &m_isDestroying);
+                if (m_isDestroying.load(std::memory_order_acquire)) {
+                    return;
+                }
                 int found_new = 0;
                 for (const auto& r : results) {
                     if (r.ip_updated && !r.best_primary_ip.empty()) {
                         found_new++;
                     }
                 }
-                auto* pRes = new quickdns::SmartDnsTrayResult{found_new};
-                if (!PostMessageW(hWnd, WM_APP_SMARTDNS_RESULT, 0, reinterpret_cast<LPARAM>(pRes))) {
+                auto* pRes = new quickdns::SmartDnsTrayResult();
+                pRes->found_new = found_new;
+                if (m_isDestroying.load(std::memory_order_acquire) ||
+                    !PostMessageW(targetWnd, WM_APP_SMARTDNS_RESULT, 0, reinterpret_cast<LPARAM>(pRes))) {
                     delete pRes;
                 }
             });
@@ -634,14 +908,28 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             return 0;
         }
         if (wmId == IDM_TRAY_EXIT) {
-            if (m_isBusy) {
-                MessageBoxW(m_hWnd, L"Дождитесь завершения текущей сетевой операции.", L"QuickDNS", MB_OK | MB_ICONWARNING);
+            if (m_modalDepth > 0) {
+                restore_from_tray();
+                MessageBoxW(get_modal_parent(),
+                            L"Закройте открытое диалоговое окно перед выходом из QuickDNS.",
+                            L"QuickDNS", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+            if (m_isBusy.load() || m_isDownloadingUpdate.load()) {
+                MessageBoxW(get_modal_parent(),
+                            m_isDownloadingUpdate.load()
+                                ? L"Дождитесь завершения загрузки и установки обновления."
+                                : L"Дождитесь завершения текущей сетевой операции.",
+                            L"QuickDNS", MB_OK | MB_ICONWARNING);
                 return 0;
             }
             DestroyWindow(m_hWnd);
             return 0;
         }
         if (wmId >= IDM_TRAY_PRESET_FIRST && wmId <= IDM_TRAY_PRESET_LAST) {
+            if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load()) {
+                return 0;
+            }
             on_tray_preset_selected(wmId);
             return 0;
         }
@@ -696,7 +984,9 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
                 show_tray_notification(L"QuickDNS SmartDNS", L"Проверка завершена. Все IP-адреса SmartDNS актуальны.");
             }
         }
-        PostMessageW(m_hWnd, WM_APP_REFRESH_STATUS, 0, 0);
+        if (!m_isDestroying.load(std::memory_order_acquire) && m_hWnd && IsWindow(m_hWnd)) {
+            PostMessageW(m_hWnd, WM_APP_REFRESH_STATUS, 0, 0);
+        }
         return 0;
     }
 
@@ -730,12 +1020,12 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
                     show_tray_notification(L"DNS обновлен", L"Профиль '" + res->profile_name + L"' успешно применен.");
                 }
                 if (res->ipv6_warning) {
-                    MessageBoxW(m_hWnd,
+                    MessageBoxW(get_modal_parent(),
                                 L"У профиля нет IPv6 DNS, запросы могут идти через DNS роутера.",
                                 L"Предупреждение QuickDNS", MB_OK | MB_ICONWARNING);
                 }
             } else {
-                MessageBoxW(m_hWnd, res->message.c_str(), L"Ошибка", MB_OK | MB_ICONERROR);
+                MessageBoxW(get_modal_parent(), res->message.c_str(), L"Ошибка", MB_OK | MB_ICONERROR);
             }
         }
 
@@ -759,19 +1049,21 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_APP_PING_UPDATED: {
+        const int pingMs = m_currentPingMs.load(std::memory_order_acquire);
         if (m_hStatusPing) {
             std::wstring pingText = L"Задержка: ";
-            if (m_currentPingMs > 0) {
-                pingText += std::to_wstring(m_currentPingMs) + L" мс";
-                if (m_currentPingMs < 60) pingText += L" (Отличная)";
-                else if (m_currentPingMs <= 150) pingText += L" (Хорошая)";
+            if (pingMs > 0) {
+                pingText += std::to_wstring(pingMs) + L" мс";
+                if (pingMs < 60) pingText += L" (Отличная)";
+                else if (pingMs <= 150) pingText += L" (Хорошая)";
                 else pingText += L" (Высокая)";
-            } else if (m_currentPingMs == 0) {
+            } else if (pingMs == 0) {
                 pingText += L"< 1 мс (Мгновенно)";
             } else {
                 pingText += L"Тайм-аут (Недоступен)";
             }
             SetWindowTextW(m_hStatusPing, pingText.c_str());
+            InvalidateRect(m_hStatusPing, nullptr, TRUE);
         }
         if (m_hGraphWnd && IsWindow(m_hGraphWnd)) {
             InvalidateRect(m_hGraphWnd, nullptr, FALSE);
@@ -782,7 +1074,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     case WM_MEASUREITEM: {
         auto* pMis = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
         if (pMis && pMis->CtlType == ODT_COMBOBOX) {
-            pMis->itemHeight = 24;
+            pMis->itemHeight = static_cast<UINT>(dpi_scale(24));
             return TRUE;
         }
         break;
@@ -807,17 +1099,17 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_CTLCOLORLISTBOX: {
-        HDC hdcList = (HDC)wParam;
+        HDC hdcList = reinterpret_cast<HDC>(wParam);
         auto pal = GetPalette(m_isDarkMode);
         SetBkMode(hdcList, OPAQUE);
         SetTextColor(hdcList, pal.textPrimary);
         SetBkColor(hdcList, pal.cardBg);
-        return (INT_PTR)m_hbrCard;
+        return reinterpret_cast<INT_PTR>(m_hbrCard);
     }
 
     case WM_CTLCOLORSTATIC: {
-        HDC hdcStatic = (HDC)wParam;
-        HWND hwndStatic = (HWND)lParam;
+        HDC hdcStatic = reinterpret_cast<HDC>(wParam);
+        HWND hwndStatic = reinterpret_cast<HWND>(lParam);
         SetBkMode(hdcStatic, TRANSPARENT);
         auto pal = GetPalette(m_isDarkMode);
 
@@ -828,14 +1120,13 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         } else if (hwndStatic == m_hStatusBadge) {
             SetTextColor(hdcStatic, pal.accentGreen);
         } else if (hwndStatic == m_hStatusPing) {
-            if (m_currentPingMs > 0 && m_currentPingMs < 60) {
+            const int pingMs = m_currentPingMs.load(std::memory_order_acquire);
+            if (pingMs >= 0 && pingMs < 60) {
                 SetTextColor(hdcStatic, pal.accentGreen);
-            } else if (m_currentPingMs >= 60 && m_currentPingMs <= 150) {
+            } else if (pingMs >= 60 && pingMs <= 150) {
                 SetTextColor(hdcStatic, pal.accentAmber);
-            } else if (m_currentPingMs > 150 || m_currentPingMs < 0) {
-                SetTextColor(hdcStatic, pal.accentRed);
             } else {
-                SetTextColor(hdcStatic, pal.textSecondary);
+                SetTextColor(hdcStatic, pal.accentRed);
             }
         } else if (hwndStatic == m_hProfileDetails) {
             SetTextColor(hdcStatic, pal.textSecondary);
@@ -845,26 +1136,26 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             SetBkMode(hdcStatic, OPAQUE);
             SetTextColor(hdcStatic, pal.textPrimary);
             SetBkColor(hdcStatic, pal.cardBg);
-            return (INT_PTR)m_hbrCard;
+            return reinterpret_cast<INT_PTR>(m_hbrCard);
         } else {
             SetTextColor(hdcStatic, pal.textSecondary);
         }
 
         if (hwndStatic == m_hStatusAdapterName || hwndStatic == m_hStatusDnsList || 
             hwndStatic == m_hStatusBadge || hwndStatic == m_hStatusPing) {
-            return (INT_PTR)m_hbrCard;
+            return reinterpret_cast<INT_PTR>(m_hbrCard);
         }
 
-        return (INT_PTR)m_hbrBg;
+        return reinterpret_cast<INT_PTR>(m_hbrBg);
     }
 
     case WM_CTLCOLOREDIT: {
-        HDC hdcEdit = (HDC)wParam;
+        HDC hdcEdit = reinterpret_cast<HDC>(wParam);
         auto pal = GetPalette(m_isDarkMode);
         SetBkMode(hdcEdit, OPAQUE);
         SetTextColor(hdcEdit, pal.textPrimary);
         SetBkColor(hdcEdit, pal.cardBg);
-        return (INT_PTR)m_hbrCard;
+        return reinterpret_cast<INT_PTR>(m_hbrCard);
     }
 
     case WM_PAINT: {
@@ -875,23 +1166,52 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         RECT rcClient = {};
         GetClientRect(hWnd, &rcClient);
         int clientWidth = rcClient.right - rcClient.left;
-        float marginX = 20.0f;
+        float marginX = static_cast<float>(dpi_scale(20));
         float cardWidth = static_cast<float>(clientWidth) - (2.0f * marginX);
 
-        // Draw background elevated card for Status area with anti-aliasing
-        {
+        if (cardWidth > 4.0f) {
             Gdiplus::Graphics g(hdc);
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
             g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
-            Gdiplus::GraphicsPath cardPath;
-            AddRoundedRect(cardPath, Gdiplus::RectF(marginX + 0.5f, 44.5f, cardWidth - 1.0f, 114.0f - 1.0f), 12.0f);
-
             Gdiplus::SolidBrush cardBrush(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
-            Gdiplus::Pen cardPen(Gdiplus::Color(255, GetRValue(pal.cardBorder), GetGValue(pal.cardBorder), GetBValue(pal.cardBorder)), 1.0f);
+            Gdiplus::Pen cardPen(Gdiplus::Color(255, GetRValue(pal.cardBorder), GetGValue(pal.cardBorder), GetBValue(pal.cardBorder)), dpi_scale_f(1.0f));
 
+            // 1. Elevated Status Card
+            float cardTop = static_cast<float>(dpi_scale(44)) + 0.5f;
+            float cardH = static_cast<float>(dpi_scale(114)) - 1.0f;
+            Gdiplus::GraphicsPath cardPath;
+            AddRoundedRect(cardPath, Gdiplus::RectF(marginX + 0.5f, cardTop, cardWidth - 1.0f, cardH), dpi_scale_f(12.0f));
             g.FillPath(&cardBrush, &cardPath);
             g.DrawPath(&cardPen, &cardPath);
+
+            // 2. Clean 1px Separator Line (replaces legacy 3D SS_ETCHEDHORZ)
+            float sepY = static_cast<float>(dpi_scale(172)) + 0.5f;
+            Gdiplus::Pen sepPen(Gdiplus::Color(255, GetRValue(pal.separator), GetGValue(pal.separator), GetBValue(pal.separator)), dpi_scale_f(1.0f));
+            g.DrawLine(&sepPen, marginX, sepY, marginX + cardWidth, sepY);
+
+            // 3. Modern Rounded Card Borders around Read-Only IP / DoH Inputs (replaces legacy WS_EX_CLIENTEDGE)
+            const HWND editHandles[2] = { m_hEditProfileIp, m_hEditProfileDoh };
+            for (HWND hEd : editHandles) {
+                if (hEd && IsWindow(hEd)) {
+                    RECT rcEd{};
+                    GetWindowRect(hEd, &rcEd);
+                    MapWindowPoints(HWND_DESKTOP, hWnd, reinterpret_cast<LPPOINT>(&rcEd), 2);
+                    InflateRect(&rcEd, dpi_scale(8), dpi_scale(4));
+                    float edW = static_cast<float>(rcEd.right - rcEd.left) - 1.0f;
+                    float edH = static_cast<float>(rcEd.bottom - rcEd.top) - 1.0f;
+                    if (edW > 0.0f && edH > 0.0f) {
+                        Gdiplus::GraphicsPath edPath;
+                        AddRoundedRect(edPath,
+                                       Gdiplus::RectF(static_cast<float>(rcEd.left) + 0.5f,
+                                                      static_cast<float>(rcEd.top) + 0.5f,
+                                                      edW, edH),
+                                       dpi_scale_f(6.0f));
+                        g.FillPath(&cardBrush, &edPath);
+                        g.DrawPath(&cardPen, &edPath);
+                    }
+                }
+            }
         }
 
         EndPaint(hWnd, &ps);
@@ -909,20 +1229,40 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     case WM_CLOSE: {
-        if (m_isBusy) {
-            MessageBoxW(m_hWnd, L"Дождитесь завершения текущей сетевой операции.", L"QuickDNS", MB_OK | MB_ICONWARNING);
-            return 0;
+        if (!m_forceExit) {
+            if (m_modalDepth > 0) {
+                restore_from_tray();
+                return 0;
+            }
+            if (m_isBusy.load() || m_isDownloadingUpdate.load()) {
+                MessageBoxW(get_modal_parent(),
+                            m_isDownloadingUpdate.load()
+                                ? L"Дождитесь завершения загрузки и установки обновления."
+                                : L"Дождитесь завершения текущей сетевой операции.",
+                            L"QuickDNS", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
         }
         DestroyWindow(m_hWnd);
         return 0;
     }
 
     case WM_DESTROY: {
-        m_tasks.join_all();
-        remove_tray_icon();
+        m_isDestroying.store(true, std::memory_order_release);
         stop_ping_worker();
+        m_tasks.join_all();
+        drain_pending_app_messages(hWnd);
+        SetClassLongPtrW(hWnd, GCLP_HBRBACKGROUND, 0);
+        remove_tray_icon();
         PostQuitMessage(0);
         return 0;
+    }
+
+    case WM_NCDESTROY: {
+        if (hWnd == m_hWnd) {
+            m_hWnd = nullptr;
+        }
+        break;
     }
     }
 
@@ -943,26 +1283,33 @@ void MainWindow::apply_theme(bool isDark) {
     m_isDarkMode = isDark;
     auto pal = GetPalette(m_isDarkMode);
 
-    if (m_hbrBg) DeleteObject(m_hbrBg);
-    m_hbrBg = CreateSolidBrush(pal.bg);
+    HBRUSH hNewBg = CreateSolidBrush(pal.bg);
+    HBRUSH hOldBg = m_hbrBg;
+    m_hbrBg = hNewBg;
 
-    if (m_hbrCard) DeleteObject(m_hbrCard);
-    m_hbrCard = CreateSolidBrush(pal.cardBg);
+    HBRUSH hNewCard = CreateSolidBrush(pal.cardBg);
+    HBRUSH hOldCard = m_hbrCard;
+    m_hbrCard = hNewCard;
+
+    SetClassLongPtrW(m_hWnd, GCLP_HBRBACKGROUND, reinterpret_cast<LONG_PTR>(m_hbrBg));
+
+    if (hOldBg) DeleteObject(hOldBg);
+    if (hOldCard) DeleteObject(hOldCard);
 
     // Update Windows 10/11 Immersive Dark Mode for Title Bar
     BOOL useDarkMode = m_isDarkMode ? TRUE : FALSE;
     DwmSetWindowAttribute(m_hWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkMode, sizeof(useDarkMode));
 
-    SetClassLongPtrW(m_hWnd, GCLP_HBRBACKGROUND, (LONG_PTR)m_hbrBg);
-
     // Update Tooltip text for theme toggle button
     if (m_hToolTip && m_hBtnThemeToggle) {
-        TOOLINFOW ti = { sizeof(TOOLINFOW) };
+        TOOLINFOW ti{};
+        ti.cbSize = sizeof(TOOLINFOW);
+        ti.uFlags = TTF_IDISHWND;
         ti.hwnd = m_hWnd;
-        ti.uId = (UINT_PTR)m_hBtnThemeToggle;
+        ti.uId = reinterpret_cast<UINT_PTR>(m_hBtnThemeToggle);
         std::wstring tip = m_isDarkMode ? L"Переключить на светлую тему" : L"Переключить на темную тему";
         ti.lpszText = const_cast<LPWSTR>(tip.c_str());
-        SendMessageW(m_hToolTip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+        SendMessageW(m_hToolTip, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&ti));
     }
 
     if (m_hComboAdapter) InvalidateRect(m_hComboAdapter, nullptr, TRUE);
@@ -996,70 +1343,103 @@ void MainWindow::attach_combobox_effects(HWND hCombo, UINT_PTR subclassId) {
 }
 
 void MainWindow::setup_fonts() {
-    m_hFontRegular = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    HFONT oldRegular = m_hFontRegular;
+    HFONT oldBold = m_hFontBold;
+    HFONT oldHeader = m_hFontHeader;
+    HFONT oldMonospace = m_hFontMonospace;
+    HFONT oldSmall = m_hFontSmall;
+    HFONT oldGraphVal = m_hFontGraphVal;
+
+    const wchar_t* displayFace = quickdns::get_display_font_name();
+
+    m_hFontRegular = CreateFontW(dpi_scale(-14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontBold = CreateFontW(-14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontBold = CreateFontW(dpi_scale(-14), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontHeader = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+    m_hFontHeader = CreateFontW(dpi_scale(-18), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Display");
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, displayFace);
 
-    m_hFontMonospace = CreateFontW(-13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontMonospace = CreateFontW(dpi_scale(-13), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
 
-    m_hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    m_hFontSmall = CreateFontW(dpi_scale(-11), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontGraphVal = CreateFontW(-13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontGraphVal = CreateFontW(dpi_scale(-13), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
 
-    if (m_hBtnIpPool) {
-        SendMessageW(m_hBtnIpPool, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
-    }
-    if (m_hBtnAiCheck) {
-        SendMessageW(m_hBtnAiCheck, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-    }
+    auto assignFont = [](HWND hCtrl, HFONT hFont) {
+        if (hCtrl && hFont) {
+            SendMessageW(hCtrl, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+        }
+    };
+
+    assignFont(m_hTitleLabel, m_hFontHeader);
+    assignFont(m_hStatusAdapterName, m_hFontBold);
+    assignFont(m_hStatusDnsList, m_hFontRegular);
+    assignFont(m_hStatusBadge, m_hFontRegular);
+    assignFont(m_hStatusPing, m_hFontBold);
+    assignFont(m_hLblAdapter, m_hFontRegular);
+    assignFont(m_hComboAdapter, m_hFontRegular);
+    assignFont(m_hLblProfile, m_hFontRegular);
+    assignFont(m_hComboProfile, m_hFontRegular);
+    assignFont(m_hLblIp, m_hFontSmall);
+    assignFont(m_hEditProfileIp, m_hFontMonospace);
+    assignFont(m_hBtnIpPool, m_hFontSmall);
+    assignFont(m_hLblDoh, m_hFontSmall);
+    assignFont(m_hEditProfileDoh, m_hFontRegular);
+    assignFont(m_hProfileDetails, m_hFontSmall);
+    assignFont(m_hBtnAiCheck, m_hFontBold);
+    assignFont(m_hFooterVersion, m_hFontRegular);
+
+    if (oldRegular) DeleteObject(oldRegular);
+    if (oldBold) DeleteObject(oldBold);
+    if (oldHeader) DeleteObject(oldHeader);
+    if (oldMonospace) DeleteObject(oldMonospace);
+    if (oldSmall) DeleteObject(oldSmall);
+    if (oldGraphVal) DeleteObject(oldGraphVal);
 }
 
 void MainWindow::create_controls() {
     RECT rcClient = {};
     GetClientRect(m_hWnd, &rcClient);
     int clientWidth = rcClient.right - rcClient.left;
-    int marginX = 20;
+    int marginX = dpi_scale(20);
     int contentWidth = clientWidth - (marginX * 2);
-    int startY = 14;
+    int startY = dpi_scale(14);
 
     // 1. Status Card Header
-    int themeBtnSize = 36;
-    int updateBtnW = 165;
-    int updateBtnH = 28;
-    int btnY = startY - 3;
+    int themeBtnSize = dpi_scale(36);
+    int updateBtnW = dpi_scale(165);
+    int updateBtnH = dpi_scale(28);
+    int btnY = startY - dpi_scale(3);
 
     std::wstring titleText = L"QuickDNS v" + std::wstring(quickdns::APP_VERSION_W) + L" — Менеджер DNS";
     m_hTitleLabel = CreateWindowExW(0, L"STATIC", titleText.c_str(),
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth - themeBtnSize - updateBtnW - 16, 24,
+        marginX, startY, contentWidth - themeBtnSize - updateBtnW - dpi_scale(16), dpi_scale(24),
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hTitleLabel, WM_SETFONT, (WPARAM)m_hFontHeader, TRUE);
+    SendMessageW(m_hTitleLabel, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontHeader), TRUE);
 
     // Update check button in top header
     m_hBtnCheckUpdate = CreateWindowExW(0, WC_BUTTONW, L"Проверить обновления",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + contentWidth - themeBtnSize - updateBtnW - 8, btnY, updateBtnW, updateBtnH,
-        m_hWnd, (HMENU)IDC_BTN_CHECK_UPDATE, m_hInstance, nullptr);
+        marginX + contentWidth - themeBtnSize - updateBtnW - dpi_scale(8), btnY, updateBtnW, updateBtnH,
+        m_hWnd, CtrlId(IDC_BTN_CHECK_UPDATE), m_hInstance, nullptr);
 
     // Theme Switcher button in top-right corner
     m_hBtnThemeToggle = CreateWindowExW(0, WC_BUTTONW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + contentWidth - themeBtnSize, btnY, themeBtnSize, updateBtnH,
-        m_hWnd, (HMENU)IDC_BTN_THEME_TOGGLE, m_hInstance, nullptr);
+        m_hWnd, CtrlId(IDC_BTN_THEME_TOGGLE), m_hInstance, nullptr);
 
     // Tooltip for Theme Switcher
     m_hToolTip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
@@ -1068,228 +1448,234 @@ void MainWindow::create_controls() {
         m_hWnd, nullptr, m_hInstance, nullptr);
     SetWindowPos(m_hToolTip, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
-    TOOLINFOW ti = { sizeof(TOOLINFOW) };
+    TOOLINFOW ti{};
+    ti.cbSize = sizeof(TOOLINFOW);
     ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
     ti.hwnd = m_hWnd;
-    ti.uId = (UINT_PTR)m_hBtnThemeToggle;
+    ti.uId = reinterpret_cast<UINT_PTR>(m_hBtnThemeToggle);
     std::wstring tip = m_isDarkMode ? L"Переключить на светлую тему" : L"Переключить на темную тему";
     ti.lpszText = const_cast<LPWSTR>(tip.c_str());
-    SendMessageW(m_hToolTip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    SendMessageW(m_hToolTip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
 
-    startY += 30; // 44
+    startY += dpi_scale(30); // 44
 
     // Inside Status Card:
-    // Right side of Card: Minimalist Sparkline Graph Control!
-    int graphW = 145;
-    int graphH = 94;
-    int graphX = marginX + contentWidth - graphW - 10;
-    int leftInfoW = graphX - (marginX + 14) - 8;
-    int insideCardY = startY + 10;
+    int graphW = dpi_scale(145);
+    int graphH = dpi_scale(94);
+    int graphX = marginX + contentWidth - graphW - dpi_scale(10);
+    int leftInfoW = graphX - (marginX + dpi_scale(14)) - dpi_scale(8);
+    int insideCardY = startY + dpi_scale(10);
 
     m_hStatusAdapterName = CreateWindowExW(0, L"STATIC", L"Подключение: Определение сети...",
         WS_CHILD | WS_VISIBLE | SS_LEFT | SS_ENDELLIPSIS,
-        marginX + 14, insideCardY, leftInfoW, 20,
-        m_hWnd, (HMENU)IDC_STATUS_TITLE, m_hInstance, nullptr);
-    SendMessageW(m_hStatusAdapterName, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-    insideCardY += 24;
+        marginX + dpi_scale(14), insideCardY, leftInfoW, dpi_scale(20),
+        m_hWnd, CtrlId(IDC_STATUS_TITLE), m_hInstance, nullptr);
+    SendMessageW(m_hStatusAdapterName, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontBold), TRUE);
+    insideCardY += dpi_scale(24);
 
     m_hStatusDnsList = CreateWindowExW(0, L"STATIC", L"Текущий DNS: Загрузка...",
         WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP,
-        marginX + 14, insideCardY, leftInfoW, 20,
-        m_hWnd, (HMENU)IDC_STATUS_DNS_VAL, m_hInstance, nullptr);
-    SendMessageW(m_hStatusDnsList, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    insideCardY += 24;
+        marginX + dpi_scale(14), insideCardY, leftInfoW, dpi_scale(20),
+        m_hWnd, CtrlId(IDC_STATUS_DNS_VAL), m_hInstance, nullptr);
+    SendMessageW(m_hStatusDnsList, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
+    insideCardY += dpi_scale(24);
 
     m_hStatusBadge = CreateWindowExW(0, L"STATIC", L"Статус: Проверка...",
         WS_CHILD | WS_VISIBLE | SS_LEFT | SS_ENDELLIPSIS,
-        marginX + 14, insideCardY, leftInfoW, 20,
+        marginX + dpi_scale(14), insideCardY, leftInfoW, dpi_scale(20),
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hStatusBadge, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    insideCardY += 24;
+    SendMessageW(m_hStatusBadge, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
+    insideCardY += dpi_scale(24);
 
     m_hStatusPing = CreateWindowExW(0, L"STATIC", L"Задержка: Ожидание...",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX + 14, insideCardY, leftInfoW, 20,
-        m_hWnd, (HMENU)IDC_STATUS_PING, m_hInstance, nullptr);
-    SendMessageW(m_hStatusPing, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
+        marginX + dpi_scale(14), insideCardY, leftInfoW, dpi_scale(20),
+        m_hWnd, CtrlId(IDC_STATUS_PING), m_hInstance, nullptr);
+    SendMessageW(m_hStatusPing, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontBold), TRUE);
 
-    int graphY = startY + 10;
+    int graphY = startY + dpi_scale(10);
 
     m_hGraphWnd = CreateWindowExW(
         0, GRAPH_CLASS_NAME, L"",
         WS_CHILD | WS_VISIBLE,
         graphX, graphY, graphW, graphH,
-        m_hWnd, (HMENU)IDC_GRAPH_VIEW, m_hInstance, this
+        m_hWnd, CtrlId(IDC_GRAPH_VIEW), m_hInstance, this
     );
 
-    startY += 114 + 14; // Past Card -> 172
-
-    // Separator Line
-    m_hSepLine = CreateWindowExW(0, L"STATIC", L"",
-        WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
-        marginX, startY, contentWidth, 2,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    startY += 14;
+    startY += dpi_scale(114) + dpi_scale(14); // Past Card -> 172
+    m_hSepLine = nullptr; // Drawn cleanly in WM_PAINT via GDI+
+    startY += dpi_scale(14);
 
     // 2. Network Adapter Selector
     m_hLblAdapter = CreateWindowExW(0, L"STATIC", L"Сетевой адаптер:",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hLblAdapter, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 24;
+        marginX, startY, contentWidth, dpi_scale(18),
+        m_hWnd, CtrlId(IDC_LABEL_ADAPTER), m_hInstance, nullptr);
+    SendMessageW(m_hLblAdapter, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
+    startY += dpi_scale(24);
 
     m_hComboAdapter = CreateWindowExW(0, WC_COMBOBOXW, L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
-        marginX, startY, contentWidth, 240,
-        m_hWnd, (HMENU)IDC_COMBO_ADAPTER, m_hInstance, nullptr);
-    SendMessageW(m_hComboAdapter, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, (WPARAM)-1, 30);
-    SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, (WPARAM)0, 24);
+        marginX, startY, contentWidth, dpi_scale(240),
+        m_hWnd, CtrlId(IDC_COMBO_ADAPTER), m_hInstance, nullptr);
+    SendMessageW(m_hComboAdapter, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
+    SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), dpi_scale(30));
+    SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, 0, dpi_scale(24));
     attach_combobox_effects(m_hComboAdapter, 201);
-    startY += 46;
+    startY += dpi_scale(46);
 
     // 3. DNS Profile Selector
     m_hLblProfile = CreateWindowExW(0, L"STATIC", L"Выберите DNS профиль (Comss, GeoHide, Без межаў и др.):",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth, 18,
-        m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hLblProfile, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    startY += 24;
+        marginX, startY, contentWidth, dpi_scale(18),
+        m_hWnd, CtrlId(IDC_LABEL_PROFILE), m_hInstance, nullptr);
+    SendMessageW(m_hLblProfile, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
+    startY += dpi_scale(24);
 
     m_hComboProfile = CreateWindowExW(0, WC_COMBOBOXW, L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
-        marginX, startY, contentWidth, 240,
-        m_hWnd, (HMENU)IDC_COMBO_PROFILE, m_hInstance, nullptr);
-    SendMessageW(m_hComboProfile, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, (WPARAM)-1, 30);
-    SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, (WPARAM)0, 24);
+        marginX, startY, contentWidth, dpi_scale(240),
+        m_hWnd, CtrlId(IDC_COMBO_PROFILE), m_hInstance, nullptr);
+    SendMessageW(m_hComboProfile, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
+    SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), dpi_scale(30));
+    SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, 0, dpi_scale(24));
     attach_combobox_effects(m_hComboProfile, 202);
-    startY += 48;
+    startY += dpi_scale(48);
 
-    int editW = contentWidth - 116;
-    int btnCopyW = 106;
-    int copyX = marginX + editW + 10;
-    int btnPoolW = 96;
-    int ipEditW = std::max(80, editW - btnPoolW - 8);
-    int poolX = marginX + ipEditW + 8;
+    int btnCopyW = dpi_scale(120);
+    int editW = (std::max)(dpi_scale(100), contentWidth - btnCopyW - dpi_scale(10));
+    int copyX = marginX + editW + dpi_scale(10);
+    int btnPoolW = dpi_scale(96);
+    int ipEditW = (std::max)(dpi_scale(80), editW - btnPoolW - dpi_scale(8));
+    int poolX = marginX + ipEditW + dpi_scale(8);
+    int edPadX = dpi_scale(8);
+    int edPadY = dpi_scale(4);
+    int edRowH = dpi_scale(26);
 
-    // IP Address (Copyable)
+    // IP Address (Copyable, borderless inside GDI+ rounded card)
     m_hLblIp = CreateWindowExW(0, L"STATIC", L"IP-адреса DNS серверов:",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth, 16,
+        marginX, startY, contentWidth, dpi_scale(16),
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hLblIp, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
-    startY += 22;
+    SendMessageW(m_hLblIp, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontSmall), TRUE);
+    startY += dpi_scale(22);
 
-    m_hEditProfileIp = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    m_hEditProfileIp = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
-        marginX, startY, ipEditW, 26,
-        m_hWnd, (HMENU)IDC_EDIT_PROFILE_IP, m_hInstance, nullptr);
-    SendMessageW(m_hEditProfileIp, WM_SETFONT, (WPARAM)m_hFontMonospace, TRUE);
+        marginX + edPadX, startY + edPadY,
+        (std::max)(dpi_scale(40), ipEditW - 2 * edPadX),
+        (std::max)(dpi_scale(14), edRowH - 2 * edPadY),
+        m_hWnd, CtrlId(IDC_EDIT_PROFILE_IP), m_hInstance, nullptr);
+    SendMessageW(m_hEditProfileIp, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontMonospace), TRUE);
 
     m_hBtnIpPool = CreateWindowExW(0, WC_BUTTONW, L"Пул IP \u25BE",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        poolX, startY, btnPoolW, 26,
-        m_hWnd, (HMENU)IDC_BTN_IP_POOL, m_hInstance, nullptr);
-    SendMessageW(m_hBtnIpPool, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
+        poolX, startY, btnPoolW, edRowH,
+        m_hWnd, CtrlId(IDC_BTN_IP_POOL), m_hInstance, nullptr);
+    SendMessageW(m_hBtnIpPool, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontSmall), TRUE);
 
     m_hBtnCopyIp = CreateWindowExW(0, WC_BUTTONW, L"Копировать IP",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        copyX, startY, btnCopyW, 26,
-        m_hWnd, (HMENU)IDC_BTN_COPY_IP, m_hInstance, nullptr);
-    startY += 40;
+        copyX, startY, btnCopyW, edRowH,
+        m_hWnd, CtrlId(IDC_BTN_COPY_IP), m_hInstance, nullptr);
+    startY += dpi_scale(40);
 
-    // DoH Template (Copyable, Read-Only)
+    // DoH Template (Copyable, Read-Only, borderless inside GDI+ rounded card)
     m_hLblDoh = CreateWindowExW(0, L"STATIC", L"Шаблон DNS over HTTPS (DoH):",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth, 16,
+        marginX, startY, contentWidth, dpi_scale(16),
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hLblDoh, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
-    startY += 22;
+    SendMessageW(m_hLblDoh, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontSmall), TRUE);
+    startY += dpi_scale(22);
 
-    m_hEditProfileDoh = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    m_hEditProfileDoh = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
-        marginX, startY, editW, 26,
-        m_hWnd, (HMENU)IDC_EDIT_PROFILE_DOH, m_hInstance, nullptr);
-    SendMessageW(m_hEditProfileDoh, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+        marginX + edPadX, startY + edPadY,
+        (std::max)(dpi_scale(40), editW - 2 * edPadX),
+        (std::max)(dpi_scale(14), edRowH - 2 * edPadY),
+        m_hWnd, CtrlId(IDC_EDIT_PROFILE_DOH), m_hInstance, nullptr);
+    SendMessageW(m_hEditProfileDoh, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
 
     m_hBtnCopyDoh = CreateWindowExW(0, WC_BUTTONW, L"Копировать DoH",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        copyX, startY, btnCopyW, 26,
-        m_hWnd, (HMENU)IDC_BTN_COPY_DOH, m_hInstance, nullptr);
-    startY += 38;
+        copyX, startY, btnCopyW, edRowH,
+        m_hWnd, CtrlId(IDC_BTN_COPY_DOH), m_hInstance, nullptr);
+    startY += dpi_scale(38);
 
     // Profile Description
     m_hProfileDetails = CreateWindowExW(0, L"STATIC", L"Описание выбранного профиля...",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        marginX, startY, contentWidth, 24,
+        marginX, startY, contentWidth, dpi_scale(24),
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hProfileDetails, WM_SETFONT, (WPARAM)m_hFontSmall, TRUE);
-    startY += 40;
+    SendMessageW(m_hProfileDetails, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontSmall), TRUE);
+    startY += dpi_scale(40);
 
     // 4. Action Buttons with comfortable neutral spacing
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить DNS в 1 клик",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, contentWidth, 38,
-        m_hWnd, (HMENU)IDC_BTN_APPLY, m_hInstance, nullptr);
-    startY += 38 + 10;
+        marginX, startY, contentWidth, dpi_scale(38),
+        m_hWnd, CtrlId(IDC_BTN_APPLY), m_hInstance, nullptr);
+    startY += dpi_scale(38) + dpi_scale(10);
 
-    int halfWidth = (contentWidth - 12) / 2;
+    int halfWidth = (contentWidth - dpi_scale(12)) / 2;
+    int btnRowH = dpi_scale(34);
+    int btnGapY = dpi_scale(10);
+    int col2X = marginX + halfWidth + dpi_scale(12);
+
     m_hBtnBenchmark = CreateWindowExW(0, WC_BUTTONW, L"Тест скорости DNS (пинг)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, halfWidth, 34,
-        m_hWnd, (HMENU)IDC_BTN_BENCHMARK, m_hInstance, nullptr);
+        marginX, startY, halfWidth, btnRowH,
+        m_hWnd, CtrlId(IDC_BTN_BENCHMARK), m_hInstance, nullptr);
 
     m_hBtnSmartDnsCatalog = CreateWindowExW(0, WC_BUTTONW, L"Каталог SmartDNS",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + halfWidth + 12, startY, halfWidth, 34,
-        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_CATALOG, m_hInstance, nullptr);
-    startY += 34 + 10;
+        col2X, startY, halfWidth, btnRowH,
+        m_hWnd, CtrlId(IDC_BTN_SMARTDNS_CATALOG), m_hInstance, nullptr);
+    startY += btnRowH + btnGapY;
 
     m_hBtnAiCheck = CreateWindowExW(0, WC_BUTTONW, L"Проверка доступности ИИ (ChatGPT, Claude, Gemini, Copilot)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, contentWidth, 34,
-        m_hWnd, (HMENU)IDC_BTN_AI_CHECK, m_hInstance, nullptr);
-    SendMessageW(m_hBtnAiCheck, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-    startY += 34 + 10;
+        marginX, startY, contentWidth, btnRowH,
+        m_hWnd, CtrlId(IDC_BTN_AI_CHECK), m_hInstance, nullptr);
+    SendMessageW(m_hBtnAiCheck, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontBold), TRUE);
+    startY += btnRowH + btnGapY;
 
     m_hBtnResetDhcp = CreateWindowExW(0, WC_BUTTONW, L"Сброс на DHCP (Авто)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, halfWidth, 34,
-        m_hWnd, (HMENU)IDC_BTN_RESET_DHCP, m_hInstance, nullptr);
+        marginX, startY, halfWidth, btnRowH,
+        m_hWnd, CtrlId(IDC_BTN_RESET_DHCP), m_hInstance, nullptr);
 
     m_hBtnWinNetwork = CreateWindowExW(0, WC_BUTTONW, L"Параметры Ethernet (DNS)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + halfWidth + 12, startY, halfWidth, 34,
-        m_hWnd, (HMENU)IDC_BTN_WIN_NETWORK, m_hInstance, nullptr);
-    startY += 34 + 10;
+        col2X, startY, halfWidth, btnRowH,
+        m_hWnd, CtrlId(IDC_BTN_WIN_NETWORK), m_hInstance, nullptr);
+    startY += btnRowH + btnGapY;
 
     m_hBtnFlushDns = CreateWindowExW(0, WC_BUTTONW, L"Сбросить DNS-кэш",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, halfWidth, 34,
-        m_hWnd, (HMENU)IDC_BTN_FLUSH_DNS, m_hInstance, nullptr);
+        marginX, startY, halfWidth, btnRowH,
+        m_hWnd, CtrlId(IDC_BTN_FLUSH_DNS), m_hInstance, nullptr);
 
     m_hBtnAddProfile = CreateWindowExW(0, WC_BUTTONW, L"Добавить свой DNS...",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + halfWidth + 12, startY, halfWidth, 34,
-        m_hWnd, (HMENU)IDC_BTN_ADD_PROFILE, m_hInstance, nullptr);
-    startY += 34 + 10;
+        col2X, startY, halfWidth, btnRowH,
+        m_hWnd, CtrlId(IDC_BTN_ADD_PROFILE), m_hInstance, nullptr);
+    startY += btnRowH + btnGapY;
 
     m_hBtnDeleteProfile = CreateWindowExW(0, WC_BUTTONW, L"Удалить профиль",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX, startY, contentWidth, 30,
-        m_hWnd, (HMENU)IDC_BTN_DELETE_PROFILE, m_hInstance, nullptr);
+        marginX, startY, contentWidth, dpi_scale(30),
+        m_hWnd, CtrlId(IDC_BTN_DELETE_PROFILE), m_hInstance, nullptr);
     EnableWindow(m_hBtnDeleteProfile, FALSE);
-    startY += 30 + 14;
+    startY += dpi_scale(30) + dpi_scale(14);
 
     // 5. Footer Version Badge
     std::wstring footerVersionStr = L"QuickDNS v" + std::wstring(quickdns::APP_VERSION_W) + L" \u2022 Portable";
     m_hFooterVersion = CreateWindowExW(0, L"STATIC", footerVersionStr.c_str(),
         WS_CHILD | WS_VISIBLE | SS_CENTER,
-        marginX, startY, contentWidth, 18,
+        marginX, startY, contentWidth, dpi_scale(18),
         m_hWnd, nullptr, m_hInstance, nullptr);
-    SendMessageW(m_hFooterVersion, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
+    SendMessageW(m_hFooterVersion, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
 
     // Attach smooth animations, hover effects and hand cursor (IDC_HAND) to all buttons
     attach_button_effects(m_hBtnApply, 1);
@@ -1313,122 +1699,146 @@ void MainWindow::reposition_controls() {
     GetClientRect(m_hWnd, &rcClient);
     int clientWidth = rcClient.right - rcClient.left;
 
-    int marginX = 20;
+    int marginX = dpi_scale(20);
     int contentWidth = clientWidth - (marginX * 2);
-    if (contentWidth < 200) return;
+    if (contentWidth < dpi_scale(200)) return;
 
-    int startY = 14;
+    int startY = dpi_scale(14);
 
     // 1. Status Card Header
-    int themeBtnSize = 36;
-    int updateBtnW = 165;
-    int updateBtnH = 28;
-    int btnY = startY - 3;
+    int themeBtnSize = dpi_scale(36);
+    int updateBtnW = dpi_scale(165);
+    int updateBtnH = dpi_scale(28);
+    int btnY = startY - dpi_scale(3);
 
     if (m_hBtnThemeToggle) {
         SetWindowPos(m_hBtnThemeToggle, nullptr, marginX + contentWidth - themeBtnSize, btnY, themeBtnSize, updateBtnH, SWP_NOZORDER);
     }
     if (m_hBtnCheckUpdate) {
-        SetWindowPos(m_hBtnCheckUpdate, nullptr, marginX + contentWidth - themeBtnSize - updateBtnW - 8, btnY, updateBtnW, updateBtnH, SWP_NOZORDER);
+        SetWindowPos(m_hBtnCheckUpdate, nullptr, marginX + contentWidth - themeBtnSize - updateBtnW - dpi_scale(8), btnY, updateBtnW, updateBtnH, SWP_NOZORDER);
     }
     if (m_hTitleLabel) {
-        int titleW = contentWidth - themeBtnSize - updateBtnW - 16;
-        if (titleW < 120) titleW = 120;
-        SetWindowPos(m_hTitleLabel, nullptr, marginX, startY, titleW, 24, SWP_NOZORDER);
+        int titleW = contentWidth - themeBtnSize - updateBtnW - dpi_scale(16);
+        if (titleW < dpi_scale(120)) titleW = dpi_scale(120);
+        SetWindowPos(m_hTitleLabel, nullptr, marginX, startY, titleW, dpi_scale(24), SWP_NOZORDER);
     }
-    startY += 30; // 44
+    startY += dpi_scale(30); // 44
 
     // Inside Status Card:
-    int graphW = std::clamp(contentWidth / 3, 140, 260);
-    int graphH = 94;
-    int graphX = marginX + contentWidth - graphW - 10;
-    int leftInfoW = graphX - (marginX + 14) - 8;
-    int insideCardY = startY + 10;
+    int graphW = (std::clamp)(contentWidth / 3, dpi_scale(140), dpi_scale(260));
+    int graphH = dpi_scale(94);
+    int graphX = marginX + contentWidth - graphW - dpi_scale(10);
+    int leftInfoW = (std::max)(dpi_scale(80), graphX - (marginX + dpi_scale(14)) - dpi_scale(8));
+    int insideCardY = startY + dpi_scale(10);
+    int statRowH = dpi_scale(20);
+    int statStepY = dpi_scale(24);
 
-    if (m_hStatusAdapterName) SetWindowPos(m_hStatusAdapterName, nullptr, marginX + 14, insideCardY, leftInfoW, 20, SWP_NOZORDER);
-    insideCardY += 24;
-    if (m_hStatusDnsList) SetWindowPos(m_hStatusDnsList, nullptr, marginX + 14, insideCardY, leftInfoW, 20, SWP_NOZORDER);
-    insideCardY += 24;
-    if (m_hStatusBadge) SetWindowPos(m_hStatusBadge, nullptr, marginX + 14, insideCardY, leftInfoW, 20, SWP_NOZORDER);
-    insideCardY += 24;
-    if (m_hStatusPing) SetWindowPos(m_hStatusPing, nullptr, marginX + 14, insideCardY, leftInfoW, 20, SWP_NOZORDER);
+    if (m_hStatusAdapterName) SetWindowPos(m_hStatusAdapterName, nullptr, marginX + dpi_scale(14), insideCardY, leftInfoW, statRowH, SWP_NOZORDER);
+    insideCardY += statStepY;
+    if (m_hStatusDnsList) SetWindowPos(m_hStatusDnsList, nullptr, marginX + dpi_scale(14), insideCardY, leftInfoW, statRowH, SWP_NOZORDER);
+    insideCardY += statStepY;
+    if (m_hStatusBadge) SetWindowPos(m_hStatusBadge, nullptr, marginX + dpi_scale(14), insideCardY, leftInfoW, statRowH, SWP_NOZORDER);
+    insideCardY += statStepY;
+    if (m_hStatusPing) SetWindowPos(m_hStatusPing, nullptr, marginX + dpi_scale(14), insideCardY, leftInfoW, statRowH, SWP_NOZORDER);
 
     if (m_hGraphWnd) {
-        SetWindowPos(m_hGraphWnd, nullptr, graphX, startY + 10, graphW, graphH, SWP_NOZORDER);
+        SetWindowPos(m_hGraphWnd, nullptr, graphX, startY + dpi_scale(10), graphW, graphH, SWP_NOZORDER);
         InvalidateRect(m_hGraphWnd, nullptr, TRUE);
     }
 
-    startY += 114 + 14; // 172
-
-    // Separator line
-    if (m_hSepLine) SetWindowPos(m_hSepLine, nullptr, marginX, startY, contentWidth, 2, SWP_NOZORDER);
-    startY += 14;
+    startY += dpi_scale(114) + dpi_scale(14); // 172
+    startY += dpi_scale(14);
 
     // 2. Network Adapter Selector
-    if (m_hLblAdapter) SetWindowPos(m_hLblAdapter, nullptr, marginX, startY, contentWidth, 18, SWP_NOZORDER);
-    startY += 24;
-    if (m_hComboAdapter) SetWindowPos(m_hComboAdapter, nullptr, marginX, startY, contentWidth, 240, SWP_NOZORDER);
-    startY += 46;
+    if (m_hLblAdapter) SetWindowPos(m_hLblAdapter, nullptr, marginX, startY, contentWidth, dpi_scale(18), SWP_NOZORDER);
+    startY += dpi_scale(24);
+    if (m_hComboAdapter) {
+        SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), dpi_scale(30));
+        SendMessageW(m_hComboAdapter, CB_SETITEMHEIGHT, 0, dpi_scale(24));
+        SetWindowPos(m_hComboAdapter, nullptr, marginX, startY, contentWidth, dpi_scale(240), SWP_NOZORDER);
+    }
+    startY += dpi_scale(46);
 
     // 3. DNS Profile Selector
-    if (m_hLblProfile) SetWindowPos(m_hLblProfile, nullptr, marginX, startY, contentWidth, 18, SWP_NOZORDER);
-    startY += 24;
-    if (m_hComboProfile) SetWindowPos(m_hComboProfile, nullptr, marginX, startY, contentWidth, 240, SWP_NOZORDER);
-    startY += 48;
+    if (m_hLblProfile) SetWindowPos(m_hLblProfile, nullptr, marginX, startY, contentWidth, dpi_scale(18), SWP_NOZORDER);
+    startY += dpi_scale(24);
+    if (m_hComboProfile) {
+        SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), dpi_scale(30));
+        SendMessageW(m_hComboProfile, CB_SETITEMHEIGHT, 0, dpi_scale(24));
+        SetWindowPos(m_hComboProfile, nullptr, marginX, startY, contentWidth, dpi_scale(240), SWP_NOZORDER);
+    }
+    startY += dpi_scale(48);
 
-    int btnCopyW = 120;
-    int editW = std::max(100, contentWidth - btnCopyW - 10);
-    int copyX = marginX + editW + 10;
-    int btnPoolW = 96;
-    int ipEditW = std::max(80, editW - btnPoolW - 8);
-    int poolX = marginX + ipEditW + 8;
+    int btnCopyW = dpi_scale(120);
+    int editW = (std::max)(dpi_scale(100), contentWidth - btnCopyW - dpi_scale(10));
+    int copyX = marginX + editW + dpi_scale(10);
+    int btnPoolW = dpi_scale(96);
+    int ipEditW = (std::max)(dpi_scale(80), editW - btnPoolW - dpi_scale(8));
+    int poolX = marginX + ipEditW + dpi_scale(8);
+    int edPadX = dpi_scale(8);
+    int edPadY = dpi_scale(4);
+    int edRowH = dpi_scale(26);
 
     // IP Address (Copyable)
-    if (m_hLblIp) SetWindowPos(m_hLblIp, nullptr, marginX, startY, contentWidth, 16, SWP_NOZORDER);
-    startY += 22;
-    if (m_hEditProfileIp) SetWindowPos(m_hEditProfileIp, nullptr, marginX, startY, ipEditW, 26, SWP_NOZORDER);
-    if (m_hBtnIpPool) SetWindowPos(m_hBtnIpPool, nullptr, poolX, startY, btnPoolW, 26, SWP_NOZORDER);
-    if (m_hBtnCopyIp) SetWindowPos(m_hBtnCopyIp, nullptr, copyX, startY, btnCopyW, 26, SWP_NOZORDER);
-    startY += 40;
+    if (m_hLblIp) SetWindowPos(m_hLblIp, nullptr, marginX, startY, contentWidth, dpi_scale(16), SWP_NOZORDER);
+    startY += dpi_scale(22);
+    if (m_hEditProfileIp) {
+        SetWindowPos(m_hEditProfileIp, nullptr,
+                     marginX + edPadX, startY + edPadY,
+                     (std::max)(dpi_scale(40), ipEditW - 2 * edPadX),
+                     (std::max)(dpi_scale(14), edRowH - 2 * edPadY),
+                     SWP_NOZORDER);
+    }
+    if (m_hBtnIpPool) SetWindowPos(m_hBtnIpPool, nullptr, poolX, startY, btnPoolW, edRowH, SWP_NOZORDER);
+    if (m_hBtnCopyIp) SetWindowPos(m_hBtnCopyIp, nullptr, copyX, startY, btnCopyW, edRowH, SWP_NOZORDER);
+    startY += dpi_scale(40);
 
     // DoH Template (Copyable, Read-Only)
-    if (m_hLblDoh) SetWindowPos(m_hLblDoh, nullptr, marginX, startY, contentWidth, 16, SWP_NOZORDER);
-    startY += 22;
-    if (m_hEditProfileDoh) SetWindowPos(m_hEditProfileDoh, nullptr, marginX, startY, editW, 26, SWP_NOZORDER);
-    if (m_hBtnCopyDoh) SetWindowPos(m_hBtnCopyDoh, nullptr, copyX, startY, btnCopyW, 26, SWP_NOZORDER);
-    startY += 38;
+    if (m_hLblDoh) SetWindowPos(m_hLblDoh, nullptr, marginX, startY, contentWidth, dpi_scale(16), SWP_NOZORDER);
+    startY += dpi_scale(22);
+    if (m_hEditProfileDoh) {
+        SetWindowPos(m_hEditProfileDoh, nullptr,
+                     marginX + edPadX, startY + edPadY,
+                     (std::max)(dpi_scale(40), editW - 2 * edPadX),
+                     (std::max)(dpi_scale(14), edRowH - 2 * edPadY),
+                     SWP_NOZORDER);
+    }
+    if (m_hBtnCopyDoh) SetWindowPos(m_hBtnCopyDoh, nullptr, copyX, startY, btnCopyW, edRowH, SWP_NOZORDER);
+    startY += dpi_scale(38);
 
     // Profile Details
-    if (m_hProfileDetails) SetWindowPos(m_hProfileDetails, nullptr, marginX, startY, contentWidth, 24, SWP_NOZORDER);
-    startY += 40;
+    if (m_hProfileDetails) SetWindowPos(m_hProfileDetails, nullptr, marginX, startY, contentWidth, dpi_scale(24), SWP_NOZORDER);
+    startY += dpi_scale(40);
 
     // 4. Action Buttons
-    if (m_hBtnApply) SetWindowPos(m_hBtnApply, nullptr, marginX, startY, contentWidth, 38, SWP_NOZORDER);
-    startY += 38 + 10;
+    if (m_hBtnApply) SetWindowPos(m_hBtnApply, nullptr, marginX, startY, contentWidth, dpi_scale(38), SWP_NOZORDER);
+    startY += dpi_scale(38) + dpi_scale(10);
 
-    int halfWidth = (contentWidth - 12) / 2;
-    int col2X = marginX + halfWidth + 12;
+    int halfWidth = (contentWidth - dpi_scale(12)) / 2;
+    int col2X = marginX + halfWidth + dpi_scale(12);
+    int btnRowH = dpi_scale(34);
+    int btnGapY = dpi_scale(10);
 
-    if (m_hBtnBenchmark) SetWindowPos(m_hBtnBenchmark, nullptr, marginX, startY, halfWidth, 34, SWP_NOZORDER);
-    if (m_hBtnSmartDnsCatalog) SetWindowPos(m_hBtnSmartDnsCatalog, nullptr, col2X, startY, halfWidth, 34, SWP_NOZORDER);
-    startY += 34 + 10;
+    if (m_hBtnBenchmark) SetWindowPos(m_hBtnBenchmark, nullptr, marginX, startY, halfWidth, btnRowH, SWP_NOZORDER);
+    if (m_hBtnSmartDnsCatalog) SetWindowPos(m_hBtnSmartDnsCatalog, nullptr, col2X, startY, halfWidth, btnRowH, SWP_NOZORDER);
+    startY += btnRowH + btnGapY;
 
-    if (m_hBtnAiCheck) SetWindowPos(m_hBtnAiCheck, nullptr, marginX, startY, contentWidth, 34, SWP_NOZORDER);
-    startY += 34 + 10;
+    if (m_hBtnAiCheck) SetWindowPos(m_hBtnAiCheck, nullptr, marginX, startY, contentWidth, btnRowH, SWP_NOZORDER);
+    startY += btnRowH + btnGapY;
 
-    if (m_hBtnResetDhcp) SetWindowPos(m_hBtnResetDhcp, nullptr, marginX, startY, halfWidth, 34, SWP_NOZORDER);
-    if (m_hBtnWinNetwork) SetWindowPos(m_hBtnWinNetwork, nullptr, col2X, startY, halfWidth, 34, SWP_NOZORDER);
-    startY += 34 + 10;
+    if (m_hBtnResetDhcp) SetWindowPos(m_hBtnResetDhcp, nullptr, marginX, startY, halfWidth, btnRowH, SWP_NOZORDER);
+    if (m_hBtnWinNetwork) SetWindowPos(m_hBtnWinNetwork, nullptr, col2X, startY, halfWidth, btnRowH, SWP_NOZORDER);
+    startY += btnRowH + btnGapY;
 
-    if (m_hBtnFlushDns) SetWindowPos(m_hBtnFlushDns, nullptr, marginX, startY, halfWidth, 34, SWP_NOZORDER);
-    if (m_hBtnAddProfile) SetWindowPos(m_hBtnAddProfile, nullptr, col2X, startY, halfWidth, 34, SWP_NOZORDER);
-    startY += 34 + 10;
+    if (m_hBtnFlushDns) SetWindowPos(m_hBtnFlushDns, nullptr, marginX, startY, halfWidth, btnRowH, SWP_NOZORDER);
+    if (m_hBtnAddProfile) SetWindowPos(m_hBtnAddProfile, nullptr, col2X, startY, halfWidth, btnRowH, SWP_NOZORDER);
+    startY += btnRowH + btnGapY;
 
-    if (m_hBtnDeleteProfile) SetWindowPos(m_hBtnDeleteProfile, nullptr, marginX, startY, contentWidth, 30, SWP_NOZORDER);
-    startY += 30 + 14;
+    if (m_hBtnDeleteProfile) SetWindowPos(m_hBtnDeleteProfile, nullptr, marginX, startY, contentWidth, dpi_scale(30), SWP_NOZORDER);
+    startY += dpi_scale(30) + dpi_scale(14);
 
     // 5. Footer Version Badge
-    if (m_hFooterVersion) SetWindowPos(m_hFooterVersion, nullptr, marginX, startY, contentWidth, 18, SWP_NOZORDER);
+    if (m_hFooterVersion) SetWindowPos(m_hFooterVersion, nullptr, marginX, startY, contentWidth, dpi_scale(18), SWP_NOZORDER);
 
     InvalidateRect(m_hWnd, nullptr, TRUE);
 }
@@ -1440,12 +1850,14 @@ void MainWindow::draw_theme_toggle_button(DRAWITEMSTRUCT* pDis) {
     RECT rc = pDis->rcItem;
     int w = rc.right - rc.left;
     int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return;
 
     auto pal = GetPalette(m_isDarkMode);
 
     auto* anim = reinterpret_cast<ButtonAnimationState*>(GetPropW(pDis->hwndItem, L"QuickDnsAnim"));
     float hoverVal = anim ? anim->hover : 0.0f;
     bool isPressed = (pDis->itemState & ODS_SELECTED) || (anim && anim->isPressed);
+    bool isDisabled = (pDis->itemState & ODS_DISABLED) != 0;
 
     // Double buffer
     HDC hdcMem = CreateCompatibleDC(hdc);
@@ -1466,8 +1878,8 @@ void MainWindow::draw_theme_toggle_button(DRAWITEMSTRUCT* pDis) {
     COLORREF baseBorder = m_isDarkMode ? RGB(45, 53, 70) : RGB(226, 232, 240);
     COLORREF hoverBorder = m_isDarkMode ? RGB(251, 191, 36) : RGB(79, 70, 229);
 
-    COLORREF curBg = isPressed ? pressBg : LerpColor(baseBg, hoverBg, hoverVal);
-    COLORREF curBorder = LerpColor(baseBorder, hoverBorder, hoverVal);
+    COLORREF curBg = isDisabled ? baseBg : (isPressed ? pressBg : LerpColor(baseBg, hoverBg, hoverVal));
+    COLORREF curBorder = isDisabled ? baseBorder : LerpColor(baseBorder, hoverBorder, hoverVal);
 
     {
         Gdiplus::Graphics g(hdcMem);
@@ -1475,33 +1887,33 @@ void MainWindow::draw_theme_toggle_button(DRAWITEMSTRUCT* pDis) {
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
         Gdiplus::GraphicsPath path;
-        AddRoundedRect(path, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), 7.0f);
+        AddRoundedRect(path, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), dpi_scale_f(7.0f));
 
         Gdiplus::SolidBrush br(Gdiplus::Color(255, GetRValue(curBg), GetGValue(curBg), GetBValue(curBg)));
-        float penWidth = 1.2f + 0.4f * hoverVal;
+        float penWidth = dpi_scale_f(1.2f + (isDisabled ? 0.0f : 0.4f * hoverVal));
         Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(curBorder), GetGValue(curBorder), GetBValue(curBorder)), penWidth);
 
         g.FillPath(&br, &path);
         g.DrawPath(&pen, &path);
 
         // Center coordinates of the vector icon (with 1px depression on press)
-        float cx = w * 0.5f + (isPressed ? 1.0f : 0.0f);
-        float cy = h * 0.5f + (isPressed ? 1.0f : 0.0f);
+        float dep = (!isDisabled && isPressed) ? dpi_scale_f(1.0f) : 0.0f;
+        float cx = w * 0.5f + dep;
+        float cy = h * 0.5f + dep;
+        BYTE iconAlpha = isDisabled ? 110 : 255;
 
         if (m_isDarkMode) {
             // Radiant Sun Icon (Warm Amber / Gold #FBBF24)
-            Gdiplus::Color sunColor(255, 251, 191, 36);
+            Gdiplus::Color sunColor(iconAlpha, 251, 191, 36);
             Gdiplus::SolidBrush sunBrush(sunColor);
-            Gdiplus::Pen sunPen(sunColor, 1.5f);
+            Gdiplus::Pen sunPen(sunColor, dpi_scale_f(1.5f));
             sunPen.SetLineCap(Gdiplus::LineCapRound, Gdiplus::LineCapRound, Gdiplus::DashCapRound);
 
-            // Core sun disc
-            float sunRadius = 4.2f;
+            float sunRadius = dpi_scale_f(4.2f);
             g.FillEllipse(&sunBrush, cx - sunRadius, cy - sunRadius, sunRadius * 2.0f, sunRadius * 2.0f);
 
-            // 8 Radial rays
-            float rInner = 6.2f;
-            float rOuter = 9.2f;
+            float rInner = dpi_scale_f(6.2f);
+            float rOuter = dpi_scale_f(9.2f);
             for (int i = 0; i < 8; ++i) {
                 float angle = i * (3.14159265f / 4.0f);
                 float x1 = cx + std::cos(angle) * rInner;
@@ -1512,11 +1924,11 @@ void MainWindow::draw_theme_toggle_button(DRAWITEMSTRUCT* pDis) {
             }
         } else {
             // Crescent Moon Icon (Indigo #4F46E5)
-            Gdiplus::Color moonColor(255, 79, 70, 229);
+            Gdiplus::Color moonColor(iconAlpha, 79, 70, 229);
             Gdiplus::SolidBrush moonBrush(moonColor);
 
             Gdiplus::GraphicsPath moonPath;
-            float moonR = 6.5f;
+            float moonR = dpi_scale_f(6.5f);
             moonPath.AddArc(cx - moonR, cy - moonR, moonR * 2.0f, moonR * 2.0f, -80.0f, 260.0f);
             moonPath.AddArc(cx - moonR * 0.6f, cy - moonR * 0.8f, moonR * 1.5f, moonR * 1.5f, 150.0f, -200.0f);
             moonPath.CloseFigure();
@@ -1537,6 +1949,9 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
 
     HDC hdc = pDis->hDC;
     RECT rc = pDis->rcItem;
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return;
 
     auto pal = GetPalette(m_isDarkMode);
 
@@ -1602,8 +2017,6 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     COLORREF borderCol = isDisabled ? baseBorder : (isPressed ? hoverBorder : LerpColor(baseBorder, hoverBorder, hoverVal));
 
     // Double buffer for clean flicker-free button paint
-    int w = rc.right - rc.left;
-    int h = rc.bottom - rc.top;
     HDC hdcMem = CreateCompatibleDC(hdc);
     HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
     HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
@@ -1622,11 +2035,11 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
         Gdiplus::GraphicsPath btnPath;
-        float radius = (pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH || pDis->CtlID == IDC_BTN_IP_POOL) ? 6.0f : 8.0f;
-        AddRoundedRect(btnPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), radius);
+        float baseRadius = (pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH || pDis->CtlID == IDC_BTN_IP_POOL) ? 6.0f : 8.0f;
+        AddRoundedRect(btnPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), dpi_scale_f(baseRadius));
 
         Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, GetRValue(bgCol), GetGValue(bgCol), GetBValue(bgCol)));
-        float penWidth = 1.2f + 0.4f * hoverVal;
+        float penWidth = dpi_scale_f(1.2f + (isDisabled ? 0.0f : 0.4f * hoverVal));
         Gdiplus::Pen borderPen(Gdiplus::Color(255, GetRValue(borderCol), GetGValue(borderCol), GetBValue(borderCol)), penWidth);
 
         g.FillPath(&bgBrush, &btnPath);
@@ -1643,13 +2056,14 @@ void MainWindow::draw_custom_button(DRAWITEMSTRUCT* pDis) {
                      ((pDis->CtlID == IDC_BTN_COPY_IP || pDis->CtlID == IDC_BTN_COPY_DOH || pDis->CtlID == IDC_BTN_IP_POOL) ? m_hFontSmall : m_hFontRegular);
     HGDIOBJ oldFont = SelectObject(hdcMem, textFont);
 
-    // Press animation: offset text slightly down & right when pressed!
+    // Press animation: offset text slightly down & right when pressed
     RECT rcText = rcMem;
-    if (isPressed) {
-        rcText.left += 1;
-        rcText.top += 1;
-        rcText.right += 1;
-        rcText.bottom += 1;
+    if (!isDisabled && isPressed) {
+        int off = (std::max)(1, dpi_scale(1));
+        rcText.left += off;
+        rcText.top += off;
+        rcText.right += off;
+        rcText.bottom += off;
     }
 
     DrawTextW(hdcMem, btnText, -1, &rcText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1686,8 +2100,8 @@ void MainWindow::draw_combobox_item(DRAWITEMSTRUCT* pDis) {
     int textLen = ComboBox_GetLBTextLen(pDis->hwndItem, pDis->itemID);
     std::wstring text;
     if (textLen > 0) {
-        text.resize(textLen);
-        ComboBox_GetLBText(pDis->hwndItem, pDis->itemID, &text[0]);
+        text.resize(static_cast<size_t>(textLen));
+        ComboBox_GetLBText(pDis->hwndItem, pDis->itemID, text.data());
     }
 
     SetBkMode(hdc, TRANSPARENT);
@@ -1695,12 +2109,12 @@ void MainWindow::draw_combobox_item(DRAWITEMSTRUCT* pDis) {
     HGDIOBJ oldFont = SelectObject(hdc, m_hFontRegular);
 
     RECT rcText = rc;
-    rcText.left += 10;
-    rcText.right -= 10;
+    rcText.left += dpi_scale(10);
+    rcText.right -= dpi_scale(10);
 
     bool isSmart = (pDis->hwndItem == m_hComboProfile && pDis->itemID < m_profiles.size() && m_profiles[pDis->itemID].is_smart_dns);
     if (isSmart) {
-        rcText.right -= 75;
+        rcText.right -= dpi_scale(75);
     }
 
     DrawTextW(hdc, text.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
@@ -1712,7 +2126,7 @@ void MainWindow::draw_combobox_item(DRAWITEMSTRUCT* pDis) {
             : (m_isDarkMode ? RGB(52, 211, 153) : RGB(21, 128, 61));
         SetTextColor(hdc, smartCol);
         RECT rcBadge = rc;
-        rcBadge.right -= 12;
+        rcBadge.right -= dpi_scale(12);
         DrawTextW(hdc, L"SmartDNS", -1, &rcBadge, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
 
@@ -1733,39 +2147,37 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
 
     // Copy latency history safely under lock
     std::vector<int> history;
-    int currentPing = -1;
     {
         std::lock_guard<std::mutex> lock(m_historyMutex);
         history = m_latencyHistory;
-        currentPing = m_currentPingMs;
     }
+    const int currentPing = m_currentPingMs.load(std::memory_order_acquire);
 
     // Grid coordinates
-    float plotTop    = 24.0f;
-    float plotBottom = static_cast<float>(height - 12);
-    float plotLeft   = 10.0f;
-    float plotRight  = static_cast<float>(width - 10);
+    float plotTop    = dpi_scale_f(24.0f);
+    float plotBottom = static_cast<float>(height) - dpi_scale_f(12.0f);
+    float plotLeft   = dpi_scale_f(10.0f);
+    float plotRight  = static_cast<float>(width) - dpi_scale_f(10.0f);
     float plotHeight = plotBottom - plotTop;
     float plotWidth  = plotRight - plotLeft;
 
     // Determine scale: max latency, minimum 80ms, max 300ms
     int maxMs = 80;
     for (int v : history) {
-        if (v > maxMs) maxMs = std::min(300, v + 20);
+        if (v > maxMs) maxMs = (std::min)(300, v + 20);
     }
 
-    // Determine curve color based on latest valid latency
+    // Determine curve color based on latest valid latency using palette accents
     auto pal = GetPalette(m_isDarkMode);
-    Gdiplus::Color lineColor;
-    if (currentPing > 0 && currentPing < 60) {
-        lineColor = Gdiplus::Color(255, 34, 197, 94);  // Emerald Green
+    COLORREF lineColRef = pal.graphLine;
+    if (currentPing >= 0 && currentPing < 60) {
+        lineColRef = pal.accentGreen;
     } else if (currentPing >= 60 && currentPing <= 150) {
-        lineColor = Gdiplus::Color(255, 245, 158, 11); // Amber
+        lineColRef = pal.accentAmber;
     } else if (currentPing > 150) {
-        lineColor = Gdiplus::Color(255, 239, 68, 68);  // Red
-    } else {
-        lineColor = Gdiplus::Color(255, GetRValue(pal.graphLine), GetGValue(pal.graphLine), GetBValue(pal.graphLine));
+        lineColRef = pal.accentRed;
     }
+    Gdiplus::Color lineColor(255, GetRValue(lineColRef), GetGValue(lineColRef), GetBValue(lineColRef));
 
     // GDI+ Anti-Aliased Rendering
     {
@@ -1778,62 +2190,66 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
 
         // 1. Draw smooth container background
         Gdiplus::GraphicsPath contPath;
-        AddRoundedRect(contPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f), 10.0f);
+        AddRoundedRect(contPath, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f), dpi_scale_f(10.0f));
         Gdiplus::SolidBrush contBrush(Gdiplus::Color(255, GetRValue(pal.graphBg), GetGValue(pal.graphBg), GetBValue(pal.graphBg)));
-        Gdiplus::Pen contPen(Gdiplus::Color(255, GetRValue(pal.graphBorder), GetGValue(pal.graphBorder), GetBValue(pal.graphBorder)), 1.0f);
+        Gdiplus::Pen contPen(Gdiplus::Color(255, GetRValue(pal.graphBorder), GetGValue(pal.graphBorder), GetBValue(pal.graphBorder)), dpi_scale_f(1.0f));
         g.FillPath(&contBrush, &contPath);
         g.DrawPath(&contPen, &contPath);
 
-        // 2. Faint grid guide lines at 50ms and 100ms
-        Gdiplus::Pen gridPen(Gdiplus::Color(100, GetRValue(pal.graphGrid), GetGValue(pal.graphGrid), GetBValue(pal.graphGrid)), 1.0f);
-        gridPen.SetDashStyle(Gdiplus::DashStyleDash);
+        if (plotWidth > 2.0f && plotHeight > 2.0f) {
+            // 2. Faint grid guide lines at 50ms and 100ms
+            Gdiplus::Pen gridPen(Gdiplus::Color(100, GetRValue(pal.graphGrid), GetGValue(pal.graphGrid), GetBValue(pal.graphGrid)), dpi_scale_f(1.0f));
+            gridPen.SetDashStyle(Gdiplus::DashStyleDash);
 
-        if (maxMs >= 50) {
-            float y50 = plotBottom - (50.0f * plotHeight / static_cast<float>(maxMs));
-            g.DrawLine(&gridPen, plotLeft, y50, plotRight, y50);
-        }
-        if (maxMs >= 100) {
-            float y100 = plotBottom - (100.0f * plotHeight / static_cast<float>(maxMs));
-            g.DrawLine(&gridPen, plotLeft, y100, plotRight, y100);
-        }
-
-        // 3. Smooth sparkline curve & translucent area fill
-        if (!history.empty() && history.size() >= 2) {
-            size_t count = history.size();
-            std::vector<Gdiplus::PointF> ptsF;
-            ptsF.reserve(count);
-
-            for (size_t i = 0; i < count; ++i) {
-                int val = history[i];
-                float x = plotLeft + (static_cast<float>(i) * plotWidth / static_cast<float>(count - 1));
-                float y = (val <= 0) ? plotBottom : (plotBottom - (static_cast<float>(std::min(val, maxMs)) * plotHeight / static_cast<float>(maxMs)));
-                ptsF.push_back(Gdiplus::PointF(x, y));
+            if (maxMs >= 50) {
+                float y50 = plotBottom - (50.0f * plotHeight / static_cast<float>(maxMs));
+                g.DrawLine(&gridPen, plotLeft, y50, plotRight, y50);
+            }
+            if (maxMs >= 100) {
+                float y100 = plotBottom - (100.0f * plotHeight / static_cast<float>(maxMs));
+                g.DrawLine(&gridPen, plotLeft, y100, plotRight, y100);
             }
 
-            // Area polygon under curve with translucent alpha fill
-            std::vector<Gdiplus::PointF> polyF = ptsF;
-            polyF.push_back(Gdiplus::PointF(ptsF.back().X, plotBottom));
-            polyF.push_back(Gdiplus::PointF(ptsF.front().X, plotBottom));
+            // 3. Smooth sparkline curve & translucent area fill
+            if (history.size() >= 2) {
+                size_t count = history.size();
+                std::vector<Gdiplus::PointF> ptsF;
+                ptsF.reserve(count);
 
-            Gdiplus::SolidBrush fillBrush(Gdiplus::Color(45, lineColor.GetR(), lineColor.GetG(), lineColor.GetB()));
-            g.FillPolygon(&fillBrush, polyF.data(), static_cast<int>(polyF.size()));
+                for (size_t i = 0; i < count; ++i) {
+                    int val = history[i];
+                    float x = plotLeft + (static_cast<float>(i) * plotWidth / static_cast<float>(count - 1));
+                    float y = (val < 0) ? plotBottom : (plotBottom - (static_cast<float>((std::min)(val, maxMs)) * plotHeight / static_cast<float>(maxMs)));
+                    ptsF.push_back(Gdiplus::PointF(x, y));
+                }
 
-            // Smooth anti-aliased curve line
-            Gdiplus::Pen linePen(lineColor, 2.2f);
-            linePen.SetLineJoin(Gdiplus::LineJoinRound);
-            linePen.SetStartCap(Gdiplus::LineCapRound);
-            linePen.SetEndCap(Gdiplus::LineCapRound);
-            g.DrawLines(&linePen, ptsF.data(), static_cast<int>(ptsF.size()));
+                // Area polygon under curve with translucent alpha fill
+                std::vector<Gdiplus::PointF> polyF = ptsF;
+                polyF.push_back(Gdiplus::PointF(ptsF.back().X, plotBottom));
+                polyF.push_back(Gdiplus::PointF(ptsF.front().X, plotBottom));
 
-            // Latest point indicator: outer glow halo + inner solid dot + white ring
-            Gdiplus::PointF lastPt = ptsF.back();
-            Gdiplus::SolidBrush glowBrush(Gdiplus::Color(80, lineColor.GetR(), lineColor.GetG(), lineColor.GetB()));
-            g.FillEllipse(&glowBrush, lastPt.X - 6.0f, lastPt.Y - 6.0f, 12.0f, 12.0f);
+                Gdiplus::SolidBrush fillBrush(Gdiplus::Color(45, lineColor.GetR(), lineColor.GetG(), lineColor.GetB()));
+                g.FillPolygon(&fillBrush, polyF.data(), static_cast<int>(polyF.size()));
 
-            Gdiplus::SolidBrush dotBrush(lineColor);
-            Gdiplus::Pen ringPen(Gdiplus::Color(255, 255, 255, 255), 1.5f);
-            g.FillEllipse(&dotBrush, lastPt.X - 3.5f, lastPt.Y - 3.5f, 7.0f, 7.0f);
-            g.DrawEllipse(&ringPen, lastPt.X - 3.5f, lastPt.Y - 3.5f, 7.0f, 7.0f);
+                // Smooth anti-aliased curve line
+                Gdiplus::Pen linePen(lineColor, dpi_scale_f(2.2f));
+                linePen.SetLineJoin(Gdiplus::LineJoinRound);
+                linePen.SetStartCap(Gdiplus::LineCapRound);
+                linePen.SetEndCap(Gdiplus::LineCapRound);
+                g.DrawLines(&linePen, ptsF.data(), static_cast<int>(ptsF.size()));
+
+                // Latest point indicator: outer glow halo + inner solid dot + white ring
+                Gdiplus::PointF lastPt = ptsF.back();
+                float glowR = dpi_scale_f(6.0f);
+                float dotR = dpi_scale_f(3.5f);
+                Gdiplus::SolidBrush glowBrush(Gdiplus::Color(80, lineColor.GetR(), lineColor.GetG(), lineColor.GetB()));
+                g.FillEllipse(&glowBrush, lastPt.X - glowR, lastPt.Y - glowR, glowR * 2.0f, glowR * 2.0f);
+
+                Gdiplus::SolidBrush dotBrush(lineColor);
+                Gdiplus::Pen ringPen(Gdiplus::Color(255, 255, 255, 255), dpi_scale_f(1.5f));
+                g.FillEllipse(&dotBrush, lastPt.X - dotR, lastPt.Y - dotR, dotR * 2.0f, dotR * 2.0f);
+                g.DrawEllipse(&ringPen, lastPt.X - dotR, lastPt.Y - dotR, dotR * 2.0f, dotR * 2.0f);
+            }
         }
     }
 
@@ -1842,7 +2258,7 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
     SetTextColor(hdcMem, pal.textMuted);
     HGDIOBJ oldFont = SelectObject(hdcMem, m_hFontSmall);
 
-    RECT rcTitle = { 10, 6, width - 10, 20 };
+    RECT rcTitle = { dpi_scale(10), dpi_scale(6), width - dpi_scale(10), dpi_scale(22) };
     DrawTextW(hdcMem, L"Пинг (60 с)", -1, &rcTitle, DT_LEFT | DT_TOP | DT_SINGLELINE);
 
     // Value badge at top-right of graph
@@ -1850,12 +2266,12 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
     COLORREF valCol;
     if (currentPing > 0) {
         valStr = std::to_wstring(currentPing) + L" мс";
-        if (currentPing < 60) valCol = RGB(74, 222, 128);
-        else if (currentPing <= 150) valCol = RGB(251, 191, 36);
-        else valCol = RGB(248, 113, 113);
+        if (currentPing < 60) valCol = m_isDarkMode ? RGB(74, 222, 128) : pal.accentGreen;
+        else if (currentPing <= 150) valCol = m_isDarkMode ? RGB(251, 191, 36) : pal.accentAmber;
+        else valCol = m_isDarkMode ? RGB(248, 113, 113) : pal.accentRed;
     } else if (currentPing == 0) {
         valStr = L"<1 мс";
-        valCol = RGB(74, 222, 128);
+        valCol = m_isDarkMode ? RGB(74, 222, 128) : pal.accentGreen;
     } else {
         valStr = L"—";
         valCol = pal.textMuted;
@@ -1863,7 +2279,7 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
 
     SetTextColor(hdcMem, valCol);
     SelectObject(hdcMem, m_hFontGraphVal);
-    RECT rcVal = { width - 85, 6, width - 10, 22 };
+    RECT rcVal = { width - dpi_scale(85), dpi_scale(6), width - dpi_scale(10), dpi_scale(24) };
     DrawTextW(hdcMem, valStr.c_str(), -1, &rcVal, DT_RIGHT | DT_TOP | DT_SINGLELINE);
 
     SelectObject(hdcMem, oldFont);
@@ -1881,6 +2297,25 @@ void MainWindow::update_ping_target_ip() {
         const auto& adp = m_adapters[m_selectedAdapterIndex];
         if (!adp.dns_ipv4.empty()) {
             targetIp = wide_to_utf8(adp.dns_ipv4[0]);
+        } else {
+            for (const auto& ip6Wide : adp.dns_ipv6) {
+                std::string ip6 = wide_to_utf8(ip6Wide);
+                if (ip6.empty()) {
+                    continue;
+                }
+                std::string lower = ip6;
+                std::transform(lower.begin(), lower.end(), lower.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                // Skip unscoped link-local fe80: and Windows fec0: site-local placeholder
+                if (lower.rfind("fe80:", 0) == 0 && lower.find('%') == std::string::npos) {
+                    continue;
+                }
+                if (lower.rfind("fec0:0:0:ffff::", 0) == 0) {
+                    continue;
+                }
+                targetIp = std::move(ip6);
+                break;
+            }
         }
     }
     {
@@ -1892,7 +2327,7 @@ void MainWindow::update_ping_target_ip() {
 void MainWindow::start_ping_worker() {
     m_stopPingWorker = false;
     m_pingWorker = std::thread([this]() {
-        while (!m_stopPingWorker) {
+        while (!m_stopPingWorker.load(std::memory_order_acquire)) {
             std::string ip_to_ping;
             {
                 std::lock_guard<std::mutex> lock(m_historyMutex);
@@ -1904,22 +2339,22 @@ void MainWindow::start_ping_worker() {
                 ping_val = DnsBenchmark::ping_dns_server(ip_to_ping, 800, true);
             }
 
+            m_currentPingMs.store(ping_val, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lock(m_historyMutex);
-                m_currentPingMs = ping_val;
                 if (m_latencyHistory.size() >= 20) {
                     m_latencyHistory.erase(m_latencyHistory.begin());
                 }
                 m_latencyHistory.push_back(ping_val);
             }
 
-            if (m_hWnd && IsWindow(m_hWnd)) {
+            if (!m_isDestroying.load(std::memory_order_acquire) && m_hWnd && IsWindow(m_hWnd)) {
                 PostMessageW(m_hWnd, WM_APP_PING_UPDATED, 0, 0);
             }
 
             // Optimal ping update interval: 3.0 seconds (30 * 100ms)
             // 20 historical points = 60 seconds history window
-            for (int i = 0; i < 30 && !m_stopPingWorker; ++i) {
+            for (int i = 0; i < 30 && !m_stopPingWorker.load(std::memory_order_acquire); ++i) {
                 if (m_pingImmediate.exchange(false)) {
                     break;
                 }
@@ -1953,14 +2388,18 @@ void MainWindow::setup_tray_icon() {
     std::wstring trayTip = L"QuickDNS v" + std::wstring(quickdns::APP_VERSION_W) + L" — Быстрая смена DNS";
     wcsncpy_s(m_nid.szTip, trayTip.c_str(), _TRUNCATE);
 
-    Shell_NotifyIconW(NIM_ADD, &m_nid);
+    m_trayIconAdded = (Shell_NotifyIconW(NIM_ADD, &m_nid) != FALSE);
 }
 
 void MainWindow::remove_tray_icon() {
-    Shell_NotifyIconW(NIM_DELETE, &m_nid);
+    if (m_trayIconAdded) {
+        Shell_NotifyIconW(NIM_DELETE, &m_nid);
+        m_trayIconAdded = false;
+    }
 }
 
 void MainWindow::show_tray_notification(const std::wstring& title, const std::wstring& message) {
+    if (!m_trayIconAdded) return;
     wcsncpy_s(m_nid.szInfoTitle, title.c_str(), _countof(m_nid.szInfoTitle) - 1);
     wcsncpy_s(m_nid.szInfo, message.c_str(), _countof(m_nid.szInfo) - 1);
     m_nid.dwInfoFlags = NIIF_INFO;
@@ -1969,7 +2408,11 @@ void MainWindow::show_tray_notification(const std::wstring& title, const std::ws
 
 void MainWindow::restore_from_tray() {
     m_inTray = false;
-    ShowWindow(m_hWnd, SW_RESTORE);
+    if (!IsWindowVisible(m_hWnd)) {
+        ShowWindow(m_hWnd, SW_SHOW);
+    } else if (IsIconic(m_hWnd)) {
+        ShowWindow(m_hWnd, SW_RESTORE);
+    }
     UpdateWindow(m_hWnd);
 
     HWND hPopup = GetLastActivePopup(m_hWnd);
@@ -2052,13 +2495,18 @@ void MainWindow::update_status_card() {
     SetWindowTextW(m_hStatusAdapterName, nameText.c_str());
 
     std::wstring dnsText = L"Текущий DNS: ";
-    if (adapter.dns_ipv4.empty()) {
-        dnsText += L"Не настроен / DHCP";
-    } else {
+    if (!adapter.dns_ipv4.empty()) {
         for (size_t i = 0; i < adapter.dns_ipv4.size(); ++i) {
             if (i > 0) dnsText += L", ";
             dnsText += adapter.dns_ipv4[i];
         }
+    } else if (!adapter.dns_ipv6.empty()) {
+        for (size_t i = 0; i < adapter.dns_ipv6.size(); ++i) {
+            if (i > 0) dnsText += L", ";
+            dnsText += adapter.dns_ipv6[i];
+        }
+    } else {
+        dnsText += L"Не настроен / DHCP";
     }
     SetWindowTextW(m_hStatusDnsList, dnsText.c_str());
 
@@ -2066,13 +2514,14 @@ void MainWindow::update_status_card() {
         SetWindowTextW(m_hStatusBadge, L"Статус: Автоматический (DHCP от провайдера)");
     } else {
         std::wstring badge = L"Статус: Кастомный DNS";
+        enum class MatchQuality { None, Partial, PrimaryOnly, Exact };
+        MatchQuality bestQuality = MatchQuality::None;
+        std::optional<DnsProfile> fallbackProfile;
+        const DnsProfile* matchedProfile = nullptr;
+
         if (!adapter.dns_ipv4.empty()) {
             std::string adPri = wide_to_utf8(adapter.dns_ipv4[0]);
             std::string adSec = adapter.dns_ipv4.size() > 1 ? wide_to_utf8(adapter.dns_ipv4[1]) : "";
-
-            enum class MatchQuality { None, Partial, PrimaryOnly, Exact };
-            MatchQuality bestQuality = MatchQuality::None;
-            const DnsProfile* matchedProfile = nullptr;
 
             // 1. Exact match (primary == adPri and secondary matches or is empty)
             for (const auto& p : m_profiles) {
@@ -2119,28 +2568,59 @@ void MainWindow::update_status_card() {
             // 4. Check active_profile_id from config as a fallback if any IP is associated
             if (!matchedProfile && m_configManager) {
                 std::string activeId = m_configManager->get_active_profile_id();
-                auto optP = m_configManager->get_profile_by_id(activeId);
-                if (optP && !optP->is_dhcp) {
+                fallbackProfile = m_configManager->get_profile_by_id(activeId);
+                if (fallbackProfile && !fallbackProfile->is_dhcp) {
                     for (const auto& adIpWide : adapter.dns_ipv4) {
                         std::string adIp = wide_to_utf8(adIpWide);
-                        if (optP->primary_ipv4 == adIp || optP->secondary_ipv4 == adIp) {
-                            matchedProfile = &(*optP);
+                        if ((!fallbackProfile->primary_ipv4.empty() && fallbackProfile->primary_ipv4 == adIp) ||
+                            (!fallbackProfile->secondary_ipv4.empty() && fallbackProfile->secondary_ipv4 == adIp)) {
+                            matchedProfile = &(*fallbackProfile);
                             bestQuality = MatchQuality::Partial;
                             break;
                         }
                     }
                 }
             }
+        } else if (!adapter.dns_ipv6.empty()) {
+            std::string adPri6 = wide_to_utf8(adapter.dns_ipv6[0]);
+            std::string adSec6 = adapter.dns_ipv6.size() > 1 ? wide_to_utf8(adapter.dns_ipv6[1]) : "";
 
-            if (matchedProfile) {
-                std::wstring pName = utf8_to_wide(matchedProfile->name);
-                if (bestQuality == MatchQuality::Exact) {
-                    badge = L"Статус: Активен " + pName;
-                } else if (bestQuality == MatchQuality::PrimaryOnly) {
-                    badge = L"Статус: Активен " + pName + L" (основной IP)";
-                } else {
-                    badge = L"Статус: Частичный / устаревший DNS (" + pName + L")";
+            for (const auto& p : m_profiles) {
+                if (p.is_dhcp || p.primary_ipv6.empty()) continue;
+                if (p.primary_ipv6 == adPri6) {
+                    bool secMatches = (p.secondary_ipv6.empty() && adSec6.empty()) ||
+                                      (!p.secondary_ipv6.empty() && p.secondary_ipv6 == adSec6);
+                    matchedProfile = &p;
+                    bestQuality = secMatches ? MatchQuality::Exact : MatchQuality::PrimaryOnly;
+                    break;
                 }
+            }
+
+            if (!matchedProfile && m_configManager) {
+                std::string activeId = m_configManager->get_active_profile_id();
+                fallbackProfile = m_configManager->get_profile_by_id(activeId);
+                if (fallbackProfile && !fallbackProfile->is_dhcp) {
+                    for (const auto& adIpWide : adapter.dns_ipv6) {
+                        std::string adIp = wide_to_utf8(adIpWide);
+                        if ((!fallbackProfile->primary_ipv6.empty() && fallbackProfile->primary_ipv6 == adIp) ||
+                            (!fallbackProfile->secondary_ipv6.empty() && fallbackProfile->secondary_ipv6 == adIp)) {
+                            matchedProfile = &(*fallbackProfile);
+                            bestQuality = MatchQuality::Partial;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (matchedProfile) {
+            std::wstring pName = utf8_to_wide(matchedProfile->name);
+            if (bestQuality == MatchQuality::Exact) {
+                badge = L"Статус: Активен " + pName;
+            } else if (bestQuality == MatchQuality::PrimaryOnly) {
+                badge = L"Статус: Активен " + pName + L" (основной IP)";
+            } else {
+                badge = L"Статус: Частичный / устаревший DNS (" + pName + L")";
             }
         }
         SetWindowTextW(m_hStatusBadge, badge.c_str());
@@ -2157,7 +2637,7 @@ void MainWindow::auto_sync_profile_with_adapter() {
     const auto& adapter = m_adapters[m_selectedAdapterIndex];
 
     // 1. DHCP
-    if (adapter.is_dhcp_dns || adapter.dns_ipv4.empty()) {
+    if (adapter.is_dhcp_dns || (adapter.dns_ipv4.empty() && adapter.dns_ipv6.empty())) {
         for (size_t i = 0; i < m_profiles.size(); ++i) {
             if (m_profiles[i].is_dhcp) {
                 m_selectedProfileIndex = static_cast<int>(i);
@@ -2169,17 +2649,58 @@ void MainWindow::auto_sync_profile_with_adapter() {
         return;
     }
 
-    std::string adPri = wide_to_utf8(adapter.dns_ipv4[0]);
-    std::string adSec = adapter.dns_ipv4.size() > 1 ? wide_to_utf8(adapter.dns_ipv4[1]) : "";
+    if (!adapter.dns_ipv4.empty()) {
+        std::string adPri = wide_to_utf8(adapter.dns_ipv4[0]);
+        std::string adSec = adapter.dns_ipv4.size() > 1 ? wide_to_utf8(adapter.dns_ipv4[1]) : "";
 
-    // 2. Exact match (primary matches and secondary matches or is empty)
-    for (size_t i = 0; i < m_profiles.size(); ++i) {
-        const auto& p = m_profiles[i];
-        if (p.is_dhcp) continue;
-        if (p.primary_ipv4 == adPri) {
-            bool secMatches = (p.secondary_ipv4.empty() && adSec.empty()) ||
-                              (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adSec);
-            if (secMatches) {
+        // 2. Exact match (primary matches and secondary matches or is empty)
+        for (size_t i = 0; i < m_profiles.size(); ++i) {
+            const auto& p = m_profiles[i];
+            if (p.is_dhcp) continue;
+            if (p.primary_ipv4 == adPri) {
+                bool secMatches = (p.secondary_ipv4.empty() && adSec.empty()) ||
+                                  (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adSec);
+                if (secMatches) {
+                    m_selectedProfileIndex = static_cast<int>(i);
+                    ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                    on_profile_selected();
+                    return;
+                }
+            }
+        }
+
+        // 3. Primary matches
+        for (size_t i = 0; i < m_profiles.size(); ++i) {
+            const auto& p = m_profiles[i];
+            if (p.is_dhcp) continue;
+            if (p.primary_ipv4 == adPri) {
+                m_selectedProfileIndex = static_cast<int>(i);
+                ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                on_profile_selected();
+                return;
+            }
+        }
+
+        // 4. Any IP match in adapter.dns_ipv4
+        for (size_t i = 0; i < m_profiles.size(); ++i) {
+            const auto& p = m_profiles[i];
+            if (p.is_dhcp) continue;
+            for (const auto& adIpWide : adapter.dns_ipv4) {
+                std::string adIp = wide_to_utf8(adIpWide);
+                if (p.primary_ipv4 == adIp || (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adIp)) {
+                    m_selectedProfileIndex = static_cast<int>(i);
+                    ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
+                    on_profile_selected();
+                    return;
+                }
+            }
+        }
+    } else if (!adapter.dns_ipv6.empty()) {
+        std::string adPri6 = wide_to_utf8(adapter.dns_ipv6[0]);
+        for (size_t i = 0; i < m_profiles.size(); ++i) {
+            const auto& p = m_profiles[i];
+            if (p.is_dhcp || p.primary_ipv6.empty()) continue;
+            if (p.primary_ipv6 == adPri6) {
                 m_selectedProfileIndex = static_cast<int>(i);
                 ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
                 on_profile_selected();
@@ -2188,38 +2709,30 @@ void MainWindow::auto_sync_profile_with_adapter() {
         }
     }
 
-    // 3. Primary matches
-    for (size_t i = 0; i < m_profiles.size(); ++i) {
-        const auto& p = m_profiles[i];
-        if (p.is_dhcp) continue;
-        if (p.primary_ipv4 == adPri) {
-            m_selectedProfileIndex = static_cast<int>(i);
-            ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
-            on_profile_selected();
-            return;
-        }
+    // 5. Custom / Unlisted DNS: clear combobox selection and populate active adapter DNS
+    m_selectedProfileIndex = -1;
+    if (m_hComboProfile) {
+        ComboBox_SetCurSel(m_hComboProfile, -1);
+        InvalidateRect(m_hComboProfile, nullptr, FALSE);
+    }
+    if (m_hBtnDeleteProfile) {
+        EnableWindow(m_hBtnDeleteProfile, FALSE);
+    }
+    if (m_hBtnIpPool) {
+        EnableWindow(m_hBtnIpPool, FALSE);
     }
 
-    // 4. Any IP match in adapter.dns_ipv4
-    for (size_t i = 0; i < m_profiles.size(); ++i) {
-        const auto& p = m_profiles[i];
-        if (p.is_dhcp) continue;
-        for (const auto& adIpWide : adapter.dns_ipv4) {
-            std::string adIp = wide_to_utf8(adIpWide);
-            if (p.primary_ipv4 == adIp || (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adIp)) {
-                m_selectedProfileIndex = static_cast<int>(i);
-                ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);
-                on_profile_selected();
-                return;
-            }
+    std::wstring combinedIps;
+    if (!adapter.dns_ipv4.empty()) {
+        combinedIps = adapter.dns_ipv4[0];
+        if (adapter.dns_ipv4.size() > 1 && !adapter.dns_ipv4[1].empty()) {
+            combinedIps += L", " + adapter.dns_ipv4[1];
         }
-    }
-
-    // 5. Custom / Unlisted DNS:
-    // Safely auto-populate the IP address fields directly with the adapter's active addresses
-    std::wstring combinedIps = adapter.dns_ipv4[0];
-    if (adapter.dns_ipv4.size() > 1 && !adapter.dns_ipv4[1].empty()) {
-        combinedIps += L", " + adapter.dns_ipv4[1];
+    } else if (!adapter.dns_ipv6.empty()) {
+        combinedIps = adapter.dns_ipv6[0];
+        if (adapter.dns_ipv6.size() > 1 && !adapter.dns_ipv6[1].empty()) {
+            combinedIps += L", " + adapter.dns_ipv6[1];
+        }
     }
     if (m_hEditProfileIp) {
         SetWindowTextW(m_hEditProfileIp, combinedIps.c_str());
@@ -2233,25 +2746,33 @@ void MainWindow::auto_sync_profile_with_adapter() {
 }
 
 void MainWindow::check_manual_update() {
-    if (m_isCheckingUpdate) return;
-    m_isCheckingUpdate = true;
+    if (m_isCheckingUpdate.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) return;
+    if (m_isCheckingUpdate.exchange(true)) return;
 
     if (m_hBtnCheckUpdate) {
         EnableWindow(m_hBtnCheckUpdate, FALSE);
         SetWindowTextW(m_hBtnCheckUpdate, L"Проверка...");
     }
 
-    HWND hWnd = m_hWnd;
-    m_tasks.run([hWnd]() {
+    HWND targetWnd = m_hWnd;
+    m_tasks.run([this, targetWnd]() {
         auto optInfo = quickdns::AppUpdater::check_github_update(quickdns::APP_VERSION);
+        if (m_isDestroying.load(std::memory_order_acquire)) {
+            return;
+        }
         auto* pResult = optInfo ? new quickdns::ReleaseInfo(*optInfo) : nullptr;
-        if (!PostMessageW(hWnd, WM_APP_UPDATE_RESULT, 0, reinterpret_cast<LPARAM>(pResult))) {
+        if (m_isDestroying.load(std::memory_order_acquire) ||
+            !PostMessageW(targetWnd, WM_APP_UPDATE_RESULT, 0, reinterpret_cast<LPARAM>(pResult))) {
             delete pResult;
         }
     });
 }
 
 void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
+    if (m_isDownloadingUpdate.load() || m_isBusy.load() || m_modalDepth > 0 || m_isDestroying.load()) {
+        return;
+    }
+
     std::wstring titleWide = utf8_to_wide(info.title);
     std::wstring verWide = utf8_to_wide(info.semver);
     std::wstring notesWide = utf8_to_wide(info.notes);
@@ -2268,22 +2789,35 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
 
     prompt += L"Скачать и установить обновление прямо сейчас?";
 
-    int res = MessageBoxW(m_hWnd, prompt.c_str(), L"Доступно обновление QuickDNS", MB_YESNO | MB_ICONQUESTION);
-    if (res != IDYES) {
+    int res = MessageBoxW(get_modal_parent(), prompt.c_str(), L"Доступно обновление QuickDNS", MB_YESNO | MB_ICONQUESTION);
+    if (res != IDYES || m_isDestroying.load()) {
         return;
     }
 
     if (info.download_url.empty()) {
-        MessageBoxW(m_hWnd, L"Не найден прямой файл обновления. Откройте страницу релиза на GitHub.",
+        MessageBoxW(get_modal_parent(), L"Не найден прямой файл обновления. Откройте страницу релиза на GitHub.",
                     L"Ошибка", MB_OK | MB_ICONERROR);
         ShellExecuteW(nullptr, L"open", L"https://github.com/szanko02/QuickDNS/releases/latest", nullptr, nullptr, SW_SHOW);
         return;
     }
 
-    wchar_t currentExe[MAX_PATH] = {0};
-    DWORD exeLen = GetModuleFileNameW(nullptr, currentExe, MAX_PATH);
-    if (exeLen == 0 || exeLen >= MAX_PATH) {
-        MessageBoxW(m_hWnd, L"Не удалось определить путь к исполняемому файлу.", L"Ошибка обновления", MB_OK | MB_ICONERROR);
+    std::wstring currentExe;
+    {
+        std::vector<wchar_t> exeBuf(MAX_PATH);
+        while (exeBuf.size() <= 32768) {
+            DWORD exeLen = GetModuleFileNameW(nullptr, exeBuf.data(), static_cast<DWORD>(exeBuf.size()));
+            if (exeLen == 0) {
+                break;
+            }
+            if (exeLen < exeBuf.size() - 1) {
+                currentExe.assign(exeBuf.data(), exeLen);
+                break;
+            }
+            exeBuf.resize(exeBuf.size() * 2);
+        }
+    }
+    if (currentExe.empty()) {
+        MessageBoxW(get_modal_parent(), L"Не удалось определить путь к исполняемому файлу.", L"Ошибка обновления", MB_OK | MB_ICONERROR);
         return;
     }
     std::wstring exeDir = currentExe;
@@ -2296,24 +2830,36 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
 
     std::wstring tempExe = exeDir + L"QuickDNS_update.exe";
 
+    if (m_isDownloadingUpdate.exchange(true)) {
+        return;
+    }
+
     if (m_hBtnCheckUpdate) {
         EnableWindow(m_hBtnCheckUpdate, FALSE);
         SetWindowTextW(m_hBtnCheckUpdate, L"Скачивание...");
     }
 
-    HWND hWnd = m_hWnd;
+    HWND targetWnd = m_hWnd;
+    bool inTray = m_inTray;
+    bool noElevate = has_no_elevate_arg();
     std::wstring dlUrl = utf8_to_wide(info.download_url);
     std::wstring sha256Url = utf8_to_wide(info.sha256_url);
 
-    m_tasks.run([hWnd, dlUrl, sha256Url, tempExe]() {
+    m_tasks.run([this, targetWnd, dlUrl, sha256Url, tempExe, inTray, noElevate]() {
+        auto postDownloadResult = [this, targetWnd](quickdns::DownloadUpdateResult* pOut) {
+            if (m_isDestroying.load(std::memory_order_acquire) ||
+                !PostMessageW(targetWnd, WM_APP_DOWNLOAD_RESULT, 0, reinterpret_cast<LPARAM>(pOut))) {
+                m_isDownloadingUpdate = false;
+                delete pOut;
+            }
+        };
+
         auto* res = new quickdns::DownloadUpdateResult();
         if (sha256Url.empty()) {
             res->success = false;
             res->errorMessage = L"Контрольная сумма SHA-256 релиза не найдена на GitHub. Установка отменена в целях безопасности.";
             res->errorTitle = L"Ошибка безопасности";
-            if (!PostMessageW(hWnd, WM_APP_DOWNLOAD_RESULT, 0, reinterpret_cast<LPARAM>(res))) {
-                delete res;
-            }
+            postDownloadResult(res);
             return;
         }
 
@@ -2322,9 +2868,7 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
             res->success = false;
             res->errorMessage = L"Не удалось загрузить контрольную сумму SHA-256. Установка отменена в целях безопасности.";
             res->errorTitle = L"Ошибка безопасности";
-            if (!PostMessageW(hWnd, WM_APP_DOWNLOAD_RESULT, 0, reinterpret_cast<LPARAM>(res))) {
-                delete res;
-            }
+            postDownloadResult(res);
             return;
         }
 
@@ -2338,7 +2882,7 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
                 res->errorTitle = L"Ошибка проверки целостности";
             } else {
                 std::wstring updaterError;
-                bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe, &updaterError);
+                bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe, &updaterError, inTray, noElevate);
                 if (!restarted) {
                     DeleteFileW(tempExe.c_str());
                     res->success = false;
@@ -2358,9 +2902,7 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
             res->errorTitle = L"Ошибка скачивания";
         }
 
-        if (!PostMessageW(hWnd, WM_APP_DOWNLOAD_RESULT, 0, reinterpret_cast<LPARAM>(res))) {
-            delete res;
-        }
+        postDownloadResult(res);
     });
 }
 
@@ -2372,10 +2914,13 @@ void MainWindow::on_adapter_changed() {
 
     if (m_hBtnWinNetwork && m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
         const auto& adapter = m_adapters[m_selectedAdapterIndex];
-        std::wstring nameLower = adapter.name;
-        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::towlower);
-        std::wstring descLower = adapter.description;
-        std::transform(descLower.begin(), descLower.end(), descLower.begin(), ::towlower);
+        auto toLowerWide = [](std::wstring s) {
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](wchar_t c) { return static_cast<wchar_t>(std::towlower(static_cast<wint_t>(c))); });
+            return s;
+        };
+        std::wstring nameLower = toLowerWide(adapter.name);
+        std::wstring descLower = toLowerWide(adapter.description);
 
         if (nameLower.find(L"wi-fi") != std::wstring::npos || 
             nameLower.find(L"wifi") != std::wstring::npos ||
@@ -2441,13 +2986,13 @@ void MainWindow::on_profile_selected() {
 }
 
 void MainWindow::apply_selected_dns() {
-    if (m_isBusy) return;
+    if (m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) return;
     if (m_selectedAdapterIndex < 0 || m_selectedAdapterIndex >= static_cast<int>(m_adapters.size())) {
-        MessageBoxW(m_hWnd, L"Выберите сетевой адаптер для применения DNS.", L"Предупреждение", MB_OK | MB_ICONWARNING);
+        MessageBoxW(get_modal_parent(), L"Выберите сетевой адаптер для применения DNS.", L"Предупреждение", MB_OK | MB_ICONWARNING);
         return;
     }
     if (m_selectedProfileIndex < 0 || m_selectedProfileIndex >= static_cast<int>(m_profiles.size())) {
-        MessageBoxW(m_hWnd, L"Выберите профиль DNS.", L"Предупреждение", MB_OK | MB_ICONWARNING);
+        MessageBoxW(get_modal_parent(), L"Выберите профиль DNS.", L"Предупреждение", MB_OK | MB_ICONWARNING);
         return;
     }
 
@@ -2462,7 +3007,7 @@ void MainWindow::apply_selected_dns() {
 
     NetworkAdapterInfo adapter = m_adapters[m_selectedAdapterIndex];
     DnsProfile profile = m_profiles[m_selectedProfileIndex];
-    HWND hWnd = m_hWnd;
+    HWND targetWnd = m_hWnd;
 
     // Read manual / custom DoH template from edit control if specified
     std::wstring manualDoh;
@@ -2480,7 +3025,7 @@ void MainWindow::apply_selected_dns() {
 
     DnsManager* dnsMgr = m_dnsManager.get();
 
-    m_tasks.run([dnsMgr, adapter, profile, manualDoh, hWnd]() {
+    m_tasks.run([this, dnsMgr, adapter, profile, manualDoh, targetWnd]() {
         auto* res = new quickdns::DnsApplyResult();
         res->is_dhcp = profile.is_dhcp;
         res->profile_id = profile.id;
@@ -2508,14 +3053,15 @@ void MainWindow::apply_selected_dns() {
             }
         }
 
-        if (!PostMessageW(hWnd, WM_APP_DNS_APPLIED, 0, reinterpret_cast<LPARAM>(res))) {
+        if (m_isDestroying.load(std::memory_order_acquire) ||
+            !PostMessageW(targetWnd, WM_APP_DNS_APPLIED, 0, reinterpret_cast<LPARAM>(res))) {
             delete res;
         }
     });
 }
 
 void MainWindow::reset_to_dhcp() {
-    if (m_isBusy) return;
+    if (m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) return;
     if (m_selectedAdapterIndex < 0 || m_selectedAdapterIndex >= static_cast<int>(m_adapters.size())) {
         return;
     }
@@ -2530,10 +3076,10 @@ void MainWindow::reset_to_dhcp() {
     if (m_hBtnWinNetwork) EnableWindow(m_hBtnWinNetwork, FALSE);
 
     NetworkAdapterInfo adapter = m_adapters[m_selectedAdapterIndex];
-    HWND hWnd = m_hWnd;
+    HWND targetWnd = m_hWnd;
     DnsManager* dnsMgr = m_dnsManager.get();
 
-    m_tasks.run([dnsMgr, adapter, hWnd]() {
+    m_tasks.run([this, dnsMgr, adapter, targetWnd]() {
         auto* res = new quickdns::DnsApplyResult();
         res->is_dhcp = true;
         res->profile_id = "dhcp";
@@ -2543,23 +3089,29 @@ void MainWindow::reset_to_dhcp() {
             res->message = L"Не удалось сбросить DNS: " + dnsMgr->get_last_error();
         }
 
-        if (!PostMessageW(hWnd, WM_APP_DNS_APPLIED, 0, reinterpret_cast<LPARAM>(res))) {
+        if (m_isDestroying.load(std::memory_order_acquire) ||
+            !PostMessageW(targetWnd, WM_APP_DNS_APPLIED, 0, reinterpret_cast<LPARAM>(res))) {
             delete res;
         }
     });
 }
 
 void MainWindow::flush_dns_cache() {
+    if (m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) return;
     bool ok = m_dnsManager->flush_dns_cache();
     if (ok) {
         show_tray_notification(L"Очистка кэша", L"Кэш сопоставителя DNS Windows успешно сброшен.");
-        MessageBoxW(m_hWnd, L"Кэш DNS успешно очищен!", L"Информация", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(get_modal_parent(), L"Кэш DNS успешно очищен!", L"Информация", MB_OK | MB_ICONINFORMATION);
     } else {
-        MessageBoxW(m_hWnd, L"Не удалось сбросить DNS кэш.", L"Предупреждение", MB_OK | MB_ICONWARNING);
+        MessageBoxW(get_modal_parent(), L"Не удалось сбросить DNS кэш.", L"Предупреждение", MB_OK | MB_ICONWARNING);
     }
 }
 
 void MainWindow::open_add_profile_dialog() {
+    if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) {
+        return;
+    }
+
     std::wstring prefillPri;
     std::wstring prefillSec;
     if (m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
@@ -2572,7 +3124,14 @@ void MainWindow::open_add_profile_dialog() {
         }
     }
 
-    auto newProfile = AddProfileDialog::show(m_hWnd, m_hInstance, m_isDarkMode, prefillPri, prefillSec);
+    std::optional<DnsProfile> newProfile;
+    {
+        ModalDepthGuard modalGuard(this);
+        newProfile = AddProfileDialog::show(m_hWnd, m_hInstance, m_isDarkMode, prefillPri, prefillSec);
+    }
+    if (!m_hWnd || !IsWindow(m_hWnd) || m_isDestroying.load()) {
+        return;
+    }
     if (newProfile.has_value()) {
         m_configManager->add_profile(newProfile.value());
         m_configManager->set_active_profile_id(newProfile.value().id);
@@ -2584,7 +3143,18 @@ void MainWindow::open_add_profile_dialog() {
 }
 
 void MainWindow::open_benchmark_dialog() {
-    auto selectedId = BenchmarkDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id(), m_isDarkMode);
+    if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) {
+        return;
+    }
+
+    std::optional<std::string> selectedId;
+    {
+        ModalDepthGuard modalGuard(this);
+        selectedId = BenchmarkDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id(), m_isDarkMode);
+    }
+    if (!m_hWnd || !IsWindow(m_hWnd) || m_isDestroying.load()) {
+        return;
+    }
     if (selectedId.has_value()) {
         std::string chosenId = selectedId.value();
         for (size_t i = 0; i < m_profiles.size(); ++i) {
@@ -2600,7 +3170,18 @@ void MainWindow::open_benchmark_dialog() {
 }
 
 void MainWindow::open_smartdns_catalog_dialog() {
-    auto selectedId = SmartDnsDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id(), m_isDarkMode, m_configManager.get());
+    if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) {
+        return;
+    }
+
+    std::optional<std::string> selectedId;
+    {
+        ModalDepthGuard modalGuard(this);
+        selectedId = SmartDnsDialog::show(m_hWnd, m_hInstance, m_profiles, m_configManager->get_active_profile_id(), m_isDarkMode, m_configManager.get());
+    }
+    if (!m_hWnd || !IsWindow(m_hWnd) || m_isDestroying.load()) {
+        return;
+    }
     m_profiles = m_configManager->get_all_profiles();
     populate_profiles_combobox();
     if (selectedId.has_value()) {
@@ -2623,13 +3204,24 @@ void MainWindow::open_smartdns_catalog_dialog() {
 }
 
 void MainWindow::open_ai_check_dialog() {
-    auto selectedId = quickdns::AiCheckDialog::show(
-        m_hWnd,
-        m_hInstance,
-        m_profiles,
-        m_configManager->get_active_profile_id(),
-        m_isDarkMode
-    );
+    if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) {
+        return;
+    }
+
+    std::optional<std::string> selectedId;
+    {
+        ModalDepthGuard modalGuard(this);
+        selectedId = quickdns::AiCheckDialog::show(
+            m_hWnd,
+            m_hInstance,
+            m_profiles,
+            m_configManager->get_active_profile_id(),
+            m_isDarkMode
+        );
+    }
+    if (!m_hWnd || !IsWindow(m_hWnd) || m_isDestroying.load()) {
+        return;
+    }
     if (selectedId.has_value()) {
         std::string chosenId = selectedId.value();
         for (size_t i = 0; i < m_profiles.size(); ++i) {
@@ -2645,15 +3237,20 @@ void MainWindow::open_ai_check_dialog() {
 }
 
 void MainWindow::open_windows_network_settings() {
+    if (m_isDestroying.load()) return;
+
     // Determine the precise settings page based on active adapter type
     std::wstring targetUri = L"ms-settings:network-ethernet";
 
     if (m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
         const auto& adapter = m_adapters[m_selectedAdapterIndex];
-        std::wstring nameLower = adapter.name;
-        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::towlower);
-        std::wstring descLower = adapter.description;
-        std::transform(descLower.begin(), descLower.end(), descLower.begin(), ::towlower);
+        auto toLowerWide = [](std::wstring s) {
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](wchar_t c) { return static_cast<wchar_t>(std::towlower(static_cast<wint_t>(c))); });
+            return s;
+        };
+        std::wstring nameLower = toLowerWide(adapter.name);
+        std::wstring descLower = toLowerWide(adapter.description);
 
         if (nameLower.find(L"wi-fi") != std::wstring::npos || 
             nameLower.find(L"wifi") != std::wstring::npos ||
@@ -2676,21 +3273,12 @@ void MainWindow::open_windows_network_settings() {
         }
     }
 
-    // 2. Automatically click the "Изменить" (Edit) DNS button in Settings via UI Automation,
-    //    and if a DoH template is present, configure manual DoH template and save.
-    std::wstring dohTemplate;
-    if (m_hEditProfileDoh) {
-        wchar_t buf[512] = {0};
-        GetWindowTextW(m_hEditProfileDoh, buf, 512);
-        dohTemplate = buf;
-        while (!dohTemplate.empty() && (dohTemplate.back() == L' ' || dohTemplate.back() == L'\r' || dohTemplate.back() == L'\n' || dohTemplate.back() == L'\t')) dohTemplate.pop_back();
-        while (!dohTemplate.empty() && (dohTemplate.front() == L' ' || dohTemplate.front() == L'\t')) dohTemplate.erase(0, 1);
-    }
-    if (dohTemplate.empty() && m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profiles.size())) {
-        dohTemplate = utf8_to_wide(m_profiles[m_selectedProfileIndex].doh_template);
-    }
+    // 2. Automatically click the "Изменить" (Edit) DNS button in Settings via UI Automation
+    m_tasks.run([this]() {
+        if (m_tasks.is_stopping() || m_isDestroying.load(std::memory_order_acquire)) {
+            return;
+        }
 
-    m_tasks.run([dohTemplate]() {
         HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         if (FAILED(hr)) return;
 
@@ -2699,245 +3287,250 @@ void MainWindow::open_windows_network_settings() {
         if (SUCCEEDED(hr) && pAutomation) {
             IUIAutomationElement* pRoot = nullptr;
             if (SUCCEEDED(pAutomation->GetRootElement(&pRoot)) && pRoot) {
-                // Poll every 250ms for up to ~4 seconds for the XAML page to finish loading
-                for (int attempt = 0; attempt < 16; ++attempt) {
-                    Sleep(250);
+                IUIAutomationCondition* pTrueCond = nullptr;
+                if (SUCCEEDED(pAutomation->CreateTrueCondition(&pTrueCond)) && pTrueCond) {
+                    // Poll up to ~4 seconds (16 * 5 * 50ms) while checking stop flag every 50ms
+                    for (int attempt = 0; attempt < 16 && !m_tasks.is_stopping() && !m_isDestroying.load(std::memory_order_acquire); ++attempt) {
+                        for (int step = 0; step < 5; ++step) {
+                            if (m_tasks.is_stopping() || m_isDestroying.load(std::memory_order_acquire)) {
+                                break;
+                            }
+                            Sleep(50);
+                        }
+                        if (m_tasks.is_stopping() || m_isDestroying.load(std::memory_order_acquire)) {
+                            break;
+                        }
 
-                    IUIAutomationCondition* pTrueCond = nullptr;
-                    pAutomation->CreateTrueCondition(&pTrueCond);
-                    IUIAutomationElementArray* pWindows = nullptr;
+                        IUIAutomationElementArray* pWindows = nullptr;
+                        if (SUCCEEDED(pRoot->FindAll(TreeScope_Children, pTrueCond, &pWindows)) && pWindows) {
+                            int winCount = 0;
+                            pWindows->get_Length(&winCount);
 
-                    if (SUCCEEDED(pRoot->FindAll(TreeScope_Children, pTrueCond, &pWindows)) && pWindows) {
-                        int winCount = 0;
-                        pWindows->get_Length(&winCount);
+                            bool clicked = false;
+                            for (int w = 0; w < winCount && !clicked && !m_tasks.is_stopping(); ++w) {
+                                IUIAutomationElement* pWin = nullptr;
+                                pWindows->GetElement(w, &pWin);
+                                if (!pWin) continue;
 
-                        bool clicked = false;
-                        for (int w = 0; w < winCount && !clicked; ++w) {
-                            IUIAutomationElement* pWin = nullptr;
-                            pWindows->GetElement(w, &pWin);
-                            if (!pWin) continue;
+                                BSTR bCls = nullptr;
+                                BSTR bTitle = nullptr;
+                                pWin->get_CurrentClassName(&bCls);
+                                pWin->get_CurrentName(&bTitle);
+                                std::wstring cls = bCls ? bCls : L"";
+                                std::wstring title = bTitle ? bTitle : L"";
+                                if (bCls) SysFreeString(bCls);
+                                if (bTitle) SysFreeString(bTitle);
 
-                            BSTR bCls = nullptr;
-                            BSTR bTitle = nullptr;
-                            pWin->get_CurrentClassName(&bCls);
-                            pWin->get_CurrentName(&bTitle);
-                            std::wstring cls = bCls ? bCls : L"";
-                            std::wstring title = bTitle ? bTitle : L"";
-                            if (bCls) SysFreeString(bCls);
-                            if (bTitle) SysFreeString(bTitle);
+                                if (cls == L"ApplicationFrameWindow" || title.find(L"Настройки") != std::wstring::npos || title.find(L"Settings") != std::wstring::npos) {
+                                    IUIAutomationTreeWalker* pWalker = nullptr;
+                                    pAutomation->get_ControlViewWalker(&pWalker);
 
-                            if (cls == L"ApplicationFrameWindow" || title.find(L"Настройки") != std::wstring::npos || title.find(L"Settings") != std::wstring::npos) {
-                                IUIAutomationTreeWalker* pWalker = nullptr;
-                                pAutomation->get_ControlViewWalker(&pWalker);
-
-                                auto to_lower_str = [](const std::wstring& str) {
-                                    std::wstring res = str;
-                                    for (auto& c : res) {
-                                        if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
-                                        if (c >= L'А' && c <= L'Я') c = c + (L'а' - L'А');
-                                        if (c == L'Ё') c = L'ё';
-                                    }
-                                    return res;
-                                };
-
-                                // Strategy 1: Find the specific DNS setting card / header text ("Назначение DNS-сервера" / "DNS server assignment")
-                                VARIANT varText;
-                                varText.vt = VT_I4;
-                                varText.lVal = UIA_TextControlTypeId;
-                                IUIAutomationCondition* pTextCond = nullptr;
-                                if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varText, &pTextCond)) && pTextCond) {
-                                    IUIAutomationElementArray* pTexts = nullptr;
-                                    if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pTextCond, &pTexts)) && pTexts) {
-                                        int tCount = 0;
-                                        pTexts->get_Length(&tCount);
-                                        for (int t = 0; t < tCount && !clicked; ++t) {
-                                            IUIAutomationElement* pText = nullptr;
-                                            pTexts->GetElement(t, &pText);
-                                            if (!pText) continue;
-
-                                            BSTR bTxt = nullptr;
-                                            pText->get_CurrentName(&bTxt);
-                                            std::wstring txt = bTxt ? to_lower_str(bTxt) : L"";
-                                            if (bTxt) SysFreeString(bTxt);
-
-                                            if (txt.find(L"dns") != std::wstring::npos && 
-                                                txt.find(L"auth") == std::wstring::npos && 
-                                                txt.find(L"подлинност") == std::wstring::npos) {
-                                                
-                                                // Walk up to find the enclosing SettingCard / container
-                                                if (pWalker) {
-                                                    IUIAutomationElement* pCard = pText;
-                                                    pCard->AddRef();
-                                                    for (int depth = 0; depth < 3 && !clicked; ++depth) {
-                                                        IUIAutomationElement* pParent = nullptr;
-                                                        if (SUCCEEDED(pWalker->GetParentElement(pCard, &pParent)) && pParent) {
-                                                            // Search for button inside this card
-                                                            VARIANT varBtn;
-                                                            varBtn.vt = VT_I4;
-                                                            varBtn.lVal = UIA_ButtonControlTypeId;
-                                                            IUIAutomationCondition* pBtnCond = nullptr;
-                                                            if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtn, &pBtnCond)) && pBtnCond) {
-                                                                IUIAutomationElementArray* pCardButtons = nullptr;
-                                                                if (SUCCEEDED(pParent->FindAll(TreeScope_Descendants, pBtnCond, &pCardButtons)) && pCardButtons) {
-                                                                    int bLen = 0;
-                                                                    pCardButtons->get_Length(&bLen);
-                                                                    for (int b = 0; b < bLen; ++b) {
-                                                                        IUIAutomationElement* pBtn = nullptr;
-                                                                        pCardButtons->GetElement(b, &pBtn);
-                                                                        if (!pBtn) continue;
-
-                                                                        BSTR bName = nullptr;
-                                                                        BSTR bId = nullptr;
-                                                                        pBtn->get_CurrentName(&bName);
-                                                                        pBtn->get_CurrentAutomationId(&bId);
-                                                                        std::wstring bname = bName ? to_lower_str(bName) : L"";
-                                                                        std::wstring bid = bId ? to_lower_str(bId) : L"";
-                                                                        if (bName) SysFreeString(bName);
-                                                                        if (bId) SysFreeString(bId);
-
-                                                                        if (bname.find(L"auth") == std::wstring::npos && 
-                                                                            bname.find(L"подлинност") == std::wstring::npos &&
-                                                                            bname != L"редактировать" &&
-                                                                            bid.find(L"ip") == std::wstring::npos) {
-                                                                            IUIAutomationInvokePattern* pInvoke = nullptr;
-                                                                            if (SUCCEEDED(pBtn->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pInvoke))) && pInvoke) {
-                                                                                pInvoke->Invoke();
-                                                                                pInvoke->Release();
-                                                                                clicked = true;
-                                                                                pBtn->Release();
-                                                                                break;
-                                                                            }
-                                                                        }
-                                                                        pBtn->Release();
-                                                                    }
-                                                                    pCardButtons->Release();
-                                                                }
-                                                                pBtnCond->Release();
-                                                            }
-                                                            pCard->Release();
-                                                            pCard = pParent;
-                                                        } else {
-                                                            pCard->Release();
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            pText->Release();
+                                    auto to_lower_str = [](const std::wstring& str) {
+                                        std::wstring out = str;
+                                        for (auto& c : out) {
+                                            if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c + (L'a' - L'A'));
+                                            if (c >= L'А' && c <= L'Я') c = static_cast<wchar_t>(c + (L'а' - L'А'));
+                                            if (c == L'Ё') c = L'ё';
                                         }
-                                        pTexts->Release();
-                                    }
-                                    pTextCond->Release();
-                                }
+                                        return out;
+                                    };
 
-                                // Strategy 2: If Strategy 1 didn't trigger, inspect all buttons with strict DNS validation
-                                if (!clicked) {
-                                    VARIANT varBtn;
-                                    varBtn.vt = VT_I4;
-                                    varBtn.lVal = UIA_ButtonControlTypeId;
-                                    IUIAutomationCondition* pBtnCond = nullptr;
-                                    if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtn, &pBtnCond)) && pBtnCond) {
-                                        IUIAutomationElementArray* pButtons = nullptr;
-                                        if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pBtnCond, &pButtons)) && pButtons) {
-                                            int btnCount = 0;
-                                            pButtons->get_Length(&btnCount);
+                                    // Strategy 1: Find the specific DNS setting card / header text ("Назначение DNS-сервера" / "DNS server assignment")
+                                    VARIANT varText;
+                                    varText.vt = VT_I4;
+                                    varText.lVal = UIA_TextControlTypeId;
+                                    IUIAutomationCondition* pTextCond = nullptr;
+                                    if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varText, &pTextCond)) && pTextCond) {
+                                        IUIAutomationElementArray* pTexts = nullptr;
+                                        if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pTextCond, &pTexts)) && pTexts) {
+                                            int tCount = 0;
+                                            pTexts->get_Length(&tCount);
+                                            for (int t = 0; t < tCount && !clicked; ++t) {
+                                                IUIAutomationElement* pText = nullptr;
+                                                pTexts->GetElement(t, &pText);
+                                                if (!pText) continue;
 
-                                            for (int b = 0; b < btnCount && !clicked; ++b) {
-                                                IUIAutomationElement* pButton = nullptr;
-                                                pButtons->GetElement(b, &pButton);
-                                                if (!pButton) continue;
+                                                BSTR bTxt = nullptr;
+                                                pText->get_CurrentName(&bTxt);
+                                                std::wstring txt = bTxt ? to_lower_str(bTxt) : L"";
+                                                if (bTxt) SysFreeString(bTxt);
 
-                                                BSTR bBtnName = nullptr;
-                                                BSTR bAutoId = nullptr;
-                                                BSTR bHelp = nullptr;
-                                                pButton->get_CurrentName(&bBtnName);
-                                                pButton->get_CurrentAutomationId(&bAutoId);
-                                                pButton->get_CurrentHelpText(&bHelp);
-                                                std::wstring btnName = bBtnName ? to_lower_str(bBtnName) : L"";
-                                                std::wstring btnAutoId = bAutoId ? to_lower_str(bAutoId) : L"";
-                                                std::wstring btnHelp = bHelp ? to_lower_str(bHelp) : L"";
-                                                if (bBtnName) SysFreeString(bBtnName);
-                                                if (bAutoId) SysFreeString(bAutoId);
-                                                if (bHelp) SysFreeString(bHelp);
+                                                if (txt.find(L"dns") != std::wstring::npos && 
+                                                    txt.find(L"auth") == std::wstring::npos && 
+                                                    txt.find(L"подлинност") == std::wstring::npos) {
 
-                                                bool isReject = (btnName.find(L"подлинност") != std::wstring::npos ||
-                                                                 btnName.find(L"auth") != std::wstring::npos ||
-                                                                 btnAutoId.find(L"auth") != std::wstring::npos ||
-                                                                 btnAutoId.find(L"802") != std::wstring::npos ||
-                                                                 btnAutoId.find(L"eap") != std::wstring::npos ||
-                                                                 btnName == L"редактировать" ||
-                                                                 btnName.find(L"ip") != std::wstring::npos ||
-                                                                 btnAutoId.find(L"ip") != std::wstring::npos);
-
-                                                if (!isReject) {
-                                                    bool isDns = false;
-                                                    if (btnAutoId.find(L"dns") != std::wstring::npos ||
-                                                        btnName.find(L"dns") != std::wstring::npos ||
-                                                        btnHelp.find(L"dns") != std::wstring::npos) {
-                                                        isDns = true;
-                                                    } else if (pWalker && (btnName == L"изменить" || btnName == L"edit")) {
-                                                        // Check ancestors to confirm it's DNS and NOT Authentication or IP
-                                                        IUIAutomationElement* pCurr = pButton;
-                                                        pCurr->AddRef();
-                                                        for (int depth = 0; depth < 5 && !isDns && !isReject; ++depth) {
+                                                    // Walk up to find the enclosing SettingCard / container
+                                                    if (pWalker) {
+                                                        IUIAutomationElement* pCard = pText;
+                                                        pCard->AddRef();
+                                                        for (int depth = 0; depth < 3 && !clicked; ++depth) {
                                                             IUIAutomationElement* pParent = nullptr;
-                                                            if (SUCCEEDED(pWalker->GetParentElement(pCurr, &pParent)) && pParent) {
-                                                                BSTR pName = nullptr;
-                                                                BSTR pId = nullptr;
-                                                                pParent->get_CurrentName(&pName);
-                                                                pParent->get_CurrentAutomationId(&pId);
-                                                                std::wstring pn = pName ? to_lower_str(pName) : L"";
-                                                                std::wstring pi = pId ? to_lower_str(pId) : L"";
-                                                                if (pName) SysFreeString(pName);
-                                                                if (pId) SysFreeString(pId);
+                                                            if (SUCCEEDED(pWalker->GetParentElement(pCard, &pParent)) && pParent) {
+                                                                VARIANT varBtn;
+                                                                varBtn.vt = VT_I4;
+                                                                varBtn.lVal = UIA_ButtonControlTypeId;
+                                                                IUIAutomationCondition* pBtnCond = nullptr;
+                                                                if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtn, &pBtnCond)) && pBtnCond) {
+                                                                    IUIAutomationElementArray* pCardButtons = nullptr;
+                                                                    if (SUCCEEDED(pParent->FindAll(TreeScope_Descendants, pBtnCond, &pCardButtons)) && pCardButtons) {
+                                                                        int bLen = 0;
+                                                                        pCardButtons->get_Length(&bLen);
+                                                                        for (int b = 0; b < bLen; ++b) {
+                                                                            IUIAutomationElement* pBtn = nullptr;
+                                                                            pCardButtons->GetElement(b, &pBtn);
+                                                                            if (!pBtn) continue;
 
-                                                                if (pn.find(L"подлинност") != std::wstring::npos ||
-                                                                    pn.find(L"auth") != std::wstring::npos ||
-                                                                    pi.find(L"auth") != std::wstring::npos) {
-                                                                    isReject = true;
-                                                                } else if (pn.find(L"dns") != std::wstring::npos || pi.find(L"dns") != std::wstring::npos) {
-                                                                    isDns = true;
+                                                                            BSTR bName = nullptr;
+                                                                            BSTR bId = nullptr;
+                                                                            pBtn->get_CurrentName(&bName);
+                                                                            pBtn->get_CurrentAutomationId(&bId);
+                                                                            std::wstring bname = bName ? to_lower_str(bName) : L"";
+                                                                            std::wstring bid = bId ? to_lower_str(bId) : L"";
+                                                                            if (bName) SysFreeString(bName);
+                                                                            if (bId) SysFreeString(bId);
+
+                                                                            if (bname.find(L"auth") == std::wstring::npos && 
+                                                                                bname.find(L"подлинност") == std::wstring::npos &&
+                                                                                bname != L"редактировать" &&
+                                                                                bid.find(L"ip") == std::wstring::npos) {
+                                                                                IUIAutomationInvokePattern* pInvoke = nullptr;
+                                                                                if (SUCCEEDED(pBtn->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pInvoke))) && pInvoke) {
+                                                                                    pInvoke->Invoke();
+                                                                                    pInvoke->Release();
+                                                                                    clicked = true;
+                                                                                    pBtn->Release();
+                                                                                    break;
+                                                                                }
+                                                                            }
+                                                                            pBtn->Release();
+                                                                        }
+                                                                        pCardButtons->Release();
+                                                                    }
+                                                                    pBtnCond->Release();
                                                                 }
-                                                                pCurr->Release();
-                                                                pCurr = pParent;
+                                                                pCard->Release();
+                                                                pCard = pParent;
                                                             } else {
-                                                                pCurr->Release();
+                                                                pCard->Release();
                                                                 break;
                                                             }
                                                         }
                                                     }
+                                                }
+                                                pText->Release();
+                                            }
+                                            pTexts->Release();
+                                        }
+                                        pTextCond->Release();
+                                    }
 
-                                                    if (!isReject && isDns) {
-                                                        IUIAutomationInvokePattern* pInvoke = nullptr;
-                                                        if (SUCCEEDED(pButton->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pInvoke))) && pInvoke) {
-                                                            pInvoke->Invoke();
-                                                            pInvoke->Release();
-                                                            clicked = true;
-                                                            pButton->Release();
-                                                            break;
+                                    // Strategy 2: If Strategy 1 didn't trigger, inspect all buttons with strict DNS validation
+                                    if (!clicked) {
+                                        VARIANT varBtn;
+                                        varBtn.vt = VT_I4;
+                                        varBtn.lVal = UIA_ButtonControlTypeId;
+                                        IUIAutomationCondition* pBtnCond = nullptr;
+                                        if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varBtn, &pBtnCond)) && pBtnCond) {
+                                            IUIAutomationElementArray* pButtons = nullptr;
+                                            if (SUCCEEDED(pWin->FindAll(TreeScope_Descendants, pBtnCond, &pButtons)) && pButtons) {
+                                                int btnCount = 0;
+                                                pButtons->get_Length(&btnCount);
+
+                                                for (int b = 0; b < btnCount && !clicked; ++b) {
+                                                    IUIAutomationElement* pButton = nullptr;
+                                                    pButtons->GetElement(b, &pButton);
+                                                    if (!pButton) continue;
+
+                                                    BSTR bBtnName = nullptr;
+                                                    BSTR bAutoId = nullptr;
+                                                    BSTR bHelp = nullptr;
+                                                    pButton->get_CurrentName(&bBtnName);
+                                                    pButton->get_CurrentAutomationId(&bAutoId);
+                                                    pButton->get_CurrentHelpText(&bHelp);
+                                                    std::wstring btnName = bBtnName ? to_lower_str(bBtnName) : L"";
+                                                    std::wstring btnAutoId = bAutoId ? to_lower_str(bAutoId) : L"";
+                                                    std::wstring btnHelp = bHelp ? to_lower_str(bHelp) : L"";
+                                                    if (bBtnName) SysFreeString(bBtnName);
+                                                    if (bAutoId) SysFreeString(bAutoId);
+                                                    if (bHelp) SysFreeString(bHelp);
+
+                                                    bool isReject = (btnName.find(L"подлинност") != std::wstring::npos ||
+                                                                     btnName.find(L"auth") != std::wstring::npos ||
+                                                                     btnAutoId.find(L"auth") != std::wstring::npos ||
+                                                                     btnAutoId.find(L"802") != std::wstring::npos ||
+                                                                     btnAutoId.find(L"eap") != std::wstring::npos ||
+                                                                     btnName == L"редактировать" ||
+                                                                     btnName.find(L"ip") != std::wstring::npos ||
+                                                                     btnAutoId.find(L"ip") != std::wstring::npos);
+
+                                                    if (!isReject) {
+                                                        bool isDns = false;
+                                                        if (btnAutoId.find(L"dns") != std::wstring::npos ||
+                                                            btnName.find(L"dns") != std::wstring::npos ||
+                                                            btnHelp.find(L"dns") != std::wstring::npos) {
+                                                            isDns = true;
+                                                        } else if (pWalker && (btnName == L"изменить" || btnName == L"edit")) {
+                                                            IUIAutomationElement* pCurr = pButton;
+                                                            pCurr->AddRef();
+                                                            for (int depth = 0; depth < 5 && !isDns && !isReject; ++depth) {
+                                                                IUIAutomationElement* pParent = nullptr;
+                                                                if (SUCCEEDED(pWalker->GetParentElement(pCurr, &pParent)) && pParent) {
+                                                                    BSTR pName = nullptr;
+                                                                    BSTR pId = nullptr;
+                                                                    pParent->get_CurrentName(&pName);
+                                                                    pParent->get_CurrentAutomationId(&pId);
+                                                                    std::wstring pn = pName ? to_lower_str(pName) : L"";
+                                                                    std::wstring pi = pId ? to_lower_str(pId) : L"";
+                                                                    if (pName) SysFreeString(pName);
+                                                                    if (pId) SysFreeString(pId);
+
+                                                                    if (pn.find(L"подлинност") != std::wstring::npos ||
+                                                                        pn.find(L"auth") != std::wstring::npos ||
+                                                                        pi.find(L"auth") != std::wstring::npos) {
+                                                                        isReject = true;
+                                                                    } else if (pn.find(L"dns") != std::wstring::npos || pi.find(L"dns") != std::wstring::npos) {
+                                                                        isDns = true;
+                                                                    }
+                                                                    pCurr->Release();
+                                                                    pCurr = pParent;
+                                                                } else {
+                                                                    pCurr->Release();
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if (!isReject && isDns) {
+                                                            IUIAutomationInvokePattern* pInvoke = nullptr;
+                                                            if (SUCCEEDED(pButton->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern, reinterpret_cast<void**>(&pInvoke))) && pInvoke) {
+                                                                pInvoke->Invoke();
+                                                                pInvoke->Release();
+                                                                clicked = true;
+                                                                pButton->Release();
+                                                                break;
+                                                            }
                                                         }
                                                     }
+                                                    pButton->Release();
                                                 }
-                                                pButton->Release();
+                                                pButtons->Release();
                                             }
-                                            pButtons->Release();
+                                            pBtnCond->Release();
                                         }
-                                        pBtnCond->Release();
                                     }
-                                }
 
-                                if (pWalker) pWalker->Release();
+                                    if (pWalker) pWalker->Release();
+                                }
+                                pWin->Release();
+                                if (clicked) break;
                             }
-                            pWin->Release();
-                            if (clicked) break;
-                        }
-                        pWindows->Release();
-                        if (clicked) {
-                            if (pTrueCond) pTrueCond->Release();
-                            break;
+                            pWindows->Release();
+                            if (clicked) {
+                                break;
+                            }
                         }
                     }
-                    if (pTrueCond) pTrueCond->Release();
+                    pTrueCond->Release();
                 }
                 pRoot->Release();
             }
@@ -2970,6 +3563,9 @@ void MainWindow::copy_text_to_clipboard(const std::wstring& text) {
 }
 
 void MainWindow::show_ip_pool_picker() {
+    if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) {
+        return;
+    }
     if (m_selectedProfileIndex < 0 || m_selectedProfileIndex >= static_cast<int>(m_profiles.size())) {
         return;
     }
@@ -3001,9 +3597,19 @@ void MainWindow::show_ip_pool_picker() {
     if (!hMenu) return;
 
     HMENU hSubPri = CreatePopupMenu();
-    HMENU hSubSec = CreatePopupMenu();
+    if (!hSubPri) {
+        DestroyMenu(hMenu);
+        return;
+    }
 
-    size_t maxItems = std::min<size_t>(poolIps.size(), 50);
+    HMENU hSubSec = CreatePopupMenu();
+    if (!hSubSec) {
+        DestroyMenu(hSubPri);
+        DestroyMenu(hMenu);
+        return;
+    }
+
+    size_t maxItems = (std::min)(poolIps.size(), static_cast<size_t>(50));
     for (size_t i = 0; i < maxItems; ++i) {
         std::wstring ipWide = utf8_to_wide(poolIps[i]);
         UINT priFlags = MF_STRING | ((poolIps[i] == profile.primary_ipv4) ? MF_CHECKED : 0);
@@ -3017,8 +3623,17 @@ void MainWindow::show_ip_pool_picker() {
     UINT noneFlags = MF_STRING | (profile.secondary_ipv4.empty() ? MF_CHECKED : 0);
     AppendMenuW(hSubSec, noneFlags, IDM_POOL_SECONDARY_NONE, L"Не использовать (только 1 IP)");
 
-    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubPri), L"Выбрать Основной DNS (Primary)");
-    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubSec), L"Выбрать Резервный DNS (Secondary)");
+    if (!AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubPri), L"Выбрать Основной DNS (Primary)")) {
+        DestroyMenu(hSubPri);
+        DestroyMenu(hSubSec);
+        DestroyMenu(hMenu);
+        return;
+    }
+    if (!AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubSec), L"Выбрать Резервный DNS (Secondary)")) {
+        DestroyMenu(hSubSec);
+        DestroyMenu(hMenu);
+        return;
+    }
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
     for (size_t i = 0; i < maxItems; ++i) {
@@ -3047,6 +3662,21 @@ void MainWindow::show_ip_pool_picker() {
     int cmd = TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, m_hWnd, nullptr);
     DestroyMenu(hMenu);
 
+    if (!m_hWnd || !IsWindow(m_hWnd) || m_isDestroying.load()) {
+        return;
+    }
+
+    auto commitPoolUpdate = [&]() {
+        profile.ip_pool = poolIps;
+        m_configManager->update_profile(profile);
+        m_configManager->save_to_file();
+        m_profiles = m_configManager->get_all_profiles();
+        if (m_selectedProfileIndex >= 0 && m_selectedProfileIndex < static_cast<int>(m_profiles.size()) &&
+            m_profiles[m_selectedProfileIndex].id == profile.id) {
+            on_profile_selected();
+        }
+    };
+
     if (cmd >= IDM_POOL_PRIMARY_BASE && cmd < IDM_POOL_PRIMARY_BASE + static_cast<int>(maxItems)) {
         size_t idx = static_cast<size_t>(cmd - IDM_POOL_PRIMARY_BASE);
         std::string prevPri = profile.primary_ipv4;
@@ -3054,26 +3684,14 @@ void MainWindow::show_ip_pool_picker() {
         if (profile.secondary_ipv4 == poolIps[idx]) {
             profile.secondary_ipv4 = (prevPri != poolIps[idx]) ? prevPri : "";
         }
-        profile.ip_pool = poolIps;
-        m_configManager->update_profile(profile);
-        m_configManager->save_to_file();
-        m_profiles[m_selectedProfileIndex] = profile;
-        on_profile_selected();
+        commitPoolUpdate();
     } else if (cmd >= IDM_POOL_SECONDARY_BASE && cmd < IDM_POOL_SECONDARY_BASE + static_cast<int>(maxItems)) {
         size_t idx = static_cast<size_t>(cmd - IDM_POOL_SECONDARY_BASE);
         profile.secondary_ipv4 = (poolIps[idx] == profile.primary_ipv4) ? "" : poolIps[idx];
-        profile.ip_pool = poolIps;
-        m_configManager->update_profile(profile);
-        m_configManager->save_to_file();
-        m_profiles[m_selectedProfileIndex] = profile;
-        on_profile_selected();
+        commitPoolUpdate();
     } else if (cmd == IDM_POOL_SECONDARY_NONE) {
         profile.secondary_ipv4 = "";
-        profile.ip_pool = poolIps;
-        m_configManager->update_profile(profile);
-        m_configManager->save_to_file();
-        m_profiles[m_selectedProfileIndex] = profile;
-        on_profile_selected();
+        commitPoolUpdate();
     } else if (cmd == IDM_POOL_AUTO_PING) {
         if (m_isVerifyingSmartDns.exchange(true)) {
             return;
@@ -3083,9 +3701,12 @@ void MainWindow::show_ip_pool_picker() {
             SetWindowTextW(m_hBtnIpPool, L"Пинг...");
         }
         profile.ip_pool = poolIps;
-        HWND hWnd = m_hWnd;
-        m_tasks.run([hWnd, profile]() {
-            auto verRes = quickdns::SmartDnsVerifier::verify_profile(profile);
+        HWND targetWnd = m_hWnd;
+        m_tasks.run([this, targetWnd, profile]() {
+            auto verRes = quickdns::SmartDnsVerifier::verify_profile(profile, 2500, &m_isDestroying);
+            if (m_isDestroying.load(std::memory_order_acquire)) {
+                return;
+            }
             auto* pRes = new quickdns::SmartDnsTrayResult();
             pRes->is_single_pool_ping = true;
             pRes->profile_id = profile.id;
@@ -3094,11 +3715,12 @@ void MainWindow::show_ip_pool_picker() {
             pRes->best_secondary_ip = verRes.best_secondary_ip;
             pRes->best_primary_latency = verRes.best_primary_latency;
             for (const auto& c : verRes.candidate_ips) {
-                if (c.is_alive && c.latency_ms > 0) {
+                if (c.is_alive && c.latency_ms >= 0) {
                     pRes->alive_ips.push_back(c.ip);
                 }
             }
-            if (!PostMessageW(hWnd, WM_APP_SMARTDNS_RESULT, 0, reinterpret_cast<LPARAM>(pRes))) {
+            if (m_isDestroying.load(std::memory_order_acquire) ||
+                !PostMessageW(targetWnd, WM_APP_SMARTDNS_RESULT, 0, reinterpret_cast<LPARAM>(pRes))) {
                 delete pRes;
             }
         });
@@ -3106,45 +3728,67 @@ void MainWindow::show_ip_pool_picker() {
 }
 
 void MainWindow::show_tray_context_menu() {
+    if (!m_hWnd || !IsWindow(m_hWnd) || m_isDestroying.load()) {
+        return;
+    }
+
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return;
 
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_SHOW, L"Открыть QuickDNS");
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
+    const bool blockActions = (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load());
+    const UINT actionDisableFlag = blockActions ? MF_GRAYED : 0;
+
+    InsertMenuW(hMenu, static_cast<UINT>(-1), MF_BYPOSITION | MF_STRING, IDM_TRAY_SHOW, L"Открыть QuickDNS");
+    InsertMenuW(hMenu, static_cast<UINT>(-1), MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
 
     // List presets
     std::string activeId = m_configManager->get_active_profile_id();
-    for (size_t i = 0; i < m_profiles.size() && i < 50; ++i) {
+    size_t maxPresets = (std::min)(m_profiles.size(), static_cast<size_t>(IDM_TRAY_PRESET_LAST - IDM_TRAY_PRESET_FIRST + 1));
+    maxPresets = (std::min)(maxPresets, static_cast<size_t>(50));
+    for (size_t i = 0; i < maxPresets; ++i) {
         const auto& p = m_profiles[i];
         std::wstring pName = utf8_to_wide(p.name);
         if (p.is_smart_dns) {
             pName += L" [SmartDNS]";
         }
-        UINT flags = MF_BYPOSITION | MF_STRING;
+        UINT flags = MF_BYPOSITION | MF_STRING | actionDisableFlag;
         if (p.id == activeId) {
             flags |= MF_CHECKED;
         }
-        InsertMenuW(hMenu, -1, flags, IDM_TRAY_PRESET_FIRST + i, pName.c_str());
+        InsertMenuW(hMenu, static_cast<UINT>(-1), flags, IDM_TRAY_PRESET_FIRST + i, pName.c_str());
     }
 
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_RESET_DHCP, L"Сброс на DHCP");
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_FLUSH_DNS, L"Сбросить DNS-кэш");
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_VERIFY_SMARTDNS, L"Проверить и обновить SmartDNS...");
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_CHECK_UPDATE, L"Проверить обновления...");
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, IDM_TRAY_EXIT, L"Выход");
+    InsertMenuW(hMenu, static_cast<UINT>(-1), MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
+    InsertMenuW(hMenu, static_cast<UINT>(-1), MF_BYPOSITION | MF_STRING | actionDisableFlag, IDM_TRAY_RESET_DHCP, L"Сброс на DHCP");
+    InsertMenuW(hMenu, static_cast<UINT>(-1), MF_BYPOSITION | MF_STRING | actionDisableFlag, IDM_TRAY_FLUSH_DNS, L"Сбросить DNS-кэш");
+    InsertMenuW(hMenu, static_cast<UINT>(-1),
+                MF_BYPOSITION | MF_STRING | ((blockActions || m_isVerifyingSmartDns.load()) ? MF_GRAYED : 0),
+                IDM_TRAY_VERIFY_SMARTDNS, L"Проверить и обновить SmartDNS...");
+    InsertMenuW(hMenu, static_cast<UINT>(-1),
+                MF_BYPOSITION | MF_STRING | ((blockActions || m_isCheckingUpdate.load()) ? MF_GRAYED : 0),
+                IDM_TRAY_CHECK_UPDATE, L"Проверить обновления...");
+    InsertMenuW(hMenu, static_cast<UINT>(-1), MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
+    InsertMenuW(hMenu, static_cast<UINT>(-1), MF_BYPOSITION | MF_STRING | actionDisableFlag, IDM_TRAY_EXIT, L"Выход");
 
-    POINT pt;
+    POINT pt{};
     GetCursorPos(&pt);
-    SetForegroundWindow(m_hWnd);
+    HWND hFgTarget = get_modal_parent();
+    if (hFgTarget) {
+        SetForegroundWindow(hFgTarget);
+    }
     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, m_hWnd, nullptr);
     PostMessageW(m_hWnd, WM_NULL, 0, 0);
     DestroyMenu(hMenu);
 }
 
 void MainWindow::on_tray_preset_selected(int commandId) {
-    size_t index = commandId - IDM_TRAY_PRESET_FIRST;
+    if (m_modalDepth > 0 || m_isBusy.load() || m_isDownloadingUpdate.load() || m_isDestroying.load()) {
+        return;
+    }
+    if (commandId < IDM_TRAY_PRESET_FIRST || commandId > IDM_TRAY_PRESET_LAST) {
+        return;
+    }
+    size_t index = static_cast<size_t>(commandId - IDM_TRAY_PRESET_FIRST);
     if (index < m_profiles.size()) {
         m_selectedProfileIndex = static_cast<int>(index);
         ComboBox_SetCurSel(m_hComboProfile, m_selectedProfileIndex);

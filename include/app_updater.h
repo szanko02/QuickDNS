@@ -4,6 +4,7 @@
 #include <vector>
 #include <optional>
 #include <functional>
+#include <cstddef>
 #include <windows.h>
 
 namespace quickdns {
@@ -12,8 +13,8 @@ namespace quickdns {
 constexpr const char* APP_VERSION = OVERRIDE_APP_VERSION;
 constexpr const wchar_t* APP_VERSION_W = OVERRIDE_APP_VERSION_W;
 #else
-constexpr const char* APP_VERSION = "2.1.0";
-constexpr const wchar_t* APP_VERSION_W = L"2.1.0";
+constexpr const char* APP_VERSION = "2.3.0";
+constexpr const wchar_t* APP_VERSION_W = L"2.3.0";
 #endif
 
 struct ReleaseInfo {
@@ -29,6 +30,12 @@ struct ReleaseInfo {
 
 class AppUpdater {
 public:
+    static constexpr size_t MIN_UPDATE_EXE_BYTES = 100 * 1024;
+    static constexpr size_t MAX_UPDATE_EXE_BYTES = 25 * 1024 * 1024;
+    static constexpr size_t MAX_API_RESPONSE_BYTES = 1024 * 1024;
+    static constexpr size_t MAX_SHA256_RESPONSE_BYTES = 4096;
+    static constexpr int MAX_REDIRECT_HOPS = 5;
+
     // Compare semver: returns true if remoteVer > currentVer
     static bool is_version_newer(const std::string& currentVer, const std::string& remoteVer);
 
@@ -46,9 +53,14 @@ public:
         std::function<void(DWORD downloaded, DWORD total)> onProgress = nullptr
     );
 
-    // Replaces running executable with downloaded one and restarts the process.
-    // Optionally populates outError with diagnostic details on failure.
-    static bool apply_update_and_restart(const std::wstring& downloadedExePath, std::wstring* outError = nullptr);
+    // Replaces running executable with downloaded one and spawns the updated process.
+    // Returns true on successful spawn without calling ExitProcess(0) so caller can shut down UI cleanly.
+    static bool apply_update_and_restart(
+        const std::wstring& downloadedExePath,
+        std::wstring* outError = nullptr,
+        bool launchMinimized = false,
+        bool noElevate = false
+    );
 
     // Atomically replaces targetExePath with downloadedExePath using oldExePath as backup,
     // retrying on sharing/locking errors and rolling back on failure.
@@ -62,19 +74,19 @@ public:
     // Cleans up QuickDNS.exe.old if it exists from a previous update
     static void cleanup_previous_update();
 
-    // Checks if the given URL is a secure HTTPS URL pointing to an authorized domain
+    // Checks if the given URL is a secure HTTPS URL (port 443, no userinfo) pointing to an authorized domain
     static bool is_allowed_update_url(const std::wstring& url);
 
-    // Downloads and parses SHA-256 hex string (at most 1 KB response)
+    // Downloads and parses SHA-256 hex string (at most 4 KB response)
     static std::string download_sha256(const std::wstring& sha256Url);
 
     // Computes SHA-256 hash hex string of local file via Windows BCrypt API
     static bool compute_sha256(const std::wstring& filePath, std::string& outHashHex);
 
-    // Verifies executable integrity: size > 100 KB, 'MZ' header, matching SHA-256
+    // Verifies executable integrity: 100 KB < size <= 25 MB, 'MZ' header, matching SHA-256
     static bool verify_downloaded_executable(const std::wstring& filePath, const std::string& expectedSha256);
 
-    // Helper: parse semantic version components [major, minor, patch]
+    // Helper: parse semantic version core components [major, minor, patch]
     static std::vector<int> parse_semver(const std::string& ver);
 };
 

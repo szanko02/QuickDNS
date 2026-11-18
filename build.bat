@@ -89,8 +89,12 @@ echo [INFO] Compiler: !CXX!
 echo [INFO] Resource: !RC!
 echo.
 
-set "COMMON_CFLAGS=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wno-unknown-pragmas -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN"
+set "COMMON_CFLAGS=-std=c++20 -O2 -Wall -Wextra -Wno-unknown-pragmas -finput-charset=utf-8 -fexec-charset=utf-8 -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN"
+set "COMMON_INCLUDES=-I include -I third_party -I res"
 set "COMMON_LFLAGS=-static -static-libgcc -static-libstdc++"
+set "CORE_OBJS=build\dns_manager.o build\dns_benchmark.o build\config_manager.o build\smartdns_verifier.o build\app_updater.o build\ai_checker.o"
+set "CORE_LIBS=-lsecur32 -lcrypt32 -lbcrypt -lwinhttp -liphlpapi -ldnsapi -lws2_32 -ladvapi32 -lshell32 -luser32 -lole32 -luuid"
+set "GUI_LIBS=-lcomctl32 -luxtheme -ldwmapi -lgdiplus -lgdi32 -loleaut32 -lole32 -luser32 -luuid"
 
 if not exist "build" mkdir build
 
@@ -101,62 +105,71 @@ if %ERRORLEVEL% neq 0 ( echo [ERROR] Resource compilation failed. & exit /b 1 )
 "!RC!" -I include -I res res\resource_diag.rc -O coff -o build\resource_diag.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Diag resource compilation failed. & exit /b 1 )
 
-echo [2/6] Compiling DNS Network Engine, Verifier, Updater and Benchmark...
-"!CXX!" %COMMON_CFLAGS% -I include -c src\dns_manager.cpp -o build\dns_manager.o
+echo [2/6] Compiling Core Network Engine, Verifier, AI Checker, Updater and Benchmark...
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\dns_manager.cpp -o build\dns_manager.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] DNS manager compilation failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% -I include -c src\dns_benchmark.cpp -o build\dns_benchmark.o
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\dns_benchmark.cpp -o build\dns_benchmark.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] DNS benchmark compilation failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% -I include -c src\smartdns_verifier.cpp -o build\smartdns_verifier.o
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\smartdns_verifier.cpp -o build\smartdns_verifier.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] SmartDNS verifier compilation failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% -I include -c src\app_updater.cpp -o build\app_updater.o
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\app_updater.cpp -o build\app_updater.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] App updater compilation failed. & exit /b 1 )
 
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\ai_checker.cpp -o build\ai_checker.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] AI checker compilation failed. & exit /b 1 )
+
 echo [3/6] Compiling Config Manager...
-"!CXX!" %COMMON_CFLAGS% -I include -I third_party -c src\config_manager.cpp -o build\config_manager.o
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\config_manager.cpp -o build\config_manager.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Config manager compilation failed. & exit /b 1 )
 
-echo [4/6] Compiling Modern Win32 GUI, Benchmark and Dialogs...
-"!CXX!" %COMMON_CFLAGS% -I include -c src\dialog_add_profile.cpp -o build\dialog_add_profile.o
+echo [4/6] Compiling Modern Win32 GUI and Dialogs...
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\dialog_add_profile.cpp -o build\dialog_add_profile.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Add Profile Dialog compilation failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% -I include -c src\dialog_benchmark.cpp -o build\dialog_benchmark.o
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\dialog_benchmark.cpp -o build\dialog_benchmark.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Benchmark Dialog compilation failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% -I include -c src\dialog_smartdns.cpp -o build\dialog_smartdns.o
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\dialog_smartdns.cpp -o build\dialog_smartdns.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] SmartDNS Dialog compilation failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% -I include -c src\ui_main.cpp -o build\ui_main.o
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\dialog_ai_check.cpp -o build\dialog_ai_check.o
+if %ERRORLEVEL% neq 0 ( echo [ERROR] AI Check Dialog compilation failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\ui_main.cpp -o build\ui_main.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] UI compilation failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% -I include -c src\main.cpp -o build\main.o
+"!CXX!" %COMMON_CFLAGS% %COMMON_INCLUDES% -c src\main.cpp -o build\main.o
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Main compilation failed. & exit /b 1 )
 
 echo [5/6] Linking QuickDNS.exe with embedded App Icon...
-"!CXX!" %COMMON_CFLAGS% -mwindows -municode %COMMON_LFLAGS% -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dns_benchmark.o build\smartdns_verifier.o build\app_updater.o build\dns_manager.o build\config_manager.o build\resource.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -lcomctl32 -luxtheme -ldwmapi -lshell32 -lole32 -loleaut32 -luuid -luser32 -lgdi32 -ladvapi32 -lgdiplus -lbcrypt
+"!CXX!" %COMMON_CFLAGS% -mwindows -municode %COMMON_LFLAGS% -o build\QuickDNS.exe build\main.o build\ui_main.o build\dialog_add_profile.o build\dialog_benchmark.o build\dialog_smartdns.o build\dialog_ai_check.o %CORE_OBJS% build\resource.o %GUI_LIBS% %CORE_LIBS%
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking QuickDNS.exe failed. & exit /b 1 )
 if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
 move /Y "%~dp0QuickDNS.exe" "%~dp0QuickDNS.exe.old" >nul 2>&1
 copy /Y build\QuickDNS.exe "%~dp0QuickDNS.exe" >nul
 if exist "%~dp0QuickDNS.exe.old" del /F /Q "%~dp0QuickDNS.exe.old" 2>nul
 
-echo [6/6] Linking Diagnostic tools [test_dns.exe, test_config.exe, test_benchmark.exe, test_smartdns_verifier.exe, test_updater.exe]...
-"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include tests\test_dns.cpp build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_dns.exe
+echo [6/6] Linking Diagnostic tools [test_dns.exe, test_config.exe, test_benchmark.exe, test_smartdns_verifier.exe, test_updater.exe, test_ai_checker.exe]...
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% %COMMON_INCLUDES% tests\test_dns.cpp %CORE_OBJS% build\resource_diag.o %CORE_LIBS% -o build\test_dns.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_dns.exe failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include -I third_party tests\test_config.cpp build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_config.exe
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% %COMMON_INCLUDES% tests\test_config.cpp %CORE_OBJS% build\resource_diag.o %CORE_LIBS% -o build\test_config.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_config.exe failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include -I third_party tests\test_benchmark.cpp build\dns_benchmark.o build\dns_manager.o build\config_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -luuid -lole32 -o build\test_benchmark.exe
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% %COMMON_INCLUDES% tests\test_benchmark.cpp %CORE_OBJS% build\resource_diag.o %CORE_LIBS% -o build\test_benchmark.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_benchmark.exe failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include -I third_party tests\test_smartdns_verifier.cpp build\smartdns_verifier.o build\config_manager.o build\dns_manager.o build\resource_diag.o -liphlpapi -ldnsapi -lws2_32 -lwinhttp -luuid -lole32 -o build\test_smartdns_verifier.exe
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% %COMMON_INCLUDES% tests\test_smartdns_verifier.cpp %CORE_OBJS% build\resource_diag.o %CORE_LIBS% -o build\test_smartdns_verifier.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_smartdns_verifier.exe failed. & exit /b 1 )
 
-"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% -I include tests\test_updater.cpp build\app_updater.o build\resource_diag.o -lwinhttp -lshell32 -lbcrypt -o build\test_updater.exe
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% %COMMON_INCLUDES% tests\test_updater.cpp %CORE_OBJS% build\resource_diag.o %CORE_LIBS% -o build\test_updater.exe
 if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_updater.exe failed. & exit /b 1 )
+
+"!CXX!" %COMMON_CFLAGS% %COMMON_LFLAGS% %COMMON_INCLUDES% tests\test_ai_checker.cpp %CORE_OBJS% build\resource_diag.o %CORE_LIBS% -o build\test_ai_checker.exe
+if %ERRORLEVEL% neq 0 ( echo [ERROR] Linking test_ai_checker.exe failed. & exit /b 1 )
 
 echo ===================================================
 echo [SUCCESS] All executables built successfully!
@@ -166,5 +179,5 @@ echo                %~dp0build\test_config.exe
 echo                %~dp0build\test_benchmark.exe
 echo                %~dp0build\test_smartdns_verifier.exe
 echo                %~dp0build\test_updater.exe
-echo                %~dp0build\test_smartdns_verifier.exe
+echo                %~dp0build\test_ai_checker.exe
 echo ===================================================

@@ -8,12 +8,20 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <algorithm>
+#include <cmath>
+#include <cwctype>
 #include <thread>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "shell32.lib")
+#endif
+
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
 
 using QuickDns::Encoding::wide_to_utf8;
 using QuickDns::Encoding::utf8_to_wide;
@@ -25,7 +33,81 @@ namespace {
     constexpr int DIALOG_CLIENT_WIDTH  = 920;
     constexpr int DIALOG_CLIENT_HEIGHT = 720;
 
-    constexpr int CARD_ROW_GAP = 10;
+    constexpr int CARD_ROW_GAP_BASE = 10;
+
+    constexpr UINT WM_APP_SMARTDNS_VERIFY_DONE     = WM_APP + 55;
+    constexpr UINT WM_APP_SMARTDNS_VERIFY_PROGRESS = WM_APP + 56;
+
+    constexpr const wchar_t* WEBSITE_PILL_LABEL = L"Сайт провайдера \u2197";
+
+    UINT query_window_dpi(HWND hWnd) {
+        using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+        using GetDpiForSystemFn = UINT(WINAPI*)(void);
+        static HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
+        static auto pfnGetDpiForWindow = hUser32
+            ? reinterpret_cast<GetDpiForWindowFn>(GetProcAddress(hUser32, "GetDpiForWindow"))
+            : nullptr;
+        static auto pfnGetDpiForSystem = hUser32
+            ? reinterpret_cast<GetDpiForSystemFn>(GetProcAddress(hUser32, "GetDpiForSystem"))
+            : nullptr;
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+        if (hWnd && IsWindow(hWnd) && pfnGetDpiForWindow) {
+            UINT dpi = pfnGetDpiForWindow(hWnd);
+            if (dpi > 0) return dpi;
+        }
+        if (pfnGetDpiForSystem) {
+            UINT dpi = pfnGetDpiForSystem();
+            if (dpi > 0) return dpi;
+        }
+        HDC hdc = GetDC(hWnd);
+        UINT dpi = hdc ? static_cast<UINT>(GetDeviceCaps(hdc, LOGPIXELSY)) : 96u;
+        if (hdc) ReleaseDC(hWnd, hdc);
+        return dpi > 0 ? dpi : 96u;
+    }
+
+    BOOL adjust_window_rect_for_dpi(LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi) {
+        using AdjustWindowRectExForDpiFn = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+        static HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
+        static auto pfnAdjustForDpi = hUser32
+            ? reinterpret_cast<AdjustWindowRectExForDpiFn>(GetProcAddress(hUser32, "AdjustWindowRectExForDpi"))
+            : nullptr;
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+        if (pfnAdjustForDpi) {
+            return pfnAdjustForDpi(lpRect, dwStyle, bMenu, dwExStyle, dpi);
+        }
+        return AdjustWindowRectEx(lpRect, dwStyle, bMenu, dwExStyle);
+    }
+
+    RECT get_monitor_work_area(HWND hRefWnd) {
+        HMONITOR hMon = (hRefWnd && IsWindow(hRefWnd))
+            ? MonitorFromWindow(hRefWnd, MONITOR_DEFAULTTONEAREST)
+            : MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (hMon && GetMonitorInfoW(hMon, &mi)) {
+            return mi.rcWork;
+        }
+        RECT rcFallback = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+        return rcFallback;
+    }
+
+    bool has_valid_http_url(const std::wstring& url) {
+        return !url.empty() &&
+               (_wcsnicmp(url.c_str(), L"https://", 8) == 0 ||
+                _wcsnicmp(url.c_str(), L"http://", 7) == 0);
+    }
 
     struct ButtonAnimationState {
         float hover = 0.0f;
@@ -49,11 +131,24 @@ namespace {
             }
             break;
         }
+        case WM_ENABLE: {
+            anim->hover = 0.0f;
+            anim->targetHover = 0.0f;
+            anim->isTracking = false;
+            anim->isPressed = false;
+            KillTimer(hWnd, 4001);
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        }
         case WM_MOUSEMOVE: {
+            if (!IsWindowEnabled(hWnd)) break;
             if (!anim->isTracking) {
                 anim->isTracking = true;
                 anim->targetHover = 1.0f;
-                TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+                TRACKMOUSEEVENT tme{};
+                tme.cbSize = sizeof(TRACKMOUSEEVENT);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hWnd;
                 TrackMouseEvent(&tme);
                 SetTimer(hWnd, 4001, 16, nullptr);
             }
@@ -66,13 +161,17 @@ namespace {
             break;
         }
         case WM_LBUTTONDOWN: {
+            if (!IsWindowEnabled(hWnd)) break;
             anim->isPressed = true;
             InvalidateRect(hWnd, nullptr, FALSE);
             break;
         }
-        case WM_LBUTTONUP: {
-            anim->isPressed = false;
-            InvalidateRect(hWnd, nullptr, FALSE);
+        case WM_LBUTTONUP:
+        case WM_CAPTURECHANGED: {
+            if (anim->isPressed) {
+                anim->isPressed = false;
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
             break;
         }
         case WM_TIMER: {
@@ -104,6 +203,14 @@ namespace {
 
 namespace quickdns {
 
+int SmartDnsDialog::dp(int px) const {
+    return MulDiv(px, static_cast<int>(m_dpi), 96);
+}
+
+float SmartDnsDialog::dpf(float px) const {
+    return px * (static_cast<float>(m_dpi) / 96.0f);
+}
+
 std::optional<std::string> SmartDnsDialog::show(
     HWND hParent,
     HINSTANCE hInstance,
@@ -117,20 +224,40 @@ std::optional<std::string> SmartDnsDialog::show(
         return std::nullopt;
     }
 
-    EnableWindow(hParent, FALSE);
+    if (hParent && IsWindow(hParent)) {
+        EnableWindow(hParent, FALSE);
+    }
 
-    MSG msg;
-    while (!dlg.m_finished && GetMessageW(&msg, nullptr, 0, 0)) {
-        if (!IsDialogMessageW(dlg.m_hWnd, &msg)) {
+    MSG msg{};
+    BOOL bRet = 1;
+    while (!dlg.m_finished && (bRet = GetMessageW(&msg, nullptr, 0, 0)) != 0) {
+        if (bRet == -1) {
+            break;
+        }
+        if (!dlg.m_hWnd || !IsDialogMessageW(dlg.m_hWnd, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
 
-    EnableWindow(hParent, TRUE);
-    SetForegroundWindow(hParent);
+    if (!dlg.m_finished && bRet == 0) {
+        PostQuitMessage(static_cast<int>(msg.wParam));
+    }
 
-    if (dlg.m_hWnd) {
+    if (dlg.m_hWnd && IsWindow(dlg.m_hWnd)) {
+        ShowWindow(dlg.m_hWnd, SW_HIDE);
+    }
+
+    if (hParent && IsWindow(hParent)) {
+        EnableWindow(hParent, TRUE);
+        if (IsWindowVisible(hParent)) {
+            SetForegroundWindow(hParent);
+        }
+    }
+
+    dlg.stop_verify_worker();
+
+    if (dlg.m_hWnd && IsWindow(dlg.m_hWnd)) {
         DestroyWindow(dlg.m_hWnd);
         dlg.m_hWnd = nullptr;
     }
@@ -147,23 +274,34 @@ SmartDnsDialog::SmartDnsDialog(
     ConfigManager* pConfig)
     : m_hParent(hParent)
     , m_hInstance(hInstance)
-    , m_currentActiveId(currentActiveId)
-    , m_isDarkMode(isDarkMode)
     , m_pConfig(pConfig)
+    , m_isDarkMode(isDarkMode)
+    , m_currentActiveId(currentActiveId)
 {
+    m_dpi = query_window_dpi(m_hParent);
     auto pal = GetPalette(m_isDarkMode);
     m_hbrBg = CreateSolidBrush(pal.bg);
     m_hbrCard = CreateSolidBrush(pal.cardBg);
 
-    populate_smartdns_data(profiles);
     setup_fonts();
+    populate_smartdns_data(profiles);
 }
 
 SmartDnsDialog::~SmartDnsDialog() {
-    m_verifyCancelled.store(true, std::memory_order_release);
-    if (m_verifyThread.joinable()) {
-        m_verifyThread.join();
-    }
+    stop_verify_worker();
+
+    m_gpCardLink.reset();
+    m_gpCardTag.reset();
+    m_gpCardCatHeader.reset();
+    m_gpCardSub.reset();
+    m_gpCardBadge.reset();
+    m_gpCardTitle.reset();
+    m_gpHeaderStatus.reset();
+    m_gpHeaderLbl.reset();
+    m_gpHeaderSub.reset();
+    m_gpHeaderTitle.reset();
+    m_gpDisplayFamily.reset();
+    m_gpFontFamily.reset();
 
     if (m_hFontRegular) DeleteObject(m_hFontRegular);
     if (m_hFontBold) DeleteObject(m_hFontBold);
@@ -177,6 +315,14 @@ SmartDnsDialog::~SmartDnsDialog() {
 
     UnregisterClassW(DIALOG_CLASS_NAME, m_hInstance);
     UnregisterClassW(LIST_CLASS_NAME, m_hInstance);
+}
+
+void SmartDnsDialog::stop_verify_worker() {
+    m_cancelVerify.store(true, std::memory_order_release);
+    if (m_verifyThread.joinable()) {
+        m_verifyThread.join();
+    }
+    m_isVerifying.store(false, std::memory_order_release);
 }
 
 void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profiles) {
@@ -445,7 +591,7 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
         m_allEntries.push_back(std::move(e));
     }
 
-    // 6. User-defined / Custom SmartDNS profiles
+    // User-defined / Custom SmartDNS profiles
     for (const auto& p : profiles) {
         if (!p.is_smart_dns) continue;
         bool alreadyExists = false;
@@ -510,7 +656,6 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
         }
     }
 
-    // Select active profile if in catalog
     update_filtered_list();
     for (size_t i = 0; i < m_filteredIndices.size(); ++i) {
         if (m_allEntries[m_filteredIndices[i]].profile_id == m_currentActiveId) {
@@ -520,11 +665,33 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
     }
 }
 
+void SmartDnsDialog::update_action_buttons_state() {
+    bool hasSelection = (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_filteredIndices.size()));
+    bool hasWebsite = false;
+    bool hasPool = false;
+
+    if (hasSelection) {
+        const auto& e = m_allEntries[m_filteredIndices[static_cast<size_t>(m_selectedIndex)]];
+        hasWebsite = has_valid_http_url(e.website_url);
+        hasPool = !e.ip_pool.empty() || !e.primary_ipv4.empty();
+    }
+
+    if (m_hBtnApply && IsWindow(m_hBtnApply)) {
+        EnableWindow(m_hBtnApply, hasSelection ? TRUE : FALSE);
+    }
+    if (m_hBtnPickIp && IsWindow(m_hBtnPickIp)) {
+        EnableWindow(m_hBtnPickIp, (hasSelection && hasPool) ? TRUE : FALSE);
+    }
+    if (m_hBtnWebsite && IsWindow(m_hBtnWebsite)) {
+        EnableWindow(m_hBtnWebsite, hasWebsite ? TRUE : FALSE);
+    }
+}
+
 void SmartDnsDialog::update_filtered_list() {
     m_filteredIndices.clear();
 
     std::wstring query = m_searchQuery;
-    std::transform(query.begin(), query.end(), query.begin(), ::towlower);
+    std::transform(query.begin(), query.end(), query.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
 
     for (size_t i = 0; i < m_allEntries.size(); ++i) {
         const auto& e = m_allEntries[i];
@@ -533,28 +700,25 @@ void SmartDnsDialog::update_filtered_list() {
             continue;
         }
 
-        // Search in Name
         std::wstring nameLower = e.name;
-        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::towlower);
+        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
         if (nameLower.find(query) != std::wstring::npos) {
             m_filteredIndices.push_back(i);
             continue;
         }
 
-        // Search in Description
         std::wstring descLower = e.description;
-        std::transform(descLower.begin(), descLower.end(), descLower.begin(), ::towlower);
+        std::transform(descLower.begin(), descLower.end(), descLower.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
         if (descLower.find(query) != std::wstring::npos) {
             m_filteredIndices.push_back(i);
             continue;
         }
 
-        // Search in Services
         bool foundInServices = false;
         for (const auto& cat : e.categories) {
             for (const auto& s : cat.services) {
                 std::wstring sLower = s;
-                std::transform(sLower.begin(), sLower.end(), sLower.begin(), ::towlower);
+                std::transform(sLower.begin(), sLower.end(), sLower.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
                 if (sLower.find(query) != std::wstring::npos) {
                     foundInServices = true;
                     break;
@@ -568,48 +732,107 @@ void SmartDnsDialog::update_filtered_list() {
         }
     }
 
-    if (m_selectedIndex >= static_cast<int>(m_filteredIndices.size())) {
-        m_selectedIndex = m_filteredIndices.empty() ? -1 : 0;
+    if (m_filteredIndices.empty()) {
+        m_selectedIndex = -1;
+    } else if (m_selectedIndex < 0 || m_selectedIndex >= static_cast<int>(m_filteredIndices.size())) {
+        m_selectedIndex = 0;
     }
 
     recalculate_item_layouts();
+    update_action_buttons_state();
 
     m_statusText = L"Найдено SmartDNS серверов: " + std::to_wstring(m_filteredIndices.size()) + L" из " + std::to_wstring(m_allEntries.size());
     if (!query.empty()) {
         m_statusText += L" (по запросу: \"" + m_searchQuery + L"\")";
     } else {
-        m_statusText += L" • Нажмите на карточку для выбора";
+        m_statusText += L" \u2022 Нажмите на карточку для выбора";
     }
 
-    if (m_hWnd) {
+    if (m_hWnd && IsWindow(m_hWnd)) {
         InvalidateRect(m_hWnd, nullptr, FALSE);
     }
 }
 
 void SmartDnsDialog::setup_fonts() {
-    m_hFontRegular = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    m_gpCardLink.reset();
+    m_gpCardTag.reset();
+    m_gpCardCatHeader.reset();
+    m_gpCardSub.reset();
+    m_gpCardBadge.reset();
+    m_gpCardTitle.reset();
+    m_gpHeaderStatus.reset();
+    m_gpHeaderLbl.reset();
+    m_gpHeaderSub.reset();
+    m_gpHeaderTitle.reset();
+    m_gpDisplayFamily.reset();
+    m_gpFontFamily.reset();
+
+    if (m_hFontRegular) { DeleteObject(m_hFontRegular); m_hFontRegular = nullptr; }
+    if (m_hFontBold) { DeleteObject(m_hFontBold); m_hFontBold = nullptr; }
+    if (m_hFontHeader) { DeleteObject(m_hFontHeader); m_hFontHeader = nullptr; }
+    if (m_hFontMonospace) { DeleteObject(m_hFontMonospace); m_hFontMonospace = nullptr; }
+    if (m_hFontSmall) { DeleteObject(m_hFontSmall); m_hFontSmall = nullptr; }
+    if (m_hFontSmallBold) { DeleteObject(m_hFontSmallBold); m_hFontSmallBold = nullptr; }
+
+    m_gpFontFamily = std::make_unique<Gdiplus::FontFamily>(L"Segoe UI");
+    m_gpDisplayFamily = std::make_unique<Gdiplus::FontFamily>(L"Segoe UI Variable Display");
+    const Gdiplus::FontFamily* pRegular = m_gpFontFamily->IsAvailable()
+        ? m_gpFontFamily.get()
+        : Gdiplus::FontFamily::GenericSansSerif();
+    const Gdiplus::FontFamily* pDisplay = m_gpDisplayFamily->IsAvailable()
+        ? m_gpDisplayFamily.get()
+        : pRegular;
+    const wchar_t* headerFace = m_gpDisplayFamily->IsAvailable()
+        ? L"Segoe UI Variable Display"
+        : L"Segoe UI";
+
+    m_hFontRegular = CreateFontW(-dp(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontBold = CreateFontW(-14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontBold = CreateFontW(-dp(14), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontHeader = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+    m_hFontHeader = CreateFontW(-dp(18), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Display");
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, headerFace);
 
-    m_hFontMonospace = CreateFontW(-13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontMonospace = CreateFontW(-dp(13), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
 
-    m_hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    m_hFontSmall = CreateFontW(-dp(11), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontSmallBold = CreateFontW(-11, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontSmallBold = CreateFontW(-dp(11), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+    m_gpHeaderTitle  = std::make_unique<Gdiplus::Font>(pDisplay, dpf(18.0f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpHeaderSub    = std::make_unique<Gdiplus::Font>(pRegular, dpf(12.0f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    m_gpHeaderLbl    = std::make_unique<Gdiplus::Font>(pRegular, dpf(12.7f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpHeaderStatus = std::make_unique<Gdiplus::Font>(pRegular, dpf(11.3f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+
+    m_gpCardTitle     = std::make_unique<Gdiplus::Font>(pRegular, dpf(15.3f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpCardBadge     = std::make_unique<Gdiplus::Font>(pRegular, dpf(11.3f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpCardSub       = std::make_unique<Gdiplus::Font>(pRegular, dpf(12.0f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    m_gpCardCatHeader = std::make_unique<Gdiplus::Font>(pRegular, dpf(11.3f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpCardTag       = std::make_unique<Gdiplus::Font>(pRegular, dpf(11.3f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    m_gpCardLink      = std::make_unique<Gdiplus::Font>(pRegular, dpf(11.3f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+}
+
+void SmartDnsDialog::apply_fonts_to_controls() {
+    if (m_hSearchEdit && IsWindow(m_hSearchEdit)) {
+        SendMessageW(m_hSearchEdit, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
+    }
+    HWND btns[] = { m_hBtnApply, m_hBtnPickIp, m_hBtnWebsite, m_hBtnVerify, m_hBtnClose };
+    for (HWND hBtn : btns) {
+        if (hBtn && IsWindow(hBtn)) {
+            InvalidateRect(hBtn, nullptr, FALSE);
+        }
+    }
 }
 
 bool SmartDnsDialog::create_dialog_window() {
@@ -625,7 +848,6 @@ bool SmartDnsDialog::create_dialog_window() {
     wc.lpszClassName = DIALOG_CLASS_NAME;
     RegisterClassExW(&wc);
 
-    // Register Custom List Class
     WNDCLASSEXW lwc = {};
     lwc.cbSize = sizeof(WNDCLASSEXW);
     lwc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
@@ -636,19 +858,32 @@ bool SmartDnsDialog::create_dialog_window() {
     lwc.lpszClassName = LIST_CLASS_NAME;
     RegisterClassExW(&lwc);
 
-    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_VISIBLE;
-    RECT wr = { 0, 0, DIALOG_CLIENT_WIDTH, DIALOG_CLIENT_HEIGHT };
-    AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
+    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_VISIBLE;
+    DWORD dwExStyle = WS_EX_DLGMODALFRAME;
+    RECT wr = { 0, 0, dp(DIALOG_CLIENT_WIDTH), dp(DIALOG_CLIENT_HEIGHT) };
+    adjust_window_rect_for_dpi(&wr, dwStyle, FALSE, dwExStyle, m_dpi);
     int winWidth = wr.right - wr.left;
     int winHeight = wr.bottom - wr.top;
 
+    RECT rcWork = get_monitor_work_area(m_hParent);
+    int workW = std::max(320, static_cast<int>(rcWork.right - rcWork.left));
+    int workH = std::max(280, static_cast<int>(rcWork.bottom - rcWork.top));
+    winWidth = std::min(winWidth, workW);
+    winHeight = std::min(winHeight, workH);
+
+    int posX = rcWork.left + (workW - winWidth) / 2;
+    int posY = rcWork.top + (workH - winHeight) / 2;
     RECT parentRect = {};
-    GetWindowRect(m_hParent, &parentRect);
-    int posX = parentRect.left + ((parentRect.right - parentRect.left) - winWidth) / 2;
-    int posY = parentRect.top + ((parentRect.bottom - parentRect.top) - winHeight) / 2;
+    if (m_hParent && IsWindow(m_hParent) && !IsIconic(m_hParent) && IsWindowVisible(m_hParent) &&
+        GetWindowRect(m_hParent, &parentRect)) {
+        posX = parentRect.left + ((parentRect.right - parentRect.left) - winWidth) / 2;
+        posY = parentRect.top + ((parentRect.bottom - parentRect.top) - winHeight) / 2;
+    }
+    posX = std::clamp(posX, static_cast<int>(rcWork.left), std::max(static_cast<int>(rcWork.left), static_cast<int>(rcWork.right) - winWidth));
+    posY = std::clamp(posY, static_cast<int>(rcWork.top), std::max(static_cast<int>(rcWork.top), static_cast<int>(rcWork.bottom) - winHeight));
 
     m_hWnd = CreateWindowExW(
-        WS_EX_DLGMODALFRAME,
+        dwExStyle,
         DIALOG_CLASS_NAME,
         L"Каталог SmartDNS — Разблокировка нейросетей и сервисов",
         dwStyle,
@@ -664,6 +899,12 @@ bool SmartDnsDialog::create_dialog_window() {
         return false;
     }
 
+    UINT actualDpi = query_window_dpi(m_hWnd);
+    if (actualDpi != m_dpi) {
+        m_dpi = actualDpi;
+        setup_fonts();
+    }
+
     apply_theme();
     create_controls();
     return true;
@@ -672,6 +913,7 @@ bool SmartDnsDialog::create_dialog_window() {
 void SmartDnsDialog::apply_theme() {
     BOOL useDarkMode = m_isDarkMode ? TRUE : FALSE;
     DwmSetWindowAttribute(m_hWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDarkMode, sizeof(useDarkMode));
+    DwmSetWindowAttribute(m_hWnd, 19, &useDarkMode, sizeof(useDarkMode));
     DWORD cornerPref = 2; // DWMWCP_ROUND
     DwmSetWindowAttribute(m_hWnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &cornerPref, sizeof(cornerPref));
 }
@@ -683,38 +925,51 @@ LRESULT CALLBACK SmartDnsDialog::search_edit_subclass(
     auto* pDlg = reinterpret_cast<SmartDnsDialog*>(dwRefData);
     if (!pDlg) return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 
+    auto invalidateSearchCard = [pDlg]() {
+        if (pDlg->m_hWnd && IsWindow(pDlg->m_hWnd)) {
+            RECT rcClient{};
+            GetClientRect(pDlg->m_hWnd, &rcClient);
+            RECT rcInv = {
+                pDlg->dp(172),
+                pDlg->dp(80),
+                rcClient.right - pDlg->dp(18),
+                pDlg->dp(116)
+            };
+            InvalidateRect(pDlg->m_hWnd, &rcInv, FALSE);
+        }
+    };
+
     switch (uMsg) {
     case WM_SETFOCUS: {
         pDlg->m_searchEditFocused = true;
-        RECT rc = { 20 + 115 - 2, 70 - 2, DIALOG_CLIENT_WIDTH - 20 + 2, 70 + 32 + 2 };
-        InvalidateRect(pDlg->m_hWnd, &rc, FALSE);
+        invalidateSearchCard();
         break;
     }
     case WM_KILLFOCUS: {
         pDlg->m_searchEditFocused = false;
-        RECT rc = { 20 + 115 - 2, 70 - 2, DIALOG_CLIENT_WIDTH - 20 + 2, 70 + 32 + 2 };
-        InvalidateRect(pDlg->m_hWnd, &rc, FALSE);
+        invalidateSearchCard();
         break;
     }
     case WM_MOUSEMOVE: {
         if (!pDlg->m_searchEditHovered) {
             pDlg->m_searchEditHovered = true;
-            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+            TRACKMOUSEEVENT tme{};
+            tme.cbSize = sizeof(TRACKMOUSEEVENT);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hWnd;
             TrackMouseEvent(&tme);
-            RECT rc = { 20 + 115 - 2, 70 - 2, DIALOG_CLIENT_WIDTH - 20 + 2, 70 + 32 + 2 };
-            InvalidateRect(pDlg->m_hWnd, &rc, FALSE);
+            invalidateSearchCard();
         }
         break;
     }
     case WM_MOUSELEAVE: {
         pDlg->m_searchEditHovered = false;
-        RECT rc = { 20 + 115 - 2, 70 - 2, DIALOG_CLIENT_WIDTH - 20 + 2, 70 + 32 + 2 };
-        InvalidateRect(pDlg->m_hWnd, &rc, FALSE);
+        invalidateSearchCard();
         break;
     }
     case WM_CHAR: {
         if (wParam == VK_RETURN) {
-            return 0; // Prevent beep
+            return 0;
         }
         break;
     }
@@ -732,29 +987,29 @@ void SmartDnsDialog::create_controls() {
     int clientWidth = rcClient.right - rcClient.left;
     int clientHeight = rcClient.bottom - rcClient.top;
 
-    int marginX = 20;
-    int contentWidth = clientWidth - (marginX * 2);
+    int marginX = dp(20);
+    int contentWidth = std::max(dp(240), clientWidth - (marginX * 2));
 
-    // Modern Search Edit Control inset inside the GDI+ rounded container card
-    int searchBoxX = marginX + 154;
-    int searchBoxY = 82;
-    int searchBoxW = contentWidth - 154;
-    int searchBoxH = 32;
+    int searchBoxX = marginX + dp(154);
+    int searchBoxY = dp(82);
+    int searchBoxW = std::max(dp(140), contentWidth - dp(154));
+    int editInsetX = dp(10);
+    int editInsetY = dp(6);
+    int editH = dp(20);
 
-    // Create EDIT control WITHOUT WS_EX_CLIENTEDGE (use 0) so no harsh 3D borders appear!
     m_hSearchEdit = CreateWindowExW(0, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        searchBoxX + 10, searchBoxY + 6, searchBoxW - 20, 20,
-        m_hWnd, (HMENU)IDC_EDIT_SMARTDNS_SEARCH, m_hInstance, nullptr);
-    SendMessageW(m_hSearchEdit, WM_SETFONT, (WPARAM)m_hFontRegular, TRUE);
-    SendMessageW(m_hSearchEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"Введите название (например: ChatGPT, Spotify, Discord, Canva, Notion, Claude)...");
+        searchBoxX + editInsetX, searchBoxY + editInsetY, std::max(dp(80), searchBoxW - 2 * editInsetX), editH,
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_EDIT_SMARTDNS_SEARCH)), m_hInstance, nullptr);
+    SendMessageW(m_hSearchEdit, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFontRegular), TRUE);
+    SendMessageW(m_hSearchEdit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Введите название (например: ChatGPT, Spotify, Discord, Canva, Notion, Claude)..."));
     SetWindowSubclass(m_hSearchEdit, search_edit_subclass, 501, reinterpret_cast<DWORD_PTR>(this));
 
-    // Custom Scrollable List of SmartDNS Cards
-    int listTop = 148;
-    int bottomButtonsH = 38;
-    int listBottomMargin = 16;
-    int listHeight = clientHeight - listTop - bottomButtonsH - listBottomMargin - 16;
+    int listTop = dp(148);
+    int bottomButtonsH = dp(38);
+    int listBottomMargin = dp(16);
+    int gapBelowList = dp(16);
+    int listHeight = std::max(dp(80), clientHeight - listTop - bottomButtonsH - listBottomMargin - gapBelowList);
 
     m_hListWnd = CreateWindowExW(
         0,
@@ -762,43 +1017,42 @@ void SmartDnsDialog::create_controls() {
         L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
         marginX, listTop, contentWidth, listHeight,
-        m_hWnd, (HMENU)IDC_LIST_SMARTDNS, m_hInstance, this
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LIST_SMARTDNS)), m_hInstance, this
     );
 
-    int curY = listTop + listHeight + 16;
+    int curY = listTop + listHeight + gapBelowList;
 
-    // Bottom Action Buttons
-    int btnApplyW = 165;
-    int btnPickW = 110;
-    int btnWebW = 140;
-    int btnVerifyW = 165;
-    int btnCloseW = 95;
-    int gap = 8;
+    int btnApplyW  = dp(165);
+    int btnPickW   = dp(110);
+    int btnWebW    = dp(140);
+    int btnVerifyW = dp(165);
+    int btnCloseW  = dp(95);
+    int gap        = dp(8);
 
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить этот DNS",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX, curY, btnApplyW, bottomButtonsH,
-        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_APPLY, m_hInstance, nullptr);
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_SMARTDNS_APPLY)), m_hInstance, nullptr);
 
     m_hBtnPickIp = CreateWindowExW(0, WC_BUTTONW, L"Пул IP \u25BE",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + btnApplyW + gap, curY, btnPickW, bottomButtonsH,
-        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_PICK_IP, m_hInstance, nullptr);
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_SMARTDNS_PICK_IP)), m_hInstance, nullptr);
 
     m_hBtnWebsite = CreateWindowExW(0, WC_BUTTONW, L"Официальный сайт",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + btnApplyW + gap + btnPickW + gap, curY, btnWebW, bottomButtonsH,
-        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_WEBSITE, m_hInstance, nullptr);
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_SMARTDNS_WEBSITE)), m_hInstance, nullptr);
 
     m_hBtnVerify = CreateWindowExW(0, WC_BUTTONW, L"Обновить IP и DoH",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + btnApplyW + gap + btnPickW + gap + btnWebW + gap, curY, btnVerifyW, bottomButtonsH,
-        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_SCRAPE_VERIFY, m_hInstance, nullptr);
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_SMARTDNS_SCRAPE_VERIFY)), m_hInstance, nullptr);
 
     m_hBtnClose = CreateWindowExW(0, WC_BUTTONW, L"Закрыть",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + contentWidth - btnCloseW, curY, btnCloseW, bottomButtonsH,
-        m_hWnd, (HMENU)IDC_BTN_SMARTDNS_CLOSE, m_hInstance, nullptr);
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_SMARTDNS_CLOSE)), m_hInstance, nullptr);
 
     attach_button_effects(m_hBtnApply, 301);
     attach_button_effects(m_hBtnPickIp, 305);
@@ -806,149 +1060,268 @@ void SmartDnsDialog::create_controls() {
     attach_button_effects(m_hBtnVerify, 304);
     attach_button_effects(m_hBtnClose, 303);
 
-    recalculate_item_layouts();
+    reposition_controls();
+    update_action_buttons_state();
 }
 
 void SmartDnsDialog::reposition_controls() {
+    if (!m_hWnd || !IsWindow(m_hWnd)) return;
     RECT rcClient = {};
     GetClientRect(m_hWnd, &rcClient);
     int clientWidth = rcClient.right - rcClient.left;
     int clientHeight = rcClient.bottom - rcClient.top;
+    if (clientWidth < 200 || clientHeight < 200) return;
 
-    int marginX = 20;
-    int contentWidth = clientWidth - (marginX * 2);
+    int marginX = dp(20);
+    int contentWidth = std::max(dp(200), clientWidth - (marginX * 2));
 
-    int searchBoxX = marginX + 154;
-    int searchBoxY = 82;
-    int searchBoxW = std::max(180, contentWidth - 154);
+    int searchBoxX = marginX + dp(154);
+    int searchBoxY = dp(82);
+    int searchBoxW = std::max(dp(120), contentWidth - dp(154));
+    int editInsetX = dp(10);
+    int editInsetY = dp(6);
+    int editH = dp(20);
 
     if (m_hSearchEdit) {
-        SetWindowPos(m_hSearchEdit, nullptr, searchBoxX + 10, searchBoxY + 6, searchBoxW - 20, 20, SWP_NOZORDER);
+        SetWindowPos(m_hSearchEdit, nullptr,
+            searchBoxX + editInsetX, searchBoxY + editInsetY,
+            std::max(dp(60), searchBoxW - 2 * editInsetX), editH, SWP_NOZORDER);
     }
 
-    int listTop = 148;
-    int bottomButtonsH = 38;
-    int listBottomMargin = 16;
-    int listHeight = std::max(80, clientHeight - listTop - bottomButtonsH - listBottomMargin - 16);
+    int listTop = dp(148);
+    int bottomButtonsH = dp(38);
+    int listBottomMargin = dp(16);
+    int gapBelowList = dp(16);
+    int listHeight = std::max(dp(80), clientHeight - listTop - bottomButtonsH - listBottomMargin - gapBelowList);
 
     if (m_hListWnd) {
         SetWindowPos(m_hListWnd, nullptr, marginX, listTop, contentWidth, listHeight, SWP_NOZORDER);
     }
 
-    int curY = listTop + listHeight + 16;
-    int btnApplyW = 165;
-    int btnPickW = 110;
-    int btnWebW = 140;
-    int btnVerifyW = 165;
-    int btnCloseW = 95;
-    int gap = 8;
+    int curY = listTop + listHeight + gapBelowList;
+    int btnApplyW  = dp(165);
+    int btnPickW   = dp(110);
+    int btnWebW    = dp(140);
+    int btnVerifyW = dp(165);
+    int btnCloseW  = dp(95);
+    int gap        = dp(8);
 
-    if (m_hBtnApply) SetWindowPos(m_hBtnApply, nullptr, marginX, curY, btnApplyW, bottomButtonsH, SWP_NOZORDER);
-    if (m_hBtnPickIp) SetWindowPos(m_hBtnPickIp, nullptr, marginX + btnApplyW + gap, curY, btnPickW, bottomButtonsH, SWP_NOZORDER);
+    int totalMinNeeded = btnApplyW + btnPickW + btnWebW + btnVerifyW + btnCloseW + 4 * gap;
+    if (totalMinNeeded > contentWidth && totalMinNeeded > 0) {
+        float ratio = static_cast<float>(std::max(100, contentWidth - 4 * gap)) /
+                      static_cast<float>(btnApplyW + btnPickW + btnWebW + btnVerifyW + btnCloseW);
+        btnApplyW  = std::max(dp(70), static_cast<int>(btnApplyW * ratio));
+        btnPickW   = std::max(dp(55), static_cast<int>(btnPickW * ratio));
+        btnWebW    = std::max(dp(65), static_cast<int>(btnWebW * ratio));
+        btnVerifyW = std::max(dp(70), static_cast<int>(btnVerifyW * ratio));
+        btnCloseW  = std::max(dp(55), static_cast<int>(btnCloseW * ratio));
+    }
+
+    if (m_hBtnApply)   SetWindowPos(m_hBtnApply, nullptr, marginX, curY, btnApplyW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnPickIp)  SetWindowPos(m_hBtnPickIp, nullptr, marginX + btnApplyW + gap, curY, btnPickW, bottomButtonsH, SWP_NOZORDER);
     if (m_hBtnWebsite) SetWindowPos(m_hBtnWebsite, nullptr, marginX + btnApplyW + gap + btnPickW + gap, curY, btnWebW, bottomButtonsH, SWP_NOZORDER);
-    if (m_hBtnVerify) SetWindowPos(m_hBtnVerify, nullptr, marginX + btnApplyW + gap + btnPickW + gap + btnWebW + gap, curY, btnVerifyW, bottomButtonsH, SWP_NOZORDER);
-    if (m_hBtnClose) SetWindowPos(m_hBtnClose, nullptr, marginX + contentWidth - btnCloseW, curY, btnCloseW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnVerify)  SetWindowPos(m_hBtnVerify, nullptr, marginX + btnApplyW + gap + btnPickW + gap + btnWebW + gap, curY, btnVerifyW, bottomButtonsH, SWP_NOZORDER);
+    if (m_hBtnClose)   SetWindowPos(m_hBtnClose, nullptr, marginX + contentWidth - btnCloseW, curY, btnCloseW, bottomButtonsH, SWP_NOZORDER);
 
     recalculate_item_layouts();
     InvalidateRect(m_hWnd, nullptr, FALSE);
     if (m_hListWnd) InvalidateRect(m_hListWnd, nullptr, TRUE);
 }
 
+Gdiplus::RectF SmartDnsDialog::get_website_pill_rect(Gdiplus::Graphics& g, int cardWidth, int cardY) const {
+    Gdiplus::StringFormat sfCenter(Gdiplus::StringFormat::GenericTypographic());
+    sfCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+    sfCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+
+    Gdiplus::RectF linkBounds;
+    g.MeasureString(WEBSITE_PILL_LABEL, -1, m_gpCardLink.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &linkBounds);
+    float linkBtnW = linkBounds.Width + dpf(22.0f);
+    float linkBtnH = dpf(24.0f);
+    float linkBtnX = static_cast<float>(cardWidth) - linkBtnW - dpf(16.0f);
+    float linkBtnY = static_cast<float>(cardY) + dpf(9.0f);
+    return Gdiplus::RectF(linkBtnX, linkBtnY, linkBtnW, linkBtnH);
+}
+
 void SmartDnsDialog::recalculate_item_layouts() {
-    if (!m_hListWnd) return;
+    if (!m_hListWnd || !IsWindow(m_hListWnd)) return;
     RECT rc = {};
     GetClientRect(m_hListWnd, &rc);
     int w = rc.right - rc.left;
-    int scrollBarW = 10;
-    int cardW = std::max(200, w - scrollBarW - 6);
+    int h = rc.bottom - rc.top;
+    if (w <= 0) return;
 
     size_t count = m_filteredIndices.size();
     m_itemHeights.resize(count);
     m_itemYPositions.resize(count + 1);
-
-    int curY = 0;
-    for (size_t i = 0; i < count; ++i) {
-        m_itemYPositions[i] = curY;
-        int h = calculate_item_height(m_allEntries[m_filteredIndices[i]], cardW);
-        m_itemHeights[i] = h;
-        curY += h + CARD_ROW_GAP;
+    if (count == 0) {
+        m_itemYPositions[0] = 0;
+        m_totalContentHeight = 0;
+        return;
     }
-    m_itemYPositions[count] = curY;
-    m_totalContentHeight = curY;
+
+    HDC hdc = GetDC(m_hListWnd);
+    if (!hdc) return;
+
+    {
+        Gdiplus::Graphics g(hdc);
+        g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+        int rowGap = dp(CARD_ROW_GAP_BASE);
+        int scrollReserve = dp(17);
+
+        auto measureAll = [&](int cardW) -> int {
+            int curY = 0;
+            for (size_t i = 0; i < count; ++i) {
+                m_itemYPositions[i] = curY;
+                int itemH = calculate_item_height(g, m_allEntries[m_filteredIndices[i]], cardW);
+                m_itemHeights[i] = itemH;
+                curY += itemH + rowGap;
+            }
+            m_itemYPositions[count] = curY;
+            return curY;
+        };
+
+        int fullW = std::max(dp(180), w);
+        int totalNoScroll = measureAll(fullW);
+        if (h > 0 && totalNoScroll > h) {
+            int scrolledW = std::max(dp(180), w - scrollReserve);
+            m_totalContentHeight = measureAll(scrolledW);
+        } else {
+            m_totalContentHeight = totalNoScroll;
+        }
+    }
+
+    ReleaseDC(m_hListWnd, hdc);
 }
 
-int SmartDnsDialog::calculate_item_height(const SmartDnsEntry& entry, int cardWidth) const {
-    float curH = 14.0f; // top padding
+int SmartDnsDialog::calculate_item_height(Gdiplus::Graphics& g, const SmartDnsEntry& e, int cardWidth) const {
+    if (!m_gpCardTitle || !m_gpCardBadge || !m_gpCardSub || !m_gpCardCatHeader || !m_gpCardTag || !m_gpCardLink) {
+        return dp(220);
+    }
 
-    // 1. Title + badges row (dynamic wrap simulation matching draw_card_item)
-    float maxHeaderW = static_cast<float>(cardWidth - 175);
-    float headerLineY = 0.0f;
-    float curLineX = 16.0f + static_cast<float>(entry.name.length()) * 8.5f + 12.0f;
-    float curLineMaxW = maxHeaderW;
+    Gdiplus::StringFormat sfCenter(Gdiplus::StringFormat::GenericTypographic());
+    sfCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+    sfCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
 
-    auto checkWrap = [&](float neededW) {
-        if (curLineX + neededW > curLineMaxW) {
-            headerLineY += 26.0f;
-            curLineX = 16.0f;
-            curLineMaxW = static_cast<float>(cardWidth - 24);
+    float curCardY = dpf(10.0f);
+    float curCardX = dpf(16.0f);
+    float headerStepY = dpf(26.0f);
+
+    float maxHeaderLeftW = static_cast<float>(cardWidth) - dpf(24.0f);
+    if (has_valid_http_url(e.website_url)) {
+        Gdiplus::RectF linkRc = get_website_pill_rect(g, cardWidth, 0);
+        maxHeaderLeftW = linkRc.X - dpf(12.0f);
+    }
+
+    Gdiplus::RectF nameBounds;
+    g.MeasureString(e.name.c_str(), -1, m_gpCardTitle.get(), Gdiplus::PointF(0.0f, 0.0f), &nameBounds);
+    float badgeX = curCardX + nameBounds.Width + dpf(12.0f);
+    if (badgeX > maxHeaderLeftW) {
+        curCardY += headerStepY;
+        badgeX = curCardX;
+        maxHeaderLeftW = static_cast<float>(cardWidth) - dpf(24.0f);
+    }
+
+    auto checkWrapBadge = [&](float neededW) {
+        if (badgeX + neededW > maxHeaderLeftW) {
+            curCardY += headerStepY;
+            badgeX = curCardX;
+            maxHeaderLeftW = static_cast<float>(cardWidth) - dpf(24.0f);
         }
-        curLineX += neededW + 8.0f;
     };
 
-    checkWrap(85.0f); // [SmartDNS] badge
-    if (!entry.location.empty()) {
-        checkWrap(static_cast<float>(entry.location.length()) * 7.5f + 20.0f); // Location badge
-    }
-    if (entry.is_active) {
-        checkWrap(135.0f); // [Активен в системе] badge
-    }
-    curH += headerLineY + 28.0f;
-
-    // 2. Addresses row (IPv4 + DoH)
-    std::wstring addrStr = L"IPv4: " + entry.primary_ipv4;
-    if (!entry.secondary_ipv4.empty()) addrStr += L", " + entry.secondary_ipv4;
-    if (entry.ip_pool.size() > 2) addrStr += L"  [Пул: " + std::to_wstring(entry.ip_pool.size()) + L" IP]";
-    if (!entry.doh_template.empty()) addrStr += L"   |   DoH: " + entry.doh_template;
-    float maxAddrW = static_cast<float>(std::max(200, cardWidth - 36));
-    int addrCharsPerLine = std::max(25, static_cast<int>(maxAddrW / 7.5f));
-    int addrLines = std::max(1, static_cast<int>((addrStr.length() + addrCharsPerLine - 1) / addrCharsPerLine));
-    curH += addrLines * 20.0f + 2.0f;
-
-    // 3. Status row (UDP/DoH verified)
-    if (entry.is_verified) {
-        curH += 20.0f;
+    {
+        Gdiplus::RectF sBounds;
+        g.MeasureString(L"SmartDNS", -1, m_gpCardBadge.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &sBounds);
+        float pillW = sBounds.Width + dpf(20.0f);
+        checkWrapBadge(pillW);
+        badgeX += pillW + dpf(8.0f);
     }
 
-    // 4. Description line (multi-line word wrap)
-    float maxDescW = static_cast<float>(std::max(200, cardWidth - 36));
-    int charsPerLine = std::max(20, static_cast<int>(maxDescW / 7.0f));
-    int descLines = std::max(1, static_cast<int>((entry.description.length() + charsPerLine - 1) / charsPerLine));
-    curH += descLines * 19.0f + 6.0f;
+    if (!e.location.empty()) {
+        Gdiplus::RectF locBounds;
+        g.MeasureString(e.location.c_str(), -1, m_gpCardBadge.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &locBounds);
+        float locW = locBounds.Width + dpf(18.0f);
+        checkWrapBadge(locW);
+        badgeX += locW + dpf(8.0f);
+    }
 
-    // 5. Separator line
-    curH += 16.0f;
+    if (e.is_active) {
+        Gdiplus::RectF actBounds;
+        g.MeasureString(L"Активен в системе", -1, m_gpCardBadge.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &actBounds);
+        float actW = actBounds.Width + dpf(18.0f);
+        checkWrapBadge(actW);
+    }
 
-    // 6. Categories & tags with Flow Layout
-    float maxChipRowW = static_cast<float>(std::max(200, cardWidth - 28));
-    float indentX = 168.0f;
+    curCardY += headerStepY;
 
-    for (const auto& cat : entry.categories) {
-        float chipX = indentX;
-        float rowH = 24.0f;
+    // Addresses row
+    std::wstring addrStr = L"IPv4: " + e.primary_ipv4;
+    if (!e.secondary_ipv4.empty()) addrStr += L", " + e.secondary_ipv4;
+    if (e.ip_pool.size() > 2) {
+        addrStr += L"  [Пул: " + std::to_wstring(e.ip_pool.size()) + L" IP]";
+    }
+    if (!e.doh_template.empty()) addrStr += L"   |   DoH: " + e.doh_template;
 
-        for (const auto& svc : cat.services) {
-            float chipW = svc.length() * 7.0f + 20.0f;
-            if (chipX + chipW > maxChipRowW) {
-                chipX = indentX;
-                rowH += 27.0f;
-            }
-            chipX += chipW + 6.0f;
+    Gdiplus::StringFormat sfAddr;
+    sfAddr.SetTrimming(Gdiplus::StringTrimmingWord);
+    float maxAddrW = std::max(dpf(120.0f), static_cast<float>(cardWidth) - dpf(36.0f));
+    Gdiplus::RectF addrMeasured;
+    g.MeasureString(addrStr.c_str(), -1, m_gpCardSub.get(), Gdiplus::SizeF(maxAddrW, 0.0f), &sfAddr, &addrMeasured);
+    float addrH = std::max(dpf(20.0f), std::ceil(addrMeasured.Height));
+    curCardY += addrH + dpf(2.0f);
+
+    if (e.is_verified) {
+        curCardY += dpf(18.0f);
+    }
+
+    // Description
+    Gdiplus::StringFormat sfDesc;
+    sfDesc.SetTrimming(Gdiplus::StringTrimmingWord);
+    float maxDescW = std::max(dpf(120.0f), static_cast<float>(cardWidth) - dpf(36.0f));
+    Gdiplus::RectF descMeasured;
+    g.MeasureString(e.description.c_str(), -1, m_gpCardSub.get(), Gdiplus::SizeF(maxDescW, 0.0f), &sfDesc, &descMeasured);
+    float descH = std::max(dpf(18.0f), std::ceil(descMeasured.Height));
+    curCardY += descH + dpf(8.0f);
+
+    // Separator
+    curCardY += dpf(10.0f);
+
+    // Categories & service chips
+    float maxRowW = std::max(dpf(160.0f), static_cast<float>(cardWidth) - dpf(24.0f));
+    float chipRowStep = dpf(27.0f);
+    float catBottomStep = dpf(29.0f);
+
+    for (const auto& cat : e.categories) {
+        std::wstring catTitle = cat.name + L":";
+        Gdiplus::RectF catTitleBounds;
+        g.MeasureString(catTitle.c_str(), -1, m_gpCardCatHeader.get(), Gdiplus::PointF(0.0f, 0.0f), &catTitleBounds);
+        float indentX = curCardX + dpf(152.0f);
+        if (curCardX + catTitleBounds.Width + dpf(10.0f) > indentX) {
+            indentX = curCardX + catTitleBounds.Width + dpf(10.0f);
         }
-        curH += rowH + 6.0f;
+        if (indentX > maxRowW - dpf(80.0f)) {
+            curCardY += dpf(22.0f);
+            indentX = curCardX;
+        }
+
+        float chipX = indentX;
+        float chipY = curCardY;
+        for (const auto& svc : cat.services) {
+            Gdiplus::RectF svcBounds;
+            g.MeasureString(svc.c_str(), -1, m_gpCardTag.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &svcBounds);
+            float chipW = svcBounds.Width + dpf(20.0f);
+            if (chipX > indentX && chipX + chipW > maxRowW) {
+                chipX = indentX;
+                chipY += chipRowStep;
+            }
+            chipX += chipW + dpf(6.0f);
+        }
+        curCardY = chipY + catBottomStep;
     }
 
-    curH += 18.0f; // bottom padding & safe margin
-    return std::max(200, static_cast<int>(std::ceil(curH)));
+    curCardY += dpf(6.0f);
+    return std::max(dp(140), static_cast<int>(std::ceil(curCardY)));
 }
 
 int SmartDnsDialog::get_item_at_point(int mouseY, int& outItemY) const {
@@ -959,6 +1332,7 @@ int SmartDnsDialog::get_item_at_point(int mouseY, int& outItemY) const {
     }
 
     for (size_t i = 0; i < m_filteredIndices.size(); ++i) {
+        if (i >= m_itemYPositions.size() || i >= m_itemHeights.size()) break;
         int itemTop = m_itemYPositions[i];
         int itemBottom = itemTop + m_itemHeights[i];
         if (targetY >= itemTop && targetY <= itemBottom) {
@@ -972,11 +1346,11 @@ int SmartDnsDialog::get_item_at_point(int mouseY, int& outItemY) const {
 
 void SmartDnsDialog::on_apply_selected() {
     if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_filteredIndices.size())) {
-        size_t realIdx = m_filteredIndices[m_selectedIndex];
+        size_t realIdx = m_filteredIndices[static_cast<size_t>(m_selectedIndex)];
         m_selectedProfileId = m_allEntries[realIdx].profile_id;
-        m_verifyCancelled.store(true, std::memory_order_release);
-        if (m_verifyThread.joinable()) {
-            m_verifyThread.join();
+        m_cancelVerify.store(true, std::memory_order_release);
+        if (m_hWnd && IsWindow(m_hWnd)) {
+            ShowWindow(m_hWnd, SW_HIDE);
         }
         m_finished = true;
     }
@@ -987,7 +1361,7 @@ void SmartDnsDialog::on_pick_ip_from_pool() {
         return;
     }
 
-    size_t realIdx = m_filteredIndices[m_selectedIndex];
+    size_t realIdx = m_filteredIndices[static_cast<size_t>(m_selectedIndex)];
     auto& entry = m_allEntries[realIdx];
 
     auto ensureInPool = [&](const std::wstring& ip) {
@@ -1023,7 +1397,17 @@ void SmartDnsDialog::on_pick_ip_from_pool() {
     if (!hMenu) return;
 
     HMENU hSubPri = CreatePopupMenu();
+    if (!hSubPri) {
+        DestroyMenu(hMenu);
+        return;
+    }
+
     HMENU hSubSec = CreatePopupMenu();
+    if (!hSubSec) {
+        DestroyMenu(hSubPri);
+        DestroyMenu(hMenu);
+        return;
+    }
 
     size_t maxItems = std::min<size_t>(entry.ip_pool.size(), 50);
     for (size_t i = 0; i < maxItems; ++i) {
@@ -1039,8 +1423,12 @@ void SmartDnsDialog::on_pick_ip_from_pool() {
     UINT noneFlags = MF_STRING | (entry.secondary_ipv4.empty() ? MF_CHECKED : 0);
     AppendMenuW(hSubSec, noneFlags, IDM_POOL_SECONDARY_NONE, L"Не использовать (только 1 IP)");
 
-    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubPri), L"Основной DNS (Primary)");
-    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubSec), L"Резервный DNS (Secondary)");
+    if (!AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubPri), L"Основной DNS (Primary)")) {
+        DestroyMenu(hSubPri);
+    }
+    if (!AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubSec), L"Резервный DNS (Secondary)")) {
+        DestroyMenu(hSubSec);
+    }
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
     for (size_t i = 0; i < maxItems; ++i) {
@@ -1085,7 +1473,11 @@ void SmartDnsDialog::on_pick_ip_from_pool() {
     }
 
     if (updated) {
+        ensureInPool(entry.primary_ipv4);
+        ensureInPool(entry.secondary_ipv4);
+
         std::string newPriUtf8 = wide_to_utf8(entry.primary_ipv4);
+        std::string newSecUtf8 = wide_to_utf8(entry.secondary_ipv4);
         for (const auto& c : entry.candidates) {
             if (c.ip == newPriUtf8) {
                 entry.ping_ms = c.is_alive ? c.latency_ms : -1;
@@ -1098,10 +1490,13 @@ void SmartDnsDialog::on_pick_ip_from_pool() {
             if (optProf) {
                 DnsProfile p = *optProf;
                 p.primary_ipv4 = newPriUtf8;
-                p.secondary_ipv4 = wide_to_utf8(entry.secondary_ipv4);
+                p.secondary_ipv4 = newSecUtf8;
                 p.ip_pool.clear();
                 for (const auto& wIp : entry.ip_pool) {
-                    p.ip_pool.push_back(wide_to_utf8(wIp));
+                    std::string ipUtf8 = wide_to_utf8(wIp);
+                    if (!ipUtf8.empty() && std::find(p.ip_pool.begin(), p.ip_pool.end(), ipUtf8) == p.ip_pool.end()) {
+                        p.ip_pool.push_back(std::move(ipUtf8));
+                    }
                 }
                 m_pConfig->update_profile(p);
                 m_pConfig->save_to_file();
@@ -1120,31 +1515,38 @@ void SmartDnsDialog::on_open_website(size_t index) {
     if (index < m_filteredIndices.size()) {
         size_t realIdx = m_filteredIndices[index];
         const auto& entry = m_allEntries[realIdx];
-        if (!entry.website_url.empty()) {
-            if (_wcsnicmp(entry.website_url.c_str(), L"https://", 8) == 0 ||
-                _wcsnicmp(entry.website_url.c_str(), L"http://", 7) == 0) {
-                ShellExecuteW(m_hWnd, L"open", entry.website_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-            }
+        if (has_valid_http_url(entry.website_url)) {
+            ShellExecuteW(m_hWnd, L"open", entry.website_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         }
     }
 }
 
 void SmartDnsDialog::on_verify_and_scrape_ips() {
-    if (m_isVerifying) return;
+    if (m_isVerifying.load(std::memory_order_acquire)) return;
     if (m_verifyThread.joinable()) {
         m_verifyThread.join();
     }
-    m_isVerifying = true;
-    m_verifyCancelled.store(false, std::memory_order_release);
-    EnableWindow(m_hBtnVerify, FALSE);
-    SetWindowTextW(m_hBtnVerify, L"Проверка...");
+
+    m_cancelVerify.store(false, std::memory_order_release);
+    m_isVerifying.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(m_verifyMutex);
+        m_pendingVerifyResults.clear();
+        m_hasVerifyResults = false;
+    }
+
+    if (m_hBtnVerify && IsWindow(m_hBtnVerify)) {
+        EnableWindow(m_hBtnVerify, FALSE);
+        SetWindowTextW(m_hBtnVerify, L"Проверка...");
+        InvalidateRect(m_hBtnVerify, nullptr, FALSE);
+    }
     m_statusText = L"Скрейпинг актуальных IP и тестирование DoH...";
     InvalidateRect(m_hWnd, nullptr, FALSE);
 
     HWND hWndDlg = m_hWnd;
     auto entriesCopy = m_allEntries;
 
-    m_verifyThread = std::thread([hWndDlg, entriesCopy, isCancelled = &m_verifyCancelled]() {
+    m_verifyThread = std::thread([this, hWndDlg, entriesCopy]() {
         std::vector<DnsProfile> profilesToVerify;
         profilesToVerify.reserve(entriesCopy.size());
         for (const auto& e : entriesCopy) {
@@ -1155,28 +1557,48 @@ void SmartDnsDialog::on_verify_and_scrape_ips() {
             p.secondary_ipv4 = QuickDns::Encoding::wide_to_utf8(e.secondary_ipv4);
             p.doh_template = QuickDns::Encoding::wide_to_utf8(e.doh_template);
             p.website_url = QuickDns::Encoding::wide_to_utf8(e.website_url);
+            p.is_smart_dns = true;
             for (const auto& poolIp : e.ip_pool) {
                 p.ip_pool.push_back(QuickDns::Encoding::wide_to_utf8(poolIp));
             }
-            profilesToVerify.push_back(p);
+            profilesToVerify.push_back(std::move(p));
         }
 
-        auto results = SmartDnsVerifier::verify_profiles(profilesToVerify);
-        if (isCancelled->load(std::memory_order_acquire)) {
+        auto results = SmartDnsVerifier::verify_profiles(
+            profilesToVerify,
+            [this, hWndDlg](size_t completed, size_t total, const SmartDnsVerificationResult&) {
+                if (m_cancelVerify.load(std::memory_order_acquire)) return;
+                if (hWndDlg && IsWindow(hWndDlg)) {
+                    PostMessageW(hWndDlg, WM_APP_SMARTDNS_VERIFY_PROGRESS,
+                                 static_cast<WPARAM>(completed), static_cast<LPARAM>(total));
+                }
+            },
+            &m_cancelVerify
+        );
+
+        if (m_cancelVerify.load(std::memory_order_acquire)) {
+            m_isVerifying.store(false, std::memory_order_release);
             return;
         }
 
-        auto* pAllocResults = new std::vector<SmartDnsVerificationResult>(std::move(results));
-        if (!PostMessageW(hWndDlg, WM_APP + 55, reinterpret_cast<WPARAM>(pAllocResults), 0)) {
-            delete pAllocResults;
+        {
+            std::lock_guard<std::mutex> lock(m_verifyMutex);
+            m_pendingVerifyResults = std::move(results);
+            m_hasVerifyResults = true;
+        }
+
+        if (!m_cancelVerify.load(std::memory_order_acquire) && hWndDlg && IsWindow(hWndDlg)) {
+            PostMessageW(hWndDlg, WM_APP_SMARTDNS_VERIFY_DONE, 0, 0);
+        } else {
+            m_isVerifying.store(false, std::memory_order_release);
         }
     });
 }
 
 void SmartDnsDialog::on_close() {
-    m_verifyCancelled.store(true, std::memory_order_release);
-    if (m_verifyThread.joinable()) {
-        m_verifyThread.join();
+    m_cancelVerify.store(true, std::memory_order_release);
+    if (m_hWnd && IsWindow(m_hWnd)) {
+        ShowWindow(m_hWnd, SW_HIDE);
     }
     m_finished = true;
 }
@@ -1195,32 +1617,61 @@ void SmartDnsDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     RECT rc = pDis->rcItem;
     int w = rc.right - rc.left;
     int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return;
 
     auto pal = GetPalette(m_isDarkMode);
     bool isPrimary = (pDis->CtlID == IDC_BTN_SMARTDNS_APPLY);
+    bool isDisabled = (pDis->itemState & ODS_DISABLED) != 0;
 
     auto* anim = reinterpret_cast<ButtonAnimationState*>(GetPropW(pDis->hwndItem, L"QuickDnsAnim"));
     float hoverVal = anim ? anim->hover : 0.0f;
     bool isPressed = (pDis->itemState & ODS_SELECTED) || (anim && anim->isPressed);
 
-    COLORREF baseBg = isPrimary ? pal.btnPrimaryBg : pal.btnUtilBg;
-    COLORREF hoverBg = isPrimary ? pal.btnPrimaryHover : pal.btnUtilHover;
-    COLORREF pressBg = isPrimary ? pal.btnPrimaryPress : pal.btnUtilPress;
+    COLORREF baseBg, hoverBg, pressBg, baseBorder, hoverBorder, textColor;
+    if (isPrimary) {
+        if (isDisabled) {
+            baseBg = m_isDarkMode ? RGB(30, 42, 60) : RGB(210, 222, 238);
+            baseBorder = m_isDarkMode ? RGB(45, 58, 80) : RGB(180, 198, 222);
+            textColor = m_isDarkMode ? RGB(110, 128, 155) : RGB(130, 150, 180);
+            hoverBg = baseBg; pressBg = baseBg; hoverBorder = baseBorder;
+        } else {
+            baseBg = pal.btnPrimaryBg;
+            hoverBg = pal.btnPrimaryHover;
+            pressBg = pal.btnPrimaryPress;
+            baseBorder = pal.btnPrimaryBorder;
+            hoverBorder = pal.btnPrimaryHover;
+            textColor = pal.btnPrimaryText;
+        }
+    } else {
+        if (isDisabled) {
+            baseBg = m_isDarkMode ? RGB(24, 27, 36) : RGB(241, 245, 249);
+            baseBorder = m_isDarkMode ? RGB(38, 43, 56) : RGB(226, 232, 240);
+            textColor = m_isDarkMode ? RGB(85, 95, 115) : RGB(148, 163, 184);
+            hoverBg = baseBg; pressBg = baseBg; hoverBorder = baseBorder;
+        } else {
+            baseBg = pal.btnUtilBg;
+            hoverBg = pal.btnUtilHover;
+            pressBg = pal.btnUtilPress;
+            baseBorder = pal.btnUtilBorder;
+            hoverBorder = m_isDarkMode ? RGB(70, 85, 110) : RGB(180, 195, 220);
+            textColor = pal.btnUtilText;
+        }
+    }
 
-    COLORREF baseBorder = isPrimary ? pal.btnPrimaryBorder : pal.btnUtilBorder;
-    COLORREF hoverBorder = isPrimary ? pal.btnPrimaryHover : (m_isDarkMode ? RGB(70, 85, 110) : RGB(180, 195, 220));
+    COLORREF curBg = isDisabled ? baseBg : (isPressed ? pressBg : LerpColor(baseBg, hoverBg, hoverVal));
+    COLORREF curBorder = isDisabled ? baseBorder : LerpColor(baseBorder, hoverBorder, hoverVal);
 
-    COLORREF curBg = isPressed ? pressBg : LerpColor(baseBg, hoverBg, hoverVal);
-    COLORREF curBorder = LerpColor(baseBorder, hoverBorder, hoverVal);
-    COLORREF textColor = isPrimary ? pal.btnPrimaryText : pal.btnUtilText;
-
-    // Double buffer
     HDC hdcMem = CreateCompatibleDC(hdc);
     HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+    if (!hbmMem) {
+        DeleteDC(hdcMem);
+        return;
+    }
     HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
+    RECT rcLocal = { 0, 0, w, h };
     HBRUSH hbrWin = CreateSolidBrush(pal.bg);
-    FillRect(hdcMem, &rc, hbrWin);
+    FillRect(hdcMem, &rcLocal, hbrWin);
     DeleteObject(hbrWin);
 
     {
@@ -1229,7 +1680,7 @@ void SmartDnsDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
         Gdiplus::GraphicsPath path;
-        AddRoundedRect(path, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), 7.0f);
+        AddRoundedRect(path, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), dpf(7.0f));
 
         Gdiplus::SolidBrush br(Gdiplus::Color(255, GetRValue(curBg), GetGValue(curBg), GetBValue(curBg)));
         g.FillPath(&br, &path);
@@ -1246,8 +1697,8 @@ void SmartDnsDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     HFONT hFont = isPrimary ? m_hFontBold : m_hFontRegular;
     HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
 
-    RECT rcText = rc;
-    if (isPressed) {
+    RECT rcText = rcLocal;
+    if (isPressed && !isDisabled) {
         rcText.left += 1;
         rcText.top += 1;
         rcText.right += 1;
@@ -1265,6 +1716,8 @@ void SmartDnsDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
 
 void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, int width, int height, bool isSelected, bool isHovered) {
     if (index >= m_filteredIndices.size()) return;
+    if (!m_gpCardTitle || !m_gpCardBadge || !m_gpCardSub || !m_gpCardCatHeader || !m_gpCardTag || !m_gpCardLink) return;
+
     size_t realIdx = m_filteredIndices[index];
     const auto& e = m_allEntries[realIdx];
     auto pal = GetPalette(m_isDarkMode);
@@ -1272,9 +1725,9 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
     // 1. Card container background
     Gdiplus::RectF rcCard(0.5f, static_cast<float>(y) + 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f);
     Gdiplus::GraphicsPath cardPath;
-    AddRoundedRect(cardPath, rcCard, 8.0f);
+    AddRoundedRect(cardPath, rcCard, dpf(8.0f));
 
-    COLORREF bgCol = isSelected 
+    COLORREF bgCol = isSelected
         ? (m_isDarkMode ? RGB(36, 44, 60) : RGB(232, 240, 255))
         : pal.cardBg;
     COLORREF borderCol = isSelected
@@ -1290,19 +1743,11 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
     // Left indicator bar
     if (isSelected || e.is_active) {
         Gdiplus::GraphicsPath selBarPath;
-        AddRoundedRect(selBarPath, Gdiplus::RectF(2.0f, static_cast<float>(y) + 8.0f, 3.5f, static_cast<float>(height) - 16.0f), 2.0f);
+        AddRoundedRect(selBarPath, Gdiplus::RectF(dpf(2.0f), static_cast<float>(y) + dpf(8.0f), dpf(3.5f), static_cast<float>(height) - dpf(16.0f)), dpf(2.0f));
         COLORREF barColor = e.is_active ? RGB(34, 197, 94) : (m_isDarkMode ? RGB(96, 165, 250) : RGB(37, 99, 235));
         Gdiplus::SolidBrush selBarBr(Gdiplus::Color(255, GetRValue(barColor), GetGValue(barColor), GetBValue(barColor)));
         g.FillPath(&selBarBr, &selBarPath);
     }
-
-    // 2. Header Row: Name + Badges
-    Gdiplus::FontFamily fontFamily(L"Segoe UI");
-    Gdiplus::Font fontTitle(&fontFamily, 11.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    Gdiplus::Font fontBadge(&fontFamily, 8.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    Gdiplus::Font fontSub(&fontFamily, 9.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
-    Gdiplus::Font fontCatHeader(&fontFamily, 8.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    Gdiplus::Font fontTag(&fontFamily, 8.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
 
     Gdiplus::SolidBrush textPriBr(Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary)));
     Gdiplus::SolidBrush textSecBr(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)));
@@ -1312,114 +1757,107 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
     sfCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
     sfCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
 
-    // Top-right website action pill button
-    std::wstring linkLabel = L"Сайт провайдера ↗";
-    Gdiplus::Font fontLink(&fontFamily, 8.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    Gdiplus::RectF linkBounds;
-    g.MeasureString(linkLabel.c_str(), -1, &fontLink, Gdiplus::PointF(0, 0), &sfCenter, &linkBounds);
-    float linkBtnW = linkBounds.Width + 22.0f;
-    float linkBtnH = 24.0f;
-    float linkBtnX = static_cast<float>(width) - linkBtnW - 16.0f;
-    float linkBtnY = static_cast<float>(y) + 9.0f;
+    float maxHeaderLeftW = static_cast<float>(width) - dpf(24.0f);
+    if (has_valid_http_url(e.website_url)) {
+        Gdiplus::RectF linkRc = get_website_pill_rect(g, width, y);
+        Gdiplus::GraphicsPath linkPath;
+        AddRoundedRect(linkPath, linkRc, dpf(4.5f));
+        Gdiplus::SolidBrush linkBgBr(m_isDarkMode ? Gdiplus::Color(40, 59, 130, 246) : Gdiplus::Color(25, 37, 99, 235));
+        Gdiplus::Pen linkPen(m_isDarkMode ? Gdiplus::Color(100, 96, 165, 250) : Gdiplus::Color(80, 37, 99, 235), 1.0f);
+        g.FillPath(&linkBgBr, &linkPath);
+        g.DrawPath(&linkPen, &linkPath);
 
-    Gdiplus::RectF linkRc(linkBtnX, linkBtnY, linkBtnW, linkBtnH);
-    Gdiplus::GraphicsPath linkPath;
-    AddRoundedRect(linkPath, linkRc, 4.5f);
-    Gdiplus::SolidBrush linkBgBr(m_isDarkMode ? Gdiplus::Color(40, 59, 130, 246) : Gdiplus::Color(25, 37, 99, 235));
-    Gdiplus::Pen linkPen(m_isDarkMode ? Gdiplus::Color(100, 96, 165, 250) : Gdiplus::Color(80, 37, 99, 235), 1.0f);
-    g.FillPath(&linkBgBr, &linkPath);
-    g.DrawPath(&linkPen, &linkPath);
+        Gdiplus::SolidBrush linkTextBr(m_isDarkMode ? Gdiplus::Color(255, 147, 197, 253) : Gdiplus::Color(255, 37, 99, 235));
+        g.DrawString(WEBSITE_PILL_LABEL, -1, m_gpCardLink.get(), linkRc, &sfCenter, &linkTextBr);
+        maxHeaderLeftW = linkRc.X - dpf(12.0f);
+    }
 
-    Gdiplus::SolidBrush linkTextBr(m_isDarkMode ? Gdiplus::Color(255, 147, 197, 253) : Gdiplus::Color(255, 37, 99, 235));
-    g.DrawString(linkLabel.c_str(), -1, &fontLink, linkRc, &sfCenter, &linkTextBr);
+    float curCardY = static_cast<float>(y) + dpf(10.0f);
+    float curCardX = dpf(16.0f);
+    float headerStepY = dpf(26.0f);
+    float badgeH = dpf(22.0f);
 
-    // Header Title & Badges with wrap protection so it never touches the website button
-    float maxHeaderLeftW = linkBtnX - 12.0f;
-    float curCardY = static_cast<float>(y) + 10.0f;
-    float curCardX = 16.0f;
-
-    // Provider Title
-    g.DrawString(e.name.c_str(), -1, &fontTitle, Gdiplus::PointF(curCardX, curCardY), &textPriBr);
+    g.DrawString(e.name.c_str(), -1, m_gpCardTitle.get(), Gdiplus::PointF(curCardX, curCardY), &textPriBr);
 
     Gdiplus::RectF nameBounds;
-    g.MeasureString(e.name.c_str(), -1, &fontTitle, Gdiplus::PointF(0, 0), &nameBounds);
-    float badgeX = curCardX + nameBounds.Width + 12.0f;
+    g.MeasureString(e.name.c_str(), -1, m_gpCardTitle.get(), Gdiplus::PointF(0.0f, 0.0f), &nameBounds);
+    float badgeX = curCardX + nameBounds.Width + dpf(12.0f);
     if (badgeX > maxHeaderLeftW) {
-        curCardY += 26.0f;
+        curCardY += headerStepY;
         badgeX = curCardX;
-        maxHeaderLeftW = static_cast<float>(width) - 24.0f;
+        maxHeaderLeftW = static_cast<float>(width) - dpf(24.0f);
     }
 
     auto checkWrapBadge = [&](float neededW) {
         if (badgeX + neededW > maxHeaderLeftW) {
-            curCardY += 26.0f;
+            curCardY += headerStepY;
             badgeX = curCardX;
-            maxHeaderLeftW = static_cast<float>(width) - 24.0f;
+            maxHeaderLeftW = static_cast<float>(width) - dpf(24.0f);
         }
     };
 
-    // [SmartDNS] green pill badge (centered with generous padding)
+    // [SmartDNS] green pill badge
     {
         Gdiplus::RectF sBounds;
-        g.MeasureString(L"SmartDNS", -1, &fontBadge, Gdiplus::PointF(0, 0), &sfCenter, &sBounds);
-        float pillW = sBounds.Width + 20.0f;
+        g.MeasureString(L"SmartDNS", -1, m_gpCardBadge.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &sBounds);
+        float pillW = sBounds.Width + dpf(20.0f);
         checkWrapBadge(pillW);
 
-        Gdiplus::RectF pillRc(badgeX, curCardY, pillW, 22.0f);
+        Gdiplus::RectF pillRc(badgeX, curCardY, pillW, badgeH);
         Gdiplus::GraphicsPath pillPath;
-        AddRoundedRect(pillPath, pillRc, 4.5f);
+        AddRoundedRect(pillPath, pillRc, dpf(4.5f));
         Gdiplus::SolidBrush pillBg(Gdiplus::Color(45, 34, 197, 94));
         Gdiplus::Pen pillPen(Gdiplus::Color(140, 34, 197, 94), 1.0f);
         g.FillPath(&pillBg, &pillPath);
         g.DrawPath(&pillPen, &pillPath);
 
         Gdiplus::SolidBrush pillText(Gdiplus::Color(255, 34, 197, 94));
-        g.DrawString(L"SmartDNS", -1, &fontBadge, pillRc, &sfCenter, &pillText);
-        badgeX += pillW + 8.0f;
+        g.DrawString(L"SmartDNS", -1, m_gpCardBadge.get(), pillRc, &sfCenter, &pillText);
+        badgeX += pillW + dpf(8.0f);
     }
 
-    // Location badge (centered with generous padding)
+    // Location badge
     if (!e.location.empty()) {
         Gdiplus::RectF locBounds;
-        g.MeasureString(e.location.c_str(), -1, &fontBadge, Gdiplus::PointF(0, 0), &sfCenter, &locBounds);
-        float locW = locBounds.Width + 18.0f;
+        g.MeasureString(e.location.c_str(), -1, m_gpCardBadge.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &locBounds);
+        float locW = locBounds.Width + dpf(18.0f);
         checkWrapBadge(locW);
 
-        Gdiplus::RectF locRc(badgeX, curCardY, locW, 22.0f);
+        Gdiplus::RectF locRc(badgeX, curCardY, locW, badgeH);
         Gdiplus::GraphicsPath locPath;
-        AddRoundedRect(locPath, locRc, 4.5f);
+        AddRoundedRect(locPath, locRc, dpf(4.5f));
 
         Gdiplus::SolidBrush locBg(m_isDarkMode ? Gdiplus::Color(255, 38, 44, 56) : Gdiplus::Color(255, 235, 240, 248));
         Gdiplus::Pen locPen(m_isDarkMode ? Gdiplus::Color(255, 60, 70, 88) : Gdiplus::Color(255, 205, 215, 228), 1.0f);
         g.FillPath(&locBg, &locPath);
         g.DrawPath(&locPen, &locPath);
 
-        g.DrawString(e.location.c_str(), -1, &fontBadge, locRc, &sfCenter, &textSecBr);
-        badgeX += locW + 8.0f;
+        g.DrawString(e.location.c_str(), -1, m_gpCardBadge.get(), locRc, &sfCenter, &textSecBr);
+        badgeX += locW + dpf(8.0f);
     }
 
-    // Active badge [Текущий DNS в системе]
+    // Active badge
     if (e.is_active) {
         Gdiplus::RectF actBounds;
-        g.MeasureString(L"Активен в системе", -1, &fontBadge, Gdiplus::PointF(0, 0), &sfCenter, &actBounds);
-        float actW = actBounds.Width + 18.0f;
+        g.MeasureString(L"Активен в системе", -1, m_gpCardBadge.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &actBounds);
+        float actW = actBounds.Width + dpf(18.0f);
         checkWrapBadge(actW);
 
-        Gdiplus::RectF actRc(badgeX, curCardY, actW, 22.0f);
+        Gdiplus::RectF actRc(badgeX, curCardY, actW, badgeH);
         Gdiplus::GraphicsPath actPath;
-        AddRoundedRect(actPath, actRc, 4.5f);
+        AddRoundedRect(actPath, actRc, dpf(4.5f));
         Gdiplus::SolidBrush actBg(Gdiplus::Color(45, 34, 197, 94));
         Gdiplus::Pen actPen(Gdiplus::Color(140, 34, 197, 94), 1.0f);
         g.FillPath(&actBg, &actPath);
         g.DrawPath(&actPen, &actPath);
 
         Gdiplus::SolidBrush actText(Gdiplus::Color(255, 34, 197, 94));
-        g.DrawString(L"Активен в системе", -1, &fontBadge, actRc, &sfCenter, &actText);
+        g.DrawString(L"Активен в системе", -1, m_gpCardBadge.get(), actRc, &sfCenter, &actText);
     }
 
-    curCardY += 26.0f;
+    curCardY += headerStepY;
 
-    // 3. Addresses: IPv4, DoH, Website
+    // 3. Addresses: IPv4, DoH
     std::wstring addrStr = L"IPv4: " + e.primary_ipv4;
     if (!e.secondary_ipv4.empty()) addrStr += L", " + e.secondary_ipv4;
     if (e.ip_pool.size() > 2) {
@@ -1429,14 +1867,13 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
 
     Gdiplus::StringFormat sfAddr;
     sfAddr.SetTrimming(Gdiplus::StringTrimmingWord);
-    sfAddr.SetFormatFlags(Gdiplus::StringFormatFlagsLineLimit);
-    float maxAddrW = static_cast<float>(width) - 36.0f;
+    float maxAddrW = std::max(dpf(120.0f), static_cast<float>(width) - dpf(36.0f));
     Gdiplus::RectF addrMeasured;
-    g.MeasureString(addrStr.c_str(), -1, &fontSub, Gdiplus::SizeF(maxAddrW, 0.0f), &sfAddr, &addrMeasured);
-    float addrH = std::max(20.0f, addrMeasured.Height);
+    g.MeasureString(addrStr.c_str(), -1, m_gpCardSub.get(), Gdiplus::SizeF(maxAddrW, 0.0f), &sfAddr, &addrMeasured);
+    float addrH = std::max(dpf(20.0f), std::ceil(addrMeasured.Height));
     Gdiplus::RectF addrRect(curCardX, curCardY, maxAddrW, addrH);
-    g.DrawString(addrStr.c_str(), -1, &fontSub, addrRect, &sfAddr, &textSecBr);
-    curCardY += addrH + 2.0f;
+    g.DrawString(addrStr.c_str(), -1, m_gpCardSub.get(), addrRect, &sfAddr, &textSecBr);
+    curCardY += addrH + dpf(2.0f);
 
     if (e.is_verified) {
         std::wstring statStr = L"Статус: UDP " + (e.ping_ms > 0 ? std::to_wstring(e.ping_ms) + L" ms" : L"тайм-аут");
@@ -1444,75 +1881,77 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
             statStr += L"   |   " + e.doh_status;
         }
         Gdiplus::SolidBrush statBr(e.ping_ms > 0 ? Gdiplus::Color(255, 34, 197, 94) : Gdiplus::Color(255, 239, 68, 68));
-        g.DrawString(statStr.c_str(), -1, &fontBadge, Gdiplus::PointF(curCardX, curCardY), &statBr);
-        curCardY += 18.0f;
+        g.DrawString(statStr.c_str(), -1, m_gpCardBadge.get(), Gdiplus::PointF(curCardX, curCardY), &statBr);
+        curCardY += dpf(18.0f);
     }
 
-    // Description line (multi-line word wrap)
+    // Description line
     Gdiplus::StringFormat sfDesc;
     sfDesc.SetTrimming(Gdiplus::StringTrimmingWord);
-    float maxDescW = static_cast<float>(width) - 36.0f;
+    float maxDescW = std::max(dpf(120.0f), static_cast<float>(width) - dpf(36.0f));
     Gdiplus::RectF descMeasured;
-    g.MeasureString(e.description.c_str(), -1, &fontSub, Gdiplus::SizeF(maxDescW, 0.0f), &sfDesc, &descMeasured);
-    float descH = std::max(18.0f, descMeasured.Height);
+    g.MeasureString(e.description.c_str(), -1, m_gpCardSub.get(), Gdiplus::SizeF(maxDescW, 0.0f), &sfDesc, &descMeasured);
+    float descH = std::max(dpf(18.0f), std::ceil(descMeasured.Height));
     Gdiplus::RectF descRect(curCardX, curCardY, maxDescW, descH);
-    g.DrawString(e.description.c_str(), -1, &fontSub, descRect, &sfDesc, &textMutedBr);
-    curCardY += descH + 8.0f;
+    g.DrawString(e.description.c_str(), -1, m_gpCardSub.get(), descRect, &sfDesc, &textMutedBr);
+    curCardY += descH + dpf(8.0f);
 
     // Separator line inside card
     Gdiplus::Pen sepPen(Gdiplus::Color(70, GetRValue(pal.separator), GetGValue(pal.separator), GetBValue(pal.separator)), 1.0f);
-    g.DrawLine(&sepPen, curCardX, curCardY, static_cast<float>(width) - 16.0f, curCardY);
-    curCardY += 10.0f;
+    g.DrawLine(&sepPen, curCardX, curCardY, static_cast<float>(width) - dpf(16.0f), curCardY);
+    curCardY += dpf(10.0f);
 
-    // 4. Categorized Service Tags (Flow Layout with centered chips)
+    // 4. Categorized Service Tags
     std::wstring searchLower = m_searchQuery;
-    std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::towlower);
+    std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
 
-    float maxRowW = static_cast<float>(width) - 24.0f;
+    float maxRowW = std::max(dpf(160.0f), static_cast<float>(width) - dpf(24.0f));
+    float chipRowStep = dpf(27.0f);
+    float catBottomStep = dpf(29.0f);
+    float chipH = dpf(22.0f);
 
-    for (size_t c = 0; c < e.categories.size(); ++c) {
-        const auto& cat = e.categories[c];
-
-        // Category title (e.g. "Нейросети и AI:")
+    for (const auto& cat : e.categories) {
         std::wstring catTitle = cat.name + L":";
-        g.DrawString(catTitle.c_str(), -1, &fontCatHeader, Gdiplus::PointF(curCardX, curCardY + 3.0f), &textPriBr);
+        g.DrawString(catTitle.c_str(), -1, m_gpCardCatHeader.get(), Gdiplus::PointF(curCardX, curCardY + dpf(3.0f)), &textPriBr);
 
         Gdiplus::RectF catTitleBounds;
-        g.MeasureString(catTitle.c_str(), -1, &fontCatHeader, Gdiplus::PointF(0, 0), &catTitleBounds);
-        float indentX = curCardX + 152.0f;
-        if (curCardX + catTitleBounds.Width + 10.0f > indentX) {
-            indentX = curCardX + catTitleBounds.Width + 10.0f;
+        g.MeasureString(catTitle.c_str(), -1, m_gpCardCatHeader.get(), Gdiplus::PointF(0.0f, 0.0f), &catTitleBounds);
+        float indentX = curCardX + dpf(152.0f);
+        if (curCardX + catTitleBounds.Width + dpf(10.0f) > indentX) {
+            indentX = curCardX + catTitleBounds.Width + dpf(10.0f);
+        }
+        if (indentX > maxRowW - dpf(80.0f)) {
+            curCardY += dpf(22.0f);
+            indentX = curCardX;
         }
 
         float chipX = indentX;
         float chipY = curCardY;
 
-        // Render chips with flowing wrap & perfect centering
         for (const auto& svc : cat.services) {
             Gdiplus::RectF svcBounds;
-            g.MeasureString(svc.c_str(), -1, &fontTag, Gdiplus::PointF(0, 0), &sfCenter, &svcBounds);
-            float chipW = svcBounds.Width + 20.0f;
+            g.MeasureString(svc.c_str(), -1, m_gpCardTag.get(), Gdiplus::PointF(0.0f, 0.0f), &sfCenter, &svcBounds);
+            float chipW = svcBounds.Width + dpf(20.0f);
 
-            if (chipX + chipW > maxRowW) {
+            if (chipX > indentX && chipX + chipW > maxRowW) {
                 chipX = indentX;
-                chipY += 27.0f;
+                chipY += chipRowStep;
             }
 
-            // Check if matches search
             bool isMatched = false;
             if (!searchLower.empty()) {
                 std::wstring sLower = svc;
-                std::transform(sLower.begin(), sLower.end(), sLower.begin(), ::towlower);
+                std::transform(sLower.begin(), sLower.end(), sLower.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
                 if (sLower.find(searchLower) != std::wstring::npos) {
                     isMatched = true;
                 }
             }
 
-            Gdiplus::RectF chipRc(chipX, chipY, chipW, 22.0f);
+            Gdiplus::RectF chipRc(chipX, chipY, chipW, chipH);
             Gdiplus::GraphicsPath chipPath;
-            AddRoundedRect(chipPath, chipRc, 4.0f);
+            AddRoundedRect(chipPath, chipRc, dpf(4.0f));
 
-            Gdiplus::Color chipBg = isMatched 
+            Gdiplus::Color chipBg = isMatched
                 ? Gdiplus::Color(60, 34, 197, 94)
                 : (m_isDarkMode ? Gdiplus::Color(255, 34, 40, 52) : Gdiplus::Color(255, 240, 244, 250));
             Gdiplus::Color chipBorder = isMatched
@@ -1528,12 +1967,12 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
             g.DrawPath(&chipPen, &chipPath);
 
             Gdiplus::SolidBrush chipTextBr(chipTextColor);
-            g.DrawString(svc.c_str(), -1, &fontTag, chipRc, &sfCenter, &chipTextBr);
+            g.DrawString(svc.c_str(), -1, m_gpCardTag.get(), chipRc, &sfCenter, &chipTextBr);
 
-            chipX += chipW + 6.0f;
+            chipX += chipW + dpf(6.0f);
         }
 
-        curCardY = chipY + 29.0f;
+        curCardY = chipY + catBottomStep;
     }
 }
 
@@ -1566,6 +2005,7 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 GetWindowTextW(m_hSearchEdit, buf, 256);
                 m_searchQuery = buf;
                 m_scrollOffset = 0;
+                m_wheelAccum = 0;
                 update_filtered_list();
                 if (m_hListWnd) InvalidateRect(m_hListWnd, nullptr, FALSE);
             }
@@ -1581,7 +2021,9 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             return 0;
         }
         if (id == IDC_BTN_SMARTDNS_WEBSITE) {
-            on_open_website(static_cast<size_t>(std::max(0, m_selectedIndex)));
+            if (m_selectedIndex >= 0) {
+                on_open_website(static_cast<size_t>(m_selectedIndex));
+            }
             return 0;
         }
         if (id == IDC_BTN_SMARTDNS_CLOSE || id == IDCANCEL) {
@@ -1595,15 +2037,43 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         break;
     }
 
-    case WM_APP + 55: {
-        std::unique_ptr<std::vector<SmartDnsVerificationResult>> pResults(
-            reinterpret_cast<std::vector<SmartDnsVerificationResult>*>(wParam)
-        );
-        if (pResults) {
+    case WM_APP_SMARTDNS_VERIFY_PROGRESS: {
+        if (m_isVerifying.load(std::memory_order_acquire)) {
+            size_t completed = static_cast<size_t>(wParam);
+            size_t total = static_cast<size_t>(lParam);
+            m_statusText = L"Проверка SmartDNS и тестирование DoH (" +
+                           std::to_wstring(completed) + L" из " + std::to_wstring(total) + L")...";
+            RECT rcClient{};
+            GetClientRect(hWnd, &rcClient);
+            RECT rcStatus = { 0, dp(116), rcClient.right, dp(148) };
+            InvalidateRect(hWnd, &rcStatus, FALSE);
+        }
+        return 0;
+    }
+
+    case WM_APP_SMARTDNS_VERIFY_DONE: {
+        std::vector<SmartDnsVerificationResult> results;
+        bool hasData = false;
+        {
+            std::lock_guard<std::mutex> lock(m_verifyMutex);
+            if (m_hasVerifyResults) {
+                results = std::move(m_pendingVerifyResults);
+                m_pendingVerifyResults.clear();
+                m_hasVerifyResults = false;
+                hasData = true;
+            }
+        }
+
+        if (m_verifyThread.joinable()) {
+            m_verifyThread.join();
+        }
+        m_isVerifying.store(false, std::memory_order_release);
+
+        if (hasData && !m_cancelVerify.load(std::memory_order_acquire)) {
             std::wstring changesMsg;
             std::vector<std::pair<DnsProfile, SmartDnsVerificationResult>> pendingChanges;
 
-            for (const auto& r : *pResults) {
+            for (const auto& r : results) {
                 for (auto& e : m_allEntries) {
                     if (e.profile_id == r.profile_id) {
                         e.doh_status = r.doh_result.status_text;
@@ -1625,7 +2095,7 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                                 std::string oldPri = optProfile->primary_ipv4;
                                 std::string newPri = r.best_primary_ip;
                                 if (oldPri != newPri) {
-                                    pendingChanges.push_back({*optProfile, r});
+                                    pendingChanges.push_back({ *optProfile, r });
                                     changesMsg += e.name + L": " + QuickDns::Encoding::utf8_to_wide(oldPri) +
                                                   L" -> " + QuickDns::Encoding::utf8_to_wide(newPri) + L"\n";
                                 }
@@ -1637,18 +2107,37 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             }
 
             int appliedCount = 0;
-            if (!pendingChanges.empty()) {
+            if (!pendingChanges.empty() && m_hWnd && IsWindow(m_hWnd)) {
                 std::wstring confirmMsg = L"Найдены обновленные IP-адреса для следующих профилей:\n\n" +
                                           changesMsg +
                                           L"\nПрименить эти изменения к профилям?";
                 int res = MessageBoxW(m_hWnd, confirmMsg.c_str(), L"Подтверждение обновления SmartDNS", MB_YESNO | MB_ICONQUESTION);
                 if (res == IDYES) {
+                    auto addUtf8PoolIp = [](std::vector<std::string>& pool, const std::string& ip) {
+                        if (!ip.empty() && std::find(pool.begin(), pool.end(), ip) == pool.end()) {
+                            pool.push_back(ip);
+                        }
+                    };
+                    auto addWidePoolIp = [](std::vector<std::wstring>& pool, const std::wstring& ip) {
+                        if (!ip.empty() && std::find(pool.begin(), pool.end(), ip) == pool.end()) {
+                            pool.push_back(ip);
+                        }
+                    };
+
                     for (const auto& item : pendingChanges) {
                         DnsProfile p = item.first;
                         p.primary_ipv4 = item.second.best_primary_ip;
                         if (!item.second.best_secondary_ip.empty()) {
                             p.secondary_ipv4 = item.second.best_secondary_ip;
                         }
+                        addUtf8PoolIp(p.ip_pool, p.primary_ipv4);
+                        addUtf8PoolIp(p.ip_pool, p.secondary_ipv4);
+                        for (const auto& c : item.second.candidate_ips) {
+                            if (c.is_alive && !c.ip.empty()) {
+                                addUtf8PoolIp(p.ip_pool, c.ip);
+                            }
+                        }
+
                         m_pConfig->update_profile(p);
                         appliedCount++;
 
@@ -1658,6 +2147,8 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                                 if (!p.secondary_ipv4.empty()) {
                                     e.secondary_ipv4 = QuickDns::Encoding::utf8_to_wide(p.secondary_ipv4);
                                 }
+                                addWidePoolIp(e.ip_pool, e.primary_ipv4);
+                                addWidePoolIp(e.ip_pool, e.secondary_ipv4);
                                 break;
                             }
                         }
@@ -1670,22 +2161,53 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
             m_statusText = L"Проверка завершена. Обновлено IP провайдеров: " + std::to_wstring(appliedCount);
             recalculate_item_layouts();
+            update_action_buttons_state();
         }
-        if (m_verifyThread.joinable()) {
-            m_verifyThread.join();
+
+        if (m_hBtnVerify && IsWindow(m_hBtnVerify)) {
+            EnableWindow(m_hBtnVerify, TRUE);
+            SetWindowTextW(m_hBtnVerify, L"Обновить IP и DoH");
+            InvalidateRect(m_hBtnVerify, nullptr, FALSE);
         }
-        m_isVerifying = false;
-        EnableWindow(m_hBtnVerify, TRUE);
-        SetWindowTextW(m_hBtnVerify, L"Обновить IP и DoH");
-        InvalidateRect(m_hListWnd, nullptr, TRUE);
-        InvalidateRect(m_hWnd, nullptr, FALSE);
+        if (m_hListWnd && IsWindow(m_hListWnd)) {
+            InvalidateRect(m_hListWnd, nullptr, TRUE);
+        }
+        if (m_hWnd && IsWindow(m_hWnd)) {
+            InvalidateRect(m_hWnd, nullptr, FALSE);
+        }
         return 0;
     }
 
     case WM_GETMINMAXINFO: {
         auto* pMMI = reinterpret_cast<MINMAXINFO*>(lParam);
-        pMMI->ptMinTrackSize.x = 760;
-        pMMI->ptMinTrackSize.y = 560;
+        RECT rcMin = { 0, 0, dp(760), dp(560) };
+        adjust_window_rect_for_dpi(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE), m_dpi);
+        int minW = rcMin.right - rcMin.left;
+        int minH = rcMin.bottom - rcMin.top;
+        RECT rcWork = get_monitor_work_area(hWnd);
+        int workW = rcWork.right - rcWork.left;
+        int workH = rcWork.bottom - rcWork.top;
+        if (workW > 0) minW = std::min(minW, workW);
+        if (workH > 0) minH = std::min(minH, workH);
+        pMMI->ptMinTrackSize.x = minW;
+        pMMI->ptMinTrackSize.y = minH;
+        return 0;
+    }
+
+    case WM_DPICHANGED: {
+        m_dpi = HIWORD(wParam);
+        setup_fonts();
+        apply_fonts_to_controls();
+        const auto* pSuggested = reinterpret_cast<const RECT*>(lParam);
+        if (pSuggested) {
+            RECT rcWork = get_monitor_work_area(hWnd);
+            int sugW = std::min(static_cast<int>(pSuggested->right - pSuggested->left), static_cast<int>(rcWork.right - rcWork.left));
+            int sugH = std::min(static_cast<int>(pSuggested->bottom - pSuggested->top), static_cast<int>(rcWork.bottom - rcWork.top));
+            int sugX = std::clamp(static_cast<int>(pSuggested->left), static_cast<int>(rcWork.left), std::max(static_cast<int>(rcWork.left), static_cast<int>(rcWork.right) - sugW));
+            int sugY = std::clamp(static_cast<int>(pSuggested->top), static_cast<int>(rcWork.top), std::max(static_cast<int>(rcWork.top), static_cast<int>(rcWork.bottom) - sugH));
+            SetWindowPos(hWnd, nullptr, sugX, sugY, sugW, sugH, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        reposition_controls();
         return 0;
     }
 
@@ -1694,6 +2216,13 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             reposition_controls();
         }
         return 0;
+    }
+
+    case WM_MOUSEWHEEL: {
+        if (m_hListWnd && IsWindow(m_hListWnd)) {
+            return SendMessageW(m_hListWnd, uMsg, wParam, lParam);
+        }
+        break;
     }
 
     case WM_DRAWITEM: {
@@ -1709,15 +2238,24 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         return 1;
 
     case WM_PAINT: {
-        PAINTSTRUCT ps;
+        PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(hWnd, &ps);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
+        if (w <= 0 || h <= 0) {
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
 
         HDC hdcMem = CreateCompatibleDC(hdc);
         HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+        if (!hbmMem) {
+            DeleteDC(hdcMem);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
         HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
         auto pal = GetPalette(m_isDarkMode);
@@ -1725,55 +2263,53 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         FillRect(hdcMem, &rc, hbrBg);
         DeleteObject(hbrBg);
 
-        {
+        if (m_gpHeaderTitle && m_gpHeaderSub && m_gpHeaderLbl && m_gpHeaderStatus) {
             Gdiplus::Graphics g(hdcMem);
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
             g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
             g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
 
-            Gdiplus::FontFamily ffDisplay(L"Segoe UI Variable Display");
-            Gdiplus::FontFamily ffRegular(L"Segoe UI");
-            Gdiplus::Font fontTitle(&ffDisplay, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-            Gdiplus::Font fontSub(&ffRegular, 9.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
-            Gdiplus::Font fontLbl(&ffRegular, 9.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-            Gdiplus::Font fontStatus(&ffRegular, 8.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
-
             Gdiplus::SolidBrush brPri(Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary)));
             Gdiplus::SolidBrush brSec(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)));
             Gdiplus::SolidBrush brMuted(Gdiplus::Color(255, GetRValue(pal.textMuted), GetGValue(pal.textMuted), GetBValue(pal.textMuted)));
 
-            // 1. Header Title & Subtitle with adaptive word wrap
-            g.DrawString(L"Каталог SmartDNS и разблокируемые сервисы", -1, &fontTitle, Gdiplus::PointF(20.0f, 14.0f), &brPri);
+            int marginX = dp(20);
+            g.DrawString(L"Каталог SmartDNS и разблокируемые сервисы", -1, m_gpHeaderTitle.get(),
+                Gdiplus::PointF(static_cast<float>(marginX), dpf(14.0f)), &brPri);
 
             Gdiplus::StringFormat sfSub;
             sfSub.SetTrimming(Gdiplus::StringTrimmingWord);
-            Gdiplus::RectF rcSub(20.0f, 40.0f, static_cast<float>(w - 40), 38.0f);
-            g.DrawString(L"Серверы с автоматическим проксированием для доступа к зарубежным нейросетям, музыке и сайтам без VPN.", -1, &fontSub, rcSub, &sfSub, &brSec);
+            Gdiplus::RectF rcSub(static_cast<float>(marginX), dpf(40.0f),
+                static_cast<float>(std::max(dp(100), w - 2 * marginX)), dpf(38.0f));
+            g.DrawString(L"Серверы с автоматическим проксированием для доступа к зарубежным нейросетям, музыке и сайтам без VPN.",
+                -1, m_gpHeaderSub.get(), rcSub, &sfSub, &brSec);
 
-            // 2. Search label
-            g.DrawString(L"Поиск сервиса:", -1, &fontLbl, Gdiplus::PointF(20.0f, 88.0f), &brPri);
+            g.DrawString(L"Поиск сервиса:", -1, m_gpHeaderLbl.get(),
+                Gdiplus::PointF(static_cast<float>(marginX), dpf(88.0f)), &brPri);
 
-            // 3. Search edit container card
-            int searchBoxX = 20 + 154;
-            int searchBoxY = 82;
-            int searchBoxW = (w - 40) - 154;
-            int searchBoxH = 32;
+            int searchBoxX = marginX + dp(154);
+            int searchBoxY = dp(82);
+            int searchBoxW = std::max(dp(120), (w - 2 * marginX) - dp(154));
+            int searchBoxH = dp(32);
 
             Gdiplus::GraphicsPath sbPath;
-            AddRoundedRect(sbPath, Gdiplus::RectF(static_cast<float>(searchBoxX) + 0.5f, static_cast<float>(searchBoxY) + 0.5f, static_cast<float>(searchBoxW) - 1.0f, static_cast<float>(searchBoxH) - 1.0f), 6.0f);
+            AddRoundedRect(sbPath,
+                Gdiplus::RectF(static_cast<float>(searchBoxX) + 0.5f, static_cast<float>(searchBoxY) + 0.5f,
+                               static_cast<float>(searchBoxW) - 1.0f, static_cast<float>(searchBoxH) - 1.0f),
+                dpf(6.0f));
             Gdiplus::SolidBrush sbBg(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
             g.FillPath(&sbBg, &sbPath);
 
             bool isSearchActive = (m_searchEditFocused || m_searchEditHovered);
-            COLORREF sbBorderCol = isSearchActive 
+            COLORREF sbBorderCol = isSearchActive
                 ? (m_isDarkMode ? RGB(96, 165, 250) : RGB(37, 99, 235))
                 : pal.cardBorder;
             float sbBorderWidth = isSearchActive ? 1.5f : 1.0f;
             Gdiplus::Pen sbBorderPen(Gdiplus::Color(255, GetRValue(sbBorderCol), GetGValue(sbBorderCol), GetBValue(sbBorderCol)), sbBorderWidth);
             g.DrawPath(&sbBorderPen, &sbPath);
 
-            // 4. Status text
-            g.DrawString(m_statusText.c_str(), -1, &fontStatus, Gdiplus::PointF(20.0f, 122.0f), &brMuted);
+            g.DrawString(m_statusText.c_str(), -1, m_gpHeaderStatus.get(),
+                Gdiplus::PointF(static_cast<float>(marginX), dpf(122.0f)), &brMuted);
         }
 
         BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
@@ -1785,24 +2321,31 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
     }
 
     case WM_CTLCOLORSTATIC: {
-        HDC hdc = (HDC)wParam;
+        HDC hdc = reinterpret_cast<HDC>(wParam);
         auto pal = GetPalette(m_isDarkMode);
         SetTextColor(hdc, pal.textPrimary);
         SetBkMode(hdc, TRANSPARENT);
-        return (INT_PTR)m_hbrBg;
+        return reinterpret_cast<INT_PTR>(m_hbrBg);
     }
 
     case WM_CTLCOLOREDIT: {
-        HDC hdcEdit = (HDC)wParam;
+        HDC hdcEdit = reinterpret_cast<HDC>(wParam);
         auto pal = GetPalette(m_isDarkMode);
         SetBkMode(hdcEdit, OPAQUE);
         SetTextColor(hdcEdit, pal.textPrimary);
         SetBkColor(hdcEdit, pal.cardBg);
-        return (INT_PTR)m_hbrCard;
+        return reinterpret_cast<INT_PTR>(m_hbrCard);
     }
 
     case WM_CLOSE: {
         on_close();
+        return 0;
+    }
+
+    case WM_NCDESTROY: {
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA, 0);
+        m_hWnd = nullptr;
+        m_finished = true;
         return 0;
     }
     }
@@ -1828,19 +2371,31 @@ LRESULT CALLBACK SmartDnsDialog::list_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wP
 
 LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+    case WM_GETDLGCODE:
+        return DLGC_WANTARROWS;
+
     case WM_ERASEBKGND:
         return 1;
 
     case WM_PAINT: {
-        PAINTSTRUCT ps;
+        PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(hWnd, &ps);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
+        if (w <= 0 || h <= 0) {
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
 
         HDC hdcMem = CreateCompatibleDC(hdc);
         HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+        if (!hbmMem) {
+            DeleteDC(hdcMem);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
         HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
         auto pal = GetPalette(m_isDarkMode);
@@ -1861,13 +2416,14 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
             int maxScroll = needScroll ? (totalContentHeight - h) : 0;
             m_scrollOffset = std::clamp(m_scrollOffset, 0, maxScroll);
 
-            int scrollBarW = 7;
-            int scrollBarMarginRight = 4;
-            int itemW = needScroll ? (w - scrollBarW - scrollBarMarginRight - 6) : w;
+            int scrollBarW = dp(7);
+            int scrollBarMarginRight = dp(4);
+            int scrollReserve = dp(17);
+            int itemW = needScroll ? std::max(dp(160), w - scrollReserve) : w;
 
             for (int i = 0; i < totalItems; ++i) {
-                int itemH = (i < static_cast<int>(m_itemHeights.size())) ? m_itemHeights[i] : 205;
-                int y = (i < static_cast<int>(m_itemYPositions.size())) ? (m_itemYPositions[i] - m_scrollOffset) : (i * 215 - m_scrollOffset);
+                int itemH = (i < static_cast<int>(m_itemHeights.size())) ? m_itemHeights[static_cast<size_t>(i)] : dp(205);
+                int y = (i < static_cast<int>(m_itemYPositions.size())) ? (m_itemYPositions[static_cast<size_t>(i)] - m_scrollOffset) : (i * dp(215) - m_scrollOffset);
                 if (y + itemH < 0 || y > h) continue;
 
                 bool isSelected = (i == m_selectedIndex);
@@ -1875,20 +2431,18 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
                 draw_card_item(g, static_cast<size_t>(i), y, itemW, itemH, isSelected, isHovered);
             }
 
-            // Anti-aliased themed scrollbar
             if (needScroll) {
                 float sbX = static_cast<float>(w - scrollBarMarginRight - scrollBarW);
-                float sbY = 4.0f;
-                float sbH = static_cast<float>(h - 8);
+                float sbY = dpf(4.0f);
+                float sbH = std::max(dpf(20.0f), static_cast<float>(h) - dpf(8.0f));
 
-                // Track
                 Gdiplus::SolidBrush trackBr(m_isDarkMode ? Gdiplus::Color(25, 255, 255, 255) : Gdiplus::Color(20, 0, 0, 0));
                 Gdiplus::GraphicsPath trackPath;
-                AddRoundedRect(trackPath, Gdiplus::RectF(sbX, sbY, static_cast<float>(scrollBarW), sbH), 3.5f);
+                AddRoundedRect(trackPath, Gdiplus::RectF(sbX, sbY, static_cast<float>(scrollBarW), sbH), dpf(3.5f));
                 g.FillPath(&trackBr, &trackPath);
 
-                // Thumb
-                float thumbH = std::max(36.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+                float thumbH = std::max(dpf(36.0f), (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+                thumbH = std::min(thumbH, sbH);
                 float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
                 float thumbY = sbY + scrollRatio * (sbH - thumbH);
 
@@ -1905,7 +2459,7 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
 
                 Gdiplus::SolidBrush thumbBr(thumbColor);
                 Gdiplus::GraphicsPath thumbPath;
-                AddRoundedRect(thumbPath, Gdiplus::RectF(sbX, thumbY, static_cast<float>(scrollBarW), thumbH), 3.5f);
+                AddRoundedRect(thumbPath, Gdiplus::RectF(sbX, thumbY, static_cast<float>(scrollBarW), thumbH), dpf(3.5f));
                 g.FillPath(&thumbBr, &thumbPath);
             }
         }
@@ -1921,7 +2475,7 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
     case WM_MOUSEMOVE: {
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
@@ -1930,12 +2484,12 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
         int totalContentHeight = m_totalContentHeight;
         bool needScroll = totalContentHeight > h;
         int maxScroll = needScroll ? (totalContentHeight - h) : 0;
+        int scrollReserve = dp(17);
 
         if (m_isDraggingScroll) {
             if (needScroll) {
-                float sbY = 4.0f;
-                float sbH = static_cast<float>(h - 8);
-                float thumbH = std::max(36.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+                float sbH = std::max(dpf(20.0f), static_cast<float>(h) - dpf(8.0f));
+                float thumbH = std::min(sbH, std::max(dpf(36.0f), (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH));
                 float availableTrack = sbH - thumbH;
                 if (availableTrack > 0.0f) {
                     float deltaY = static_cast<float>(my - m_dragStartY);
@@ -1947,15 +2501,15 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
             return 0;
         }
 
-        bool overScrollArea = needScroll && (mx >= (w - 17));
+        bool overScrollArea = needScroll && (mx >= (w - scrollReserve));
         if (overScrollArea) {
             if (m_hoveredIndex != -1) {
                 m_hoveredIndex = -1;
                 InvalidateRect(hWnd, nullptr, FALSE);
             }
-            float sbY = 4.0f;
-            float sbH = static_cast<float>(h - 8);
-            float thumbH = std::max(36.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+            float sbY = dpf(4.0f);
+            float sbH = std::max(dpf(20.0f), static_cast<float>(h) - dpf(8.0f));
+            float thumbH = std::min(sbH, std::max(dpf(36.0f), (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH));
             float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
             float thumbY = sbY + scrollRatio * (sbH - thumbH);
 
@@ -1982,7 +2536,10 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
             }
         }
 
-        TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+        TRACKMOUSEEVENT tme{};
+        tme.cbSize = sizeof(TRACKMOUSEEVENT);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hWnd;
         TrackMouseEvent(&tme);
         break;
     }
@@ -2000,7 +2557,7 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
         SetFocus(hWnd);
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
@@ -2009,11 +2566,12 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
         int totalContentHeight = m_totalContentHeight;
         bool needScroll = totalContentHeight > h;
         int maxScroll = needScroll ? (totalContentHeight - h) : 0;
+        int scrollReserve = dp(17);
 
-        if (needScroll && mx >= (w - 17)) {
-            float sbY = 4.0f;
-            float sbH = static_cast<float>(h - 8);
-            float thumbH = std::max(36.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+        if (needScroll && mx >= (w - scrollReserve)) {
+            float sbY = dpf(4.0f);
+            float sbH = std::max(dpf(20.0f), static_cast<float>(h) - dpf(8.0f));
+            float thumbH = std::min(sbH, std::max(dpf(36.0f), (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH));
             float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
             float thumbY = sbY + scrollRatio * (sbH - thumbH);
 
@@ -2035,13 +2593,26 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
         int idx = get_item_at_point(my, cardY);
         if (idx >= 0 && idx < totalItems) {
             m_selectedIndex = idx;
+            update_action_buttons_state();
             InvalidateRect(hWnd, nullptr, FALSE);
 
-            // Check if clicked the website link area in top right of card
-            int rightLinkW = 150;
-            int rightLinkX = w - rightLinkW - 16;
-            if (mx >= rightLinkX && mx <= rightLinkX + rightLinkW && my >= cardY + 7 && my <= cardY + 35) {
-                on_open_website(static_cast<size_t>(idx));
+            const auto& entry = m_allEntries[m_filteredIndices[static_cast<size_t>(idx)]];
+            if (has_valid_http_url(entry.website_url) && m_gpCardLink) {
+                int itemW = needScroll ? std::max(dp(160), w - scrollReserve) : w;
+                HDC hdc = GetDC(hWnd);
+                if (hdc) {
+                    Gdiplus::RectF linkRc;
+                    {
+                        Gdiplus::Graphics g(hdc);
+                        g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+                        linkRc = get_website_pill_rect(g, itemW, cardY);
+                    }
+                    ReleaseDC(hWnd, hdc);
+                    if (mx >= linkRc.X && mx <= linkRc.GetRight() &&
+                        my >= linkRc.Y && my <= linkRc.GetBottom()) {
+                        on_open_website(static_cast<size_t>(idx));
+                    }
+                }
             }
         }
         break;
@@ -2064,14 +2635,37 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
     case WM_LBUTTONDBLCLK: {
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
-        if (mx < w - 17) {
+        int h = rc.bottom - rc.top;
+        bool needScroll = m_totalContentHeight > h;
+        int scrollReserve = dp(17);
+
+        if (!needScroll || mx < w - scrollReserve) {
             int cardY = 0;
             int idx = get_item_at_point(my, cardY);
             if (idx >= 0 && idx < static_cast<int>(m_filteredIndices.size())) {
+                const auto& entry = m_allEntries[m_filteredIndices[static_cast<size_t>(idx)]];
+                if (has_valid_http_url(entry.website_url) && m_gpCardLink) {
+                    int itemW = needScroll ? std::max(dp(160), w - scrollReserve) : w;
+                    HDC hdc = GetDC(hWnd);
+                    if (hdc) {
+                        Gdiplus::RectF linkRc;
+                        {
+                            Gdiplus::Graphics g(hdc);
+                            g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+                            linkRc = get_website_pill_rect(g, itemW, cardY);
+                        }
+                        ReleaseDC(hWnd, hdc);
+                        if (mx >= linkRc.X && mx <= linkRc.GetRight() &&
+                            my >= linkRc.Y && my <= linkRc.GetBottom()) {
+                            return 0;
+                        }
+                    }
+                }
                 m_selectedIndex = idx;
+                update_action_buttons_state();
                 on_apply_selected();
             }
         }
@@ -2080,36 +2674,66 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
 
     case WM_MOUSEWHEEL: {
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-        RECT rc;
-        GetClientRect(hWnd, &rc);
-        int maxScroll = std::max<int>(0, m_totalContentHeight - static_cast<int>(rc.bottom - rc.top));
-        m_scrollOffset -= (delta / WHEEL_DELTA) * 60;
-        m_scrollOffset = std::clamp(m_scrollOffset, 0, maxScroll);
-        InvalidateRect(hWnd, nullptr, FALSE);
+        if ((delta > 0 && m_wheelAccum < 0) || (delta < 0 && m_wheelAccum > 0)) {
+            m_wheelAccum = 0;
+        }
+        int stepPx = std::max(1, dp(60));
+        m_wheelAccum += delta * stepPx;
+        int movePx = m_wheelAccum / WHEEL_DELTA;
+        m_wheelAccum %= WHEEL_DELTA;
+        if (movePx != 0) {
+            RECT rc{};
+            GetClientRect(hWnd, &rc);
+            int maxScroll = std::max<int>(0, m_totalContentHeight - static_cast<int>(rc.bottom - rc.top));
+            m_scrollOffset = std::clamp(m_scrollOffset - movePx, 0, maxScroll);
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
         return 0;
     }
 
     case WM_KEYDOWN: {
         int totalItems = static_cast<int>(m_filteredIndices.size());
-        if (wParam == VK_UP && totalItems > 0) {
-            m_selectedIndex = std::max(0, m_selectedIndex - 1);
+        if (wParam == VK_UP) {
+            if (totalItems <= 0) return 0;
+            m_selectedIndex = std::clamp(m_selectedIndex - 1, 0, totalItems - 1);
+            update_action_buttons_state();
             if (m_selectedIndex < static_cast<int>(m_itemYPositions.size())) {
-                int targetY = m_itemYPositions[m_selectedIndex];
+                int targetY = m_itemYPositions[static_cast<size_t>(m_selectedIndex)];
                 if (targetY < m_scrollOffset) m_scrollOffset = targetY;
             }
             InvalidateRect(hWnd, nullptr, FALSE);
             return 0;
         }
-        if (wParam == VK_DOWN && totalItems > 0) {
-            m_selectedIndex = std::min(totalItems - 1, m_selectedIndex + 1);
-            RECT rc; GetClientRect(hWnd, &rc);
+        if (wParam == VK_DOWN) {
+            if (totalItems <= 0) return 0;
+            m_selectedIndex = std::clamp(m_selectedIndex + 1, 0, totalItems - 1);
+            update_action_buttons_state();
+            RECT rc{};
+            GetClientRect(hWnd, &rc);
             int clientH = rc.bottom - rc.top;
-            if (m_selectedIndex < static_cast<int>(m_itemYPositions.size())) {
-                int targetY = m_itemYPositions[m_selectedIndex] + m_itemHeights[m_selectedIndex];
+            if (m_selectedIndex < static_cast<int>(m_itemYPositions.size()) &&
+                m_selectedIndex < static_cast<int>(m_itemHeights.size())) {
+                int targetY = m_itemYPositions[static_cast<size_t>(m_selectedIndex)] +
+                              m_itemHeights[static_cast<size_t>(m_selectedIndex)];
                 if (targetY > m_scrollOffset + clientH) {
                     m_scrollOffset = targetY - clientH;
                 }
             }
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_PRIOR) {
+            RECT rc{};
+            GetClientRect(hWnd, &rc);
+            m_scrollOffset = std::max(0, m_scrollOffset - static_cast<int>(rc.bottom - rc.top));
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_NEXT) {
+            RECT rc{};
+            GetClientRect(hWnd, &rc);
+            int maxScroll = std::max<int>(0, m_totalContentHeight - static_cast<int>(rc.bottom - rc.top));
+            m_scrollOffset = std::min(maxScroll, m_scrollOffset + static_cast<int>(rc.bottom - rc.top));
             InvalidateRect(hWnd, nullptr, FALSE);
             return 0;
         }
@@ -2125,19 +2749,26 @@ LRESULT SmartDnsDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     case WM_SETCURSOR: {
-        POINT pt;
+        POINT pt{};
         GetCursorPos(&pt);
         ScreenToClient(hWnd, &pt);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
-        int totalItems = static_cast<int>(m_filteredIndices.size());
         bool needScroll = m_totalContentHeight > (rc.bottom - rc.top);
-        if (needScroll && pt.x >= (rc.right - rc.left - 17)) {
+        if (needScroll && pt.x >= (rc.right - rc.left - dp(17))) {
             SetCursor(LoadCursorW(nullptr, IDC_ARROW));
         } else {
             SetCursor(LoadCursorW(nullptr, IDC_HAND));
         }
         return TRUE;
+    }
+
+    case WM_NCDESTROY: {
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA, 0);
+        if (m_hListWnd == hWnd) {
+            m_hListWnd = nullptr;
+        }
+        return 0;
     }
     }
 

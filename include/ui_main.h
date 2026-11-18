@@ -1,15 +1,23 @@
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include "dns_manager.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
 #include <string>
 #include <vector>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include "dns_manager.h"
 #include "config_manager.h"
 #include "app_updater.h"
 #include "background_tasks.h"
@@ -24,6 +32,7 @@
 #define WM_APP_UPDATE_RESULT    (WM_APP + 6)
 #define WM_APP_DOWNLOAD_RESULT  (WM_APP + 7)
 #define WM_APP_SMARTDNS_RESULT  (WM_APP + 8)
+#define WM_APP_EXIT_FOR_UPDATE  (WM_APP + 9)
 
 namespace quickdns {
 
@@ -66,14 +75,17 @@ public:
 
     bool is_dark_mode() const { return m_isDarkMode; }
     HFONT get_font_regular() const { return m_hFontRegular; }
+    UINT get_dpi() const { return m_dpi; }
 
 private:
+    struct ModalDepthGuard;
+
     static LRESULT CALLBACK window_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK graph_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT handle_graph_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
-    // Initialization helpers
+    // Initialization & lifecycle helpers
     void register_window_class();
     void create_controls();
     void reposition_controls();
@@ -82,6 +94,11 @@ private:
     void setup_tray_icon();
     void remove_tray_icon();
     void show_tray_notification(const std::wstring& title, const std::wstring& message);
+    HWND get_modal_parent() const;
+    void drain_pending_app_messages(HWND hWnd);
+    UINT query_window_dpi(HWND hWnd) const;
+    int dpi_scale(int px) const;
+    float dpi_scale_f(float px) const;
 
     // Background Real-Time Ping Monitor
     void start_ping_worker();
@@ -132,6 +149,7 @@ private:
     // Members
     HINSTANCE m_hInstance = nullptr;
     HWND m_hWnd = nullptr;
+    UINT m_dpi = 96;
     HFONT m_hFontRegular = nullptr;
     HFONT m_hFontBold = nullptr;
     HFONT m_hFontHeader = nullptr;
@@ -181,9 +199,13 @@ private:
     HWND m_hProfileDetails = nullptr;
     HWND m_hFooterVersion = nullptr;
 
-    // System Tray & Single-Instance
+    // System Tray, Modal & Shutdown State
     NOTIFYICONDATAW m_nid = {};
+    bool m_trayIconAdded = false;
     bool m_inTray = false;
+    bool m_forceExit = false;
+    int m_modalDepth = 0;
+    std::optional<quickdns::ReleaseInfo> m_deferredUpdateInfo;
     UINT m_msgRestoreInstance = 0;
 
     // Business Logic Engines
@@ -195,9 +217,11 @@ private:
     int m_selectedAdapterIndex = -1;
     int m_selectedProfileIndex = -1;
 
-    std::atomic<bool> m_isBusy = false;
+    std::atomic<bool> m_isBusy{false};
     std::atomic<bool> m_isCheckingUpdate{false};
+    std::atomic<bool> m_isDownloadingUpdate{false};
     std::atomic<bool> m_isVerifyingSmartDns{false};
+    std::atomic<bool> m_isDestroying{false};
 
     quickdns::BackgroundTasks m_tasks;
 
@@ -208,5 +232,5 @@ private:
     std::mutex m_historyMutex;
     std::string m_pingTargetIp;
     std::vector<int> m_latencyHistory;
-    int m_currentPingMs = -1;
+    std::atomic<int> m_currentPingMs{-1};
 };

@@ -6,11 +6,18 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "gdiplus.lib")
+#endif
+
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
 
 using QuickDns::Encoding::wide_to_utf8;
 using QuickDns::Encoding::utf8_to_wide;
@@ -24,9 +31,71 @@ namespace {
 
     constexpr UINT WM_APP_AI_CHECK_UPDATE = WM_APP + 20;
 
-    constexpr int ROW_HEIGHT = 50;
-    constexpr int ROW_GAP    = 6;
-    constexpr int ROW_STEP   = ROW_HEIGHT + ROW_GAP;
+    constexpr int ROW_HEIGHT_BASE = 50;
+    constexpr int ROW_GAP_BASE    = 6;
+
+    UINT query_window_dpi(HWND hWnd) {
+        using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+        using GetDpiForSystemFn = UINT(WINAPI*)(void);
+        static HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
+        static auto pfnGetDpiForWindow = hUser32
+            ? reinterpret_cast<GetDpiForWindowFn>(GetProcAddress(hUser32, "GetDpiForWindow"))
+            : nullptr;
+        static auto pfnGetDpiForSystem = hUser32
+            ? reinterpret_cast<GetDpiForSystemFn>(GetProcAddress(hUser32, "GetDpiForSystem"))
+            : nullptr;
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+        if (hWnd && IsWindow(hWnd) && pfnGetDpiForWindow) {
+            UINT dpi = pfnGetDpiForWindow(hWnd);
+            if (dpi > 0) return dpi;
+        }
+        if (pfnGetDpiForSystem) {
+            UINT dpi = pfnGetDpiForSystem();
+            if (dpi > 0) return dpi;
+        }
+        HDC hdc = GetDC(hWnd);
+        UINT dpi = hdc ? static_cast<UINT>(GetDeviceCaps(hdc, LOGPIXELSY)) : 96u;
+        if (hdc) ReleaseDC(hWnd, hdc);
+        return dpi > 0 ? dpi : 96u;
+    }
+
+    BOOL adjust_window_rect_for_dpi(LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi) {
+        using AdjustWindowRectExForDpiFn = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+        static HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
+        static auto pfnAdjustForDpi = hUser32
+            ? reinterpret_cast<AdjustWindowRectExForDpiFn>(GetProcAddress(hUser32, "AdjustWindowRectExForDpi"))
+            : nullptr;
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+        if (pfnAdjustForDpi) {
+            return pfnAdjustForDpi(lpRect, dwStyle, bMenu, dwExStyle, dpi);
+        }
+        return AdjustWindowRectEx(lpRect, dwStyle, bMenu, dwExStyle);
+    }
+
+    RECT get_monitor_work_area(HWND hRefWnd) {
+        HMONITOR hMon = (hRefWnd && IsWindow(hRefWnd))
+            ? MonitorFromWindow(hRefWnd, MONITOR_DEFAULTTONEAREST)
+            : MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (hMon && GetMonitorInfoW(hMon, &mi)) {
+            return mi.rcWork;
+        }
+        RECT rcFallback = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+        return rcFallback;
+    }
 
     struct ButtonAnimationState {
         float hover = 0.0f;
@@ -50,11 +119,24 @@ namespace {
             }
             break;
         }
+        case WM_ENABLE: {
+            anim->hover = 0.0f;
+            anim->targetHover = 0.0f;
+            anim->isTracking = false;
+            anim->isPressed = false;
+            KillTimer(hWnd, 3001);
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        }
         case WM_MOUSEMOVE: {
+            if (!IsWindowEnabled(hWnd)) break;
             if (!anim->isTracking) {
                 anim->isTracking = true;
                 anim->targetHover = 1.0f;
-                TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+                TRACKMOUSEEVENT tme{};
+                tme.cbSize = sizeof(TRACKMOUSEEVENT);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hWnd;
                 TrackMouseEvent(&tme);
                 SetTimer(hWnd, 3001, 16, nullptr);
             }
@@ -67,13 +149,17 @@ namespace {
             break;
         }
         case WM_LBUTTONDOWN: {
+            if (!IsWindowEnabled(hWnd)) break;
             anim->isPressed = true;
             InvalidateRect(hWnd, nullptr, FALSE);
             break;
         }
-        case WM_LBUTTONUP: {
-            anim->isPressed = false;
-            InvalidateRect(hWnd, nullptr, FALSE);
+        case WM_LBUTTONUP:
+        case WM_CAPTURECHANGED: {
+            if (anim->isPressed) {
+                anim->isPressed = false;
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
             break;
         }
         case WM_TIMER: {
@@ -105,6 +191,26 @@ namespace {
 
 namespace quickdns {
 
+int AiCheckDialog::dp(int px) const {
+    return MulDiv(px, static_cast<int>(m_dpi), 96);
+}
+
+float AiCheckDialog::dpf(float px) const {
+    return px * (static_cast<float>(m_dpi) / 96.0f);
+}
+
+int AiCheckDialog::get_row_height() const {
+    return dp(ROW_HEIGHT_BASE);
+}
+
+int AiCheckDialog::get_row_gap() const {
+    return dp(ROW_GAP_BASE);
+}
+
+int AiCheckDialog::get_row_step() const {
+    return get_row_height() + get_row_gap();
+}
+
 std::optional<std::string> AiCheckDialog::show(
     HWND hParent,
     HINSTANCE hInstance,
@@ -117,24 +223,42 @@ std::optional<std::string> AiCheckDialog::show(
         return std::nullopt;
     }
 
-    EnableWindow(hParent, FALSE);
+    if (hParent && IsWindow(hParent)) {
+        EnableWindow(hParent, FALSE);
+    }
 
     dlg.start_check();
 
-    MSG msg;
-    while (!dlg.m_finished && GetMessageW(&msg, nullptr, 0, 0)) {
-        if (!IsDialogMessageW(dlg.m_hWnd, &msg)) {
+    MSG msg{};
+    BOOL bRet = 1;
+    while (!dlg.m_finished && (bRet = GetMessageW(&msg, nullptr, 0, 0)) != 0) {
+        if (bRet == -1) {
+            break;
+        }
+        if (!dlg.m_hWnd || !IsDialogMessageW(dlg.m_hWnd, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
 
+    if (!dlg.m_finished && bRet == 0) {
+        PostQuitMessage(static_cast<int>(msg.wParam));
+    }
+
+    if (dlg.m_hWnd && IsWindow(dlg.m_hWnd)) {
+        ShowWindow(dlg.m_hWnd, SW_HIDE);
+    }
+
+    if (hParent && IsWindow(hParent)) {
+        EnableWindow(hParent, TRUE);
+        if (IsWindowVisible(hParent)) {
+            SetForegroundWindow(hParent);
+        }
+    }
+
     dlg.stop_check();
 
-    EnableWindow(hParent, TRUE);
-    SetForegroundWindow(hParent);
-
-    if (dlg.m_hWnd) {
+    if (dlg.m_hWnd && IsWindow(dlg.m_hWnd)) {
         DestroyWindow(dlg.m_hWnd);
         dlg.m_hWnd = nullptr;
     }
@@ -150,14 +274,14 @@ AiCheckDialog::AiCheckDialog(
     bool isDarkMode)
     : m_hParent(hParent)
     , m_hInstance(hInstance)
-    , m_currentActiveId(currentActiveId)
     , m_isDarkMode(isDarkMode)
+    , m_currentActiveId(currentActiveId)
 {
+    m_dpi = query_window_dpi(m_hParent);
     auto pal = GetPalette(m_isDarkMode);
     m_hbrBg = CreateSolidBrush(pal.bg);
     m_hbrCard = CreateSolidBrush(pal.cardBg);
 
-    // Filter non-DHCP profiles: SmartDNS profiles first, then standard/custom DNS profiles
     std::vector<DnsProfile> smartProfiles;
     std::vector<DnsProfile> standardProfiles;
     for (const auto& p : profiles) {
@@ -189,10 +313,15 @@ AiCheckDialog::AiCheckDialog(
     for (const auto& p : smartProfiles) appendProfile(p);
     for (const auto& p : standardProfiles) appendProfile(p);
 
-    for (size_t i = 0; i < m_rows.size(); ++i) {
-        if (m_rows[i].profile.id == m_currentActiveId) {
-            m_selectedIndex = static_cast<int>(i);
-            break;
+    if (m_rows.empty()) {
+        m_selectedIndex = -1;
+    } else {
+        m_selectedIndex = 0;
+        for (size_t i = 0; i < m_rows.size(); ++i) {
+            if (m_rows[i].profile.id == m_currentActiveId) {
+                m_selectedIndex = static_cast<int>(i);
+                break;
+            }
         }
     }
 
@@ -210,7 +339,12 @@ AiCheckDialog::~AiCheckDialog() {
     m_gpFontBadge.reset();
     m_gpFontSub.reset();
     m_gpFontTitle.reset();
+    m_gpHeaderCol.reset();
+    m_gpHeaderBold.reset();
+    m_gpHeaderSub.reset();
+    m_gpHeaderTitle.reset();
     m_gpMonoFamily.reset();
+    m_gpDisplayFamily.reset();
     m_gpFontFamily.reset();
 
     if (m_hFontRegular) DeleteObject(m_hFontRegular);
@@ -228,37 +362,86 @@ AiCheckDialog::~AiCheckDialog() {
 }
 
 void AiCheckDialog::setup_fonts() {
-    m_hFontRegular = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    m_gpFontTotal.reset();
+    m_gpFontPill.reset();
+    m_gpFontBadge.reset();
+    m_gpFontSub.reset();
+    m_gpFontTitle.reset();
+    m_gpHeaderCol.reset();
+    m_gpHeaderBold.reset();
+    m_gpHeaderSub.reset();
+    m_gpHeaderTitle.reset();
+    m_gpMonoFamily.reset();
+    m_gpDisplayFamily.reset();
+    m_gpFontFamily.reset();
+
+    if (m_hFontRegular) { DeleteObject(m_hFontRegular); m_hFontRegular = nullptr; }
+    if (m_hFontBold) { DeleteObject(m_hFontBold); m_hFontBold = nullptr; }
+    if (m_hFontHeader) { DeleteObject(m_hFontHeader); m_hFontHeader = nullptr; }
+    if (m_hFontMonospace) { DeleteObject(m_hFontMonospace); m_hFontMonospace = nullptr; }
+    if (m_hFontSmall) { DeleteObject(m_hFontSmall); m_hFontSmall = nullptr; }
+    if (m_hFontSmallBold) { DeleteObject(m_hFontSmallBold); m_hFontSmallBold = nullptr; }
+
+    m_gpFontFamily = std::make_unique<Gdiplus::FontFamily>(L"Segoe UI");
+    m_gpDisplayFamily = std::make_unique<Gdiplus::FontFamily>(L"Segoe UI Variable Display");
+    m_gpMonoFamily = std::make_unique<Gdiplus::FontFamily>(L"Consolas");
+
+    const Gdiplus::FontFamily* pRegular = m_gpFontFamily->IsAvailable()
+        ? m_gpFontFamily.get()
+        : Gdiplus::FontFamily::GenericSansSerif();
+    const Gdiplus::FontFamily* pDisplay = m_gpDisplayFamily->IsAvailable()
+        ? m_gpDisplayFamily.get()
+        : pRegular;
+    const Gdiplus::FontFamily* pMono = m_gpMonoFamily->IsAvailable()
+        ? m_gpMonoFamily.get()
+        : pRegular;
+    const wchar_t* headerFace = m_gpDisplayFamily->IsAvailable()
+        ? L"Segoe UI Variable Display"
+        : L"Segoe UI";
+
+    m_hFontRegular = CreateFontW(-dp(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontBold = CreateFontW(-14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontBold = CreateFontW(-dp(14), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontHeader = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+    m_hFontHeader = CreateFontW(-dp(18), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Display");
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, headerFace);
 
-    m_hFontMonospace = CreateFontW(-13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontMonospace = CreateFontW(-dp(13), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
 
-    m_hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    m_hFontSmall = CreateFontW(-dp(11), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_hFontSmallBold = CreateFontW(-11, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    m_hFontSmallBold = CreateFontW(-dp(11), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    m_gpFontFamily = std::make_unique<Gdiplus::FontFamily>(L"Segoe UI");
-    m_gpMonoFamily = std::make_unique<Gdiplus::FontFamily>(L"Consolas");
-    m_gpFontTitle  = std::make_unique<Gdiplus::Font>(m_gpFontFamily.get(), 9.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    m_gpFontSub    = std::make_unique<Gdiplus::Font>(m_gpFontFamily.get(), 8.2f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
-    m_gpFontBadge  = std::make_unique<Gdiplus::Font>(m_gpFontFamily.get(), 7.8f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    m_gpFontPill   = std::make_unique<Gdiplus::Font>(m_gpFontFamily.get(), 8.2f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-    m_gpFontTotal  = std::make_unique<Gdiplus::Font>(m_gpMonoFamily.get(), 10.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+    m_gpHeaderTitle = std::make_unique<Gdiplus::Font>(pDisplay, dpf(18.0f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpHeaderSub   = std::make_unique<Gdiplus::Font>(pRegular, dpf(12.0f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    m_gpHeaderBold  = std::make_unique<Gdiplus::Font>(pRegular, dpf(12.7f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpHeaderCol   = std::make_unique<Gdiplus::Font>(pRegular, dpf(11.3f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+
+    m_gpFontTitle  = std::make_unique<Gdiplus::Font>(pRegular, dpf(12.7f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpFontSub    = std::make_unique<Gdiplus::Font>(pRegular, dpf(11.0f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    m_gpFontBadge  = std::make_unique<Gdiplus::Font>(pRegular, dpf(10.4f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpFontPill   = std::make_unique<Gdiplus::Font>(pRegular, dpf(11.0f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    m_gpFontTotal  = std::make_unique<Gdiplus::Font>(pMono,    dpf(13.3f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+}
+
+void AiCheckDialog::apply_fonts_to_controls() {
+    HWND btns[] = { m_hBtnApply, m_hBtnRecheck, m_hBtnClose };
+    for (HWND hBtn : btns) {
+        if (hBtn && IsWindow(hBtn)) {
+            InvalidateRect(hBtn, nullptr, FALSE);
+        }
+    }
 }
 
 bool AiCheckDialog::create_dialog_window() {
@@ -284,50 +467,51 @@ bool AiCheckDialog::create_dialog_window() {
     lwc.lpszClassName = AI_LIST_CLASS_NAME;
     RegisterClassExW(&lwc);
 
-    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_VISIBLE;
-    RECT wr = { 0, 0, DIALOG_CLIENT_WIDTH, DIALOG_CLIENT_HEIGHT };
-    AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
+    DWORD dwStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_VISIBLE;
+    DWORD dwExStyle = WS_EX_DLGMODALFRAME;
+    RECT wr = { 0, 0, dp(DIALOG_CLIENT_WIDTH), dp(DIALOG_CLIENT_HEIGHT) };
+    adjust_window_rect_for_dpi(&wr, dwStyle, FALSE, dwExStyle, m_dpi);
     int winWidth = wr.right - wr.left;
     int winHeight = wr.bottom - wr.top;
 
-    RECT parentRect = {};
-    if (m_hParent && GetWindowRect(m_hParent, &parentRect)) {
-        int posX = parentRect.left + ((parentRect.right - parentRect.left) - winWidth) / 2;
-        int posY = parentRect.top + ((parentRect.bottom - parentRect.top) - winHeight) / 2;
-        int screenW = GetSystemMetrics(SM_CXSCREEN);
-        int screenH = GetSystemMetrics(SM_CYSCREEN);
-        posX = std::clamp(posX, 10, std::max(10, screenW - winWidth - 10));
-        posY = std::clamp(posY, 10, std::max(10, screenH - winHeight - 10));
+    RECT rcWork = get_monitor_work_area(m_hParent);
+    int workW = std::max(320, static_cast<int>(rcWork.right - rcWork.left));
+    int workH = std::max(260, static_cast<int>(rcWork.bottom - rcWork.top));
+    winWidth = std::min(winWidth, workW);
+    winHeight = std::min(winHeight, workH);
 
-        m_hWnd = CreateWindowExW(
-            WS_EX_DLGMODALFRAME,
-            AI_DIALOG_CLASS_NAME,
-            L"Проверка доступности ИИ (ChatGPT, Claude, Gemini, Copilot)",
-            dwStyle,
-            posX, posY,
-            winWidth, winHeight,
-            m_hParent,
-            nullptr,
-            m_hInstance,
-            this
-        );
-    } else {
-        m_hWnd = CreateWindowExW(
-            WS_EX_DLGMODALFRAME,
-            AI_DIALOG_CLASS_NAME,
-            L"Проверка доступности ИИ (ChatGPT, Claude, Gemini, Copilot)",
-            dwStyle,
-            CW_USEDEFAULT, CW_USEDEFAULT,
-            winWidth, winHeight,
-            m_hParent,
-            nullptr,
-            m_hInstance,
-            this
-        );
+    int posX = rcWork.left + (workW - winWidth) / 2;
+    int posY = rcWork.top + (workH - winHeight) / 2;
+    RECT parentRect = {};
+    if (m_hParent && IsWindow(m_hParent) && !IsIconic(m_hParent) && IsWindowVisible(m_hParent) &&
+        GetWindowRect(m_hParent, &parentRect)) {
+        posX = parentRect.left + ((parentRect.right - parentRect.left) - winWidth) / 2;
+        posY = parentRect.top + ((parentRect.bottom - parentRect.top) - winHeight) / 2;
     }
+    posX = std::clamp(posX, static_cast<int>(rcWork.left), std::max(static_cast<int>(rcWork.left), static_cast<int>(rcWork.right) - winWidth));
+    posY = std::clamp(posY, static_cast<int>(rcWork.top), std::max(static_cast<int>(rcWork.top), static_cast<int>(rcWork.bottom) - winHeight));
+
+    m_hWnd = CreateWindowExW(
+        dwExStyle,
+        AI_DIALOG_CLASS_NAME,
+        L"Проверка доступности ИИ (ChatGPT, Claude, Gemini, Copilot)",
+        dwStyle,
+        posX, posY,
+        winWidth, winHeight,
+        m_hParent,
+        nullptr,
+        m_hInstance,
+        this
+    );
 
     if (!m_hWnd) {
         return false;
+    }
+
+    UINT actualDpi = query_window_dpi(m_hWnd);
+    if (actualDpi != m_dpi) {
+        m_dpi = actualDpi;
+        setup_fonts();
     }
 
     apply_theme();
@@ -349,13 +533,14 @@ void AiCheckDialog::create_controls() {
     int clientWidth = rcClient.right - rcClient.left;
     int clientHeight = rcClient.bottom - rcClient.top;
 
-    int marginX = 20;
-    int contentWidth = clientWidth - (marginX * 2);
+    int marginX = dp(20);
+    int contentWidth = std::max(dp(240), clientWidth - (marginX * 2));
 
-    int listTop = 166;
-    int bottomButtonsH = 38;
-    int listBottomMargin = 16;
-    int listHeight = std::max(120, clientHeight - listTop - bottomButtonsH - listBottomMargin - 14);
+    int listTop = dp(166);
+    int bottomButtonsH = dp(38);
+    int listBottomMargin = dp(16);
+    int gapBelowList = dp(14);
+    int listHeight = std::max(dp(100), clientHeight - listTop - bottomButtonsH - listBottomMargin - gapBelowList);
 
     m_hListWnd = CreateWindowExW(
         0,
@@ -363,66 +548,86 @@ void AiCheckDialog::create_controls() {
         L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
         marginX, listTop, contentWidth, listHeight,
-        m_hWnd, (HMENU)IDC_LIST_AI_CHECK, m_hInstance, this
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LIST_AI_CHECK)), m_hInstance, this
     );
 
-    int curY = listTop + listHeight + 14;
+    int curY = listTop + listHeight + gapBelowList;
 
-    int btnApplyW = 240;
-    int btnRecheckW = 190;
-    int btnCloseW = 120;
+    int btnApplyW   = dp(240);
+    int btnRecheckW = dp(190);
+    int btnCloseW   = dp(120);
+    int gap         = dp(10);
 
     m_hBtnApply = CreateWindowExW(0, WC_BUTTONW, L"Применить выбранный DNS",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX, curY, btnApplyW, bottomButtonsH,
-        m_hWnd, (HMENU)IDC_BTN_AI_APPLY, m_hInstance, nullptr);
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_AI_APPLY)), m_hInstance, nullptr);
 
     m_hBtnRecheck = CreateWindowExW(0, WC_BUTTONW, L"Проверить заново",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-        marginX + btnApplyW + 10, curY, btnRecheckW, bottomButtonsH,
-        m_hWnd, (HMENU)IDC_BTN_AI_RECHECK, m_hInstance, nullptr);
+        marginX + btnApplyW + gap, curY, btnRecheckW, bottomButtonsH,
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_AI_RECHECK)), m_hInstance, nullptr);
 
     m_hBtnClose = CreateWindowExW(0, WC_BUTTONW, L"Закрыть",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         marginX + contentWidth - btnCloseW, curY, btnCloseW, bottomButtonsH,
-        m_hWnd, (HMENU)IDC_BTN_AI_CLOSE, m_hInstance, nullptr);
+        m_hWnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_AI_CLOSE)), m_hInstance, nullptr);
 
     attach_button_effects(m_hBtnApply, 301);
     attach_button_effects(m_hBtnRecheck, 302);
     attach_button_effects(m_hBtnClose, 303);
 
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_rows.empty() && m_hBtnApply) {
+            EnableWindow(m_hBtnApply, FALSE);
+        }
+    }
+
     reposition_controls();
 }
 
 void AiCheckDialog::reposition_controls() {
+    if (!m_hWnd || !IsWindow(m_hWnd)) return;
     RECT rcClient = {};
     GetClientRect(m_hWnd, &rcClient);
     int clientWidth = rcClient.right - rcClient.left;
     int clientHeight = rcClient.bottom - rcClient.top;
+    if (clientWidth < 200 || clientHeight < 200) return;
 
-    int marginX = 20;
-    int contentWidth = clientWidth - (marginX * 2);
-    if (contentWidth < 300) return;
+    int marginX = dp(20);
+    int contentWidth = std::max(dp(200), clientWidth - (marginX * 2));
 
-    int listTop = 166;
-    int bottomButtonsH = 38;
-    int listBottomMargin = 16;
-    int listHeight = std::max(100, clientHeight - listTop - bottomButtonsH - listBottomMargin - 14);
+    int listTop = dp(166);
+    int bottomButtonsH = dp(38);
+    int listBottomMargin = dp(16);
+    int gapBelowList = dp(14);
+    int listHeight = std::max(dp(80), clientHeight - listTop - bottomButtonsH - listBottomMargin - gapBelowList);
 
     if (m_hListWnd) {
         SetWindowPos(m_hListWnd, nullptr, marginX, listTop, contentWidth, listHeight, SWP_NOZORDER);
     }
 
-    int curY = listTop + listHeight + 14;
-    int btnApplyW = 240;
-    int btnRecheckW = 190;
-    int btnCloseW = 120;
+    int curY = listTop + listHeight + gapBelowList;
+    int btnApplyW   = dp(240);
+    int btnRecheckW = dp(190);
+    int btnCloseW   = dp(120);
+    int gap         = dp(10);
+
+    int neededW = btnApplyW + btnRecheckW + btnCloseW + 2 * gap;
+    if (neededW > contentWidth && neededW > 0) {
+        float ratio = static_cast<float>(std::max(100, contentWidth - 2 * gap)) /
+                      static_cast<float>(btnApplyW + btnRecheckW + btnCloseW);
+        btnApplyW   = std::max(dp(90), static_cast<int>(btnApplyW * ratio));
+        btnRecheckW = std::max(dp(80), static_cast<int>(btnRecheckW * ratio));
+        btnCloseW   = std::max(dp(60), static_cast<int>(btnCloseW * ratio));
+    }
 
     if (m_hBtnApply) {
         SetWindowPos(m_hBtnApply, nullptr, marginX, curY, btnApplyW, bottomButtonsH, SWP_NOZORDER);
     }
     if (m_hBtnRecheck) {
-        SetWindowPos(m_hBtnRecheck, nullptr, marginX + btnApplyW + 10, curY, btnRecheckW, bottomButtonsH, SWP_NOZORDER);
+        SetWindowPos(m_hBtnRecheck, nullptr, marginX + btnApplyW + gap, curY, btnRecheckW, bottomButtonsH, SWP_NOZORDER);
     }
     if (m_hBtnClose) {
         SetWindowPos(m_hBtnClose, nullptr, marginX + contentWidth - btnCloseW, curY, btnCloseW, bottomButtonsH, SWP_NOZORDER);
@@ -438,8 +643,7 @@ void AiCheckDialog::start_check() {
     std::vector<DnsProfile> profilesToCheck;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_cancelFlag = false;
-        m_isChecking = true;
+        m_cancelFlag.store(false, std::memory_order_release);
         m_completedCount = 0;
         m_bestRowIndex = -1;
 
@@ -458,13 +662,26 @@ void AiCheckDialog::start_check() {
             profilesToCheck.push_back(row.profile);
         }
 
-        m_verdictTitle = L"Идет проверка доступности ChatGPT, Claude, Gemini и Copilot...";
-        m_verdictSub = L"Проверено 0 из " + std::to_wstring(m_rows.size()) + L" DNS-профилей";
+        if (profilesToCheck.empty()) {
+            m_isChecking.store(false, std::memory_order_release);
+            m_verdictTitle = L"Нет доступных DNS-профилей для проверки";
+            m_verdictSub = L"Добавьте хотя бы один профиль с IPv4-адресом";
+        } else {
+            m_isChecking.store(true, std::memory_order_release);
+            m_verdictTitle = L"Идет проверка доступности ChatGPT, Claude, Gemini и Copilot...";
+            m_verdictSub = L"Проверено 0 из " + std::to_wstring(m_rows.size()) + L" DNS-профилей";
+        }
     }
 
-    if (m_hBtnRecheck) {
+    if (profilesToCheck.empty()) {
+        if (m_hWnd && IsWindow(m_hWnd)) InvalidateRect(m_hWnd, nullptr, FALSE);
+        return;
+    }
+
+    if (m_hBtnRecheck && IsWindow(m_hBtnRecheck)) {
         EnableWindow(m_hBtnRecheck, FALSE);
         SetWindowTextW(m_hBtnRecheck, L"Проверка...");
+        InvalidateRect(m_hBtnRecheck, nullptr, FALSE);
     }
 
     if (m_hWnd && IsWindow(m_hWnd)) {
@@ -476,15 +693,18 @@ void AiCheckDialog::start_check() {
 
     HWND hWnd = m_hWnd;
     m_checkThread = std::thread([this, hWnd, profilesToCheck]() {
-        ClientIpInfo ipInfo = AiChecker::get_client_ip_info(2500);
-        if (m_cancelFlag.load()) return;
+        ClientIpInfo ipInfo = AiChecker::get_client_ip_info(2500, &m_cancelFlag);
+        if (m_cancelFlag.load(std::memory_order_acquire)) {
+            m_isChecking.store(false, std::memory_order_release);
+            return;
+        }
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_clientIpInfo = ipInfo;
             m_clientIpFetched = true;
         }
-        if (!m_cancelFlag.load() && hWnd && IsWindow(hWnd)) {
+        if (!m_cancelFlag.load(std::memory_order_acquire) && hWnd && IsWindow(hWnd)) {
             PostMessageW(hWnd, WM_APP_AI_CHECK_UPDATE, 0, -1);
         }
 
@@ -493,7 +713,7 @@ void AiCheckDialog::start_check() {
             ipInfo.country_code,
             &m_cancelFlag,
             [this, hWnd](size_t idx, const ProfileAiCheckResult& res) {
-                if (m_cancelFlag.load()) return;
+                if (m_cancelFlag.load(std::memory_order_acquire)) return;
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     for (size_t i = 0; i < m_rows.size(); ++i) {
@@ -506,39 +726,42 @@ void AiCheckDialog::start_check() {
                     m_completedCount++;
                     update_best_verdict_locked();
                 }
-                if (!m_cancelFlag.load() && hWnd && IsWindow(hWnd)) {
+                if (!m_cancelFlag.load(std::memory_order_acquire) && hWnd && IsWindow(hWnd)) {
                     PostMessageW(hWnd, WM_APP_AI_CHECK_UPDATE, 0, static_cast<LPARAM>(idx));
                 }
             }
         );
 
-        if (m_cancelFlag.load()) return;
+        if (m_cancelFlag.load(std::memory_order_acquire)) {
+            m_isChecking.store(false, std::memory_order_release);
+            return;
+        }
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            m_isChecking = false;
+            m_isChecking.store(false, std::memory_order_release);
             sort_rows_locked();
             update_best_verdict_locked();
         }
 
-        if (!m_cancelFlag.load() && hWnd && IsWindow(hWnd)) {
+        if (!m_cancelFlag.load(std::memory_order_acquire) && hWnd && IsWindow(hWnd)) {
             PostMessageW(hWnd, WM_APP_AI_CHECK_UPDATE, 1, 0);
         }
     });
 }
 
 void AiCheckDialog::stop_check() {
-    m_cancelFlag = true;
+    m_cancelFlag.store(true, std::memory_order_release);
     if (m_checkThread.joinable()) {
         m_checkThread.join();
     }
-    m_isChecking = false;
+    m_isChecking.store(false, std::memory_order_release);
 }
 
 void AiCheckDialog::sort_rows_locked() {
     std::string preservedId;
     if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_rows.size())) {
-        preservedId = m_rows[m_selectedIndex].profile.id;
+        preservedId = m_rows[static_cast<size_t>(m_selectedIndex)].profile.id;
     }
 
     std::stable_sort(m_rows.begin(), m_rows.end(), [](const AiCheckRowItem& a, const AiCheckRowItem& b) {
@@ -586,8 +809,8 @@ void AiCheckDialog::update_best_verdict_locked() {
 
     m_bestRowIndex = (bestCount > 0) ? bestIdx : -1;
     if (m_bestRowIndex >= 0 && m_bestRowIndex < static_cast<int>(m_rows.size())) {
-        m_rows[m_bestRowIndex].is_best = true;
-        const auto& bestRow = m_rows[m_bestRowIndex];
+        m_rows[static_cast<size_t>(m_bestRowIndex)].is_best = true;
+        const auto& bestRow = m_rows[static_cast<size_t>(m_bestRowIndex)];
         std::wstringstream ss;
         ss << L"Лучший DNS для ИИ: " << utf8_to_wide(bestRow.profile.name)
            << L" — " << bestRow.result.available_count << L"/4 ИИ доступно";
@@ -595,13 +818,13 @@ void AiCheckDialog::update_best_verdict_locked() {
             ss << L" (средний отклик " << bestRow.result.avg_latency_ms << L" мс)";
         }
         m_verdictTitle = ss.str();
-    } else if (!m_isChecking.load()) {
+    } else if (!m_isChecking.load(std::memory_order_acquire)) {
         m_verdictTitle = L"Лучший DNS для ИИ: Ни один профиль не открыл доступ к сервисам ИИ (0/4)";
     } else {
         m_verdictTitle = L"Идет проверка доступности ChatGPT, Claude, Gemini и Copilot...";
     }
 
-    if (m_isChecking.load()) {
+    if (m_isChecking.load(std::memory_order_acquire)) {
         m_verdictSub = L"Проверено профилей: " + std::to_wstring(m_completedCount) + L" из " +
                        std::to_wstring(m_rows.size()) + L"  \u2022  Результаты обновляются в реальном времени";
     } else {
@@ -611,20 +834,37 @@ void AiCheckDialog::update_best_verdict_locked() {
 }
 
 void AiCheckDialog::on_apply() {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_rows.size())) {
-        m_selectedProfileId = m_rows[m_selectedIndex].profile.id;
-        m_finished = true;
+    bool applied = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_rows.size())) {
+            m_selectedProfileId = m_rows[static_cast<size_t>(m_selectedIndex)].profile.id;
+            m_finished = true;
+            applied = true;
+        }
+    }
+    if (applied) {
+        m_cancelFlag.store(true, std::memory_order_release);
+        if (m_hWnd && IsWindow(m_hWnd)) {
+            ShowWindow(m_hWnd, SW_HIDE);
+        }
     }
 }
 
 void AiCheckDialog::on_recheck() {
-    if (m_isChecking.load()) return;
+    if (m_isChecking.load(std::memory_order_acquire)) return;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_userChangedSelection = false;
+    }
     start_check();
 }
 
 void AiCheckDialog::on_close() {
-    m_cancelFlag = true;
+    m_cancelFlag.store(true, std::memory_order_release);
+    if (m_hWnd && IsWindow(m_hWnd)) {
+        ShowWindow(m_hWnd, SW_HIDE);
+    }
     m_finished = true;
 }
 
@@ -642,6 +882,7 @@ void AiCheckDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     RECT rc = pDis->rcItem;
     int w = rc.right - rc.left;
     int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return;
 
     auto pal = GetPalette(m_isDarkMode);
     int ctlId = pDis->CtlID;
@@ -690,10 +931,15 @@ void AiCheckDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
 
     HDC hdcMem = CreateCompatibleDC(hdc);
     HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+    if (!hbmMem) {
+        DeleteDC(hdcMem);
+        return;
+    }
     HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
+    RECT rcLocal = { 0, 0, w, h };
     HBRUSH hbrWin = CreateSolidBrush(pal.bg);
-    FillRect(hdcMem, &rc, hbrWin);
+    FillRect(hdcMem, &rcLocal, hbrWin);
     DeleteObject(hbrWin);
 
     {
@@ -702,7 +948,7 @@ void AiCheckDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 
         Gdiplus::GraphicsPath path;
-        AddRoundedRect(path, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), 6.0f);
+        AddRoundedRect(path, Gdiplus::RectF(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f), dpf(6.0f));
 
         Gdiplus::SolidBrush br(Gdiplus::Color(255, GetRValue(curBg), GetGValue(curBg), GetBValue(curBg)));
         g.FillPath(&br, &path);
@@ -720,7 +966,7 @@ void AiCheckDialog::draw_custom_button(DRAWITEMSTRUCT* pDis) {
     HFONT hFont = isPrimary ? m_hFontBold : m_hFontRegular;
     HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
 
-    RECT rcText = rc;
+    RECT rcText = rcLocal;
     if (isPressed && !isDisabled) {
         rcText.left += 1;
         rcText.top += 1;
@@ -743,6 +989,7 @@ void AiCheckDialog::draw_service_pill(
     const AiServiceCheckResult& svc,
     float x, float y, float w, float h)
 {
+    if (!m_gpFontPill) return;
     Gdiplus::Color fillCol;
     Gdiplus::Color borderCol;
     Gdiplus::Color textCol;
@@ -794,7 +1041,7 @@ void AiCheckDialog::draw_service_pill(
 
     Gdiplus::RectF rcPill(x, y, w, h);
     Gdiplus::GraphicsPath pillPath;
-    AddRoundedRect(pillPath, rcPill, 6.0f);
+    AddRoundedRect(pillPath, rcPill, dpf(6.0f));
 
     Gdiplus::SolidBrush fillBr(fillCol);
     Gdiplus::Pen borderPen(borderCol, 1.0f);
@@ -818,12 +1065,14 @@ void AiCheckDialog::draw_list_item(
     bool isSelected, bool isHovered)
 {
     if (rowIdx >= m_rows.size()) return;
+    if (!m_gpFontTitle || !m_gpFontSub || !m_gpFontBadge || !m_gpFontPill || !m_gpFontTotal) return;
+
     const auto& row = m_rows[rowIdx];
     auto pal = GetPalette(m_isDarkMode);
 
     Gdiplus::RectF rcCard(0.5f, static_cast<float>(y) + 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f);
     Gdiplus::GraphicsPath cardPath;
-    AddRoundedRect(cardPath, rcCard, 7.0f);
+    AddRoundedRect(cardPath, rcCard, dpf(7.0f));
 
     COLORREF bgCol = isSelected
         ? (m_isDarkMode ? RGB(38, 48, 66) : RGB(228, 238, 255))
@@ -840,74 +1089,71 @@ void AiCheckDialog::draw_list_item(
 
     if (isSelected) {
         Gdiplus::GraphicsPath selBarPath;
-        AddRoundedRect(selBarPath, Gdiplus::RectF(2.0f, static_cast<float>(y) + 6.0f, 3.5f, static_cast<float>(height) - 12.0f), 2.0f);
+        AddRoundedRect(selBarPath, Gdiplus::RectF(dpf(2.0f), static_cast<float>(y) + dpf(6.0f), dpf(3.5f), static_cast<float>(height) - dpf(12.0f)), dpf(2.0f));
         Gdiplus::SolidBrush selBarBr(Gdiplus::Color(255, GetRValue(borderCol), GetGValue(borderCol), GetBValue(borderCol)));
         g.FillPath(&selBarBr, &selBarPath);
     }
 
-    // Column geometry matching header
-    float profileColW = std::max(230.0f, static_cast<float>(width) * 0.30f);
-    float totalColW   = 74.0f;
-    float svcAreaW    = static_cast<float>(width) - profileColW - totalColW - 10.0f;
+    float profileColW = std::max(dpf(220.0f), static_cast<float>(width) * 0.30f);
+    float totalColW   = dpf(74.0f);
+    float svcAreaW    = std::max(dpf(160.0f), static_cast<float>(width) - profileColW - totalColW - dpf(10.0f));
     float svcColW     = svcAreaW / 4.0f;
 
-    // Status dot in profile column
-    float dotX = 16.0f;
+    float dotX = dpf(16.0f);
     float dotY = static_cast<float>(y) + static_cast<float>(height) / 2.0f;
     Gdiplus::Color dotColor;
     if (!row.is_completed) {
         dotColor = Gdiplus::Color(255, 59, 130, 246);
     } else if (row.result.available_count == 4) {
         dotColor = Gdiplus::Color(255, 34, 197, 94);
-    } else if (row.result.available_count >= 2) {
-        dotColor = Gdiplus::Color(255, 245, 158, 11);
-    } else if (row.result.available_count == 1) {
+    } else if (row.result.available_count >= 1) {
         dotColor = Gdiplus::Color(255, 245, 158, 11);
     } else {
         dotColor = Gdiplus::Color(255, 239, 68, 68);
     }
 
+    float auraR = dpf(6.5f);
+    float dotR  = dpf(3.5f);
     Gdiplus::SolidBrush auraBr(Gdiplus::Color(50, dotColor.GetR(), dotColor.GetG(), dotColor.GetB()));
-    g.FillEllipse(&auraBr, dotX - 6.5f, dotY - 6.5f, 13.0f, 13.0f);
+    g.FillEllipse(&auraBr, dotX - auraR, dotY - auraR, auraR * 2.0f, auraR * 2.0f);
     Gdiplus::SolidBrush dotBr(dotColor);
-    g.FillEllipse(&dotBr, dotX - 3.5f, dotY - 3.5f, 7.0f, 7.0f);
+    g.FillEllipse(&dotBr, dotX - dotR, dotY - dotR, dotR * 2.0f, dotR * 2.0f);
 
     Gdiplus::SolidBrush textPriBr(Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary)));
     Gdiplus::SolidBrush textSecBr(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)));
 
-    // 1. DNS Profile Name + Badges
     std::wstring pName = utf8_to_wide(row.profile.name);
-    float textLeft = 30.0f;
-    float maxProfileRight = profileColW - 6.0f;
+    float textLeft = dpf(30.0f);
+    float maxProfileRight = profileColW - dpf(6.0f);
 
     Gdiplus::RectF nameBounds;
-    g.MeasureString(pName.c_str(), -1, m_gpFontTitle.get(), Gdiplus::PointF(0, 0), &nameBounds);
+    g.MeasureString(pName.c_str(), -1, m_gpFontTitle.get(), Gdiplus::PointF(0.0f, 0.0f), &nameBounds);
 
+    float badgeActiveW = dpf(58.0f);
+    float badgeBestW   = dpf(60.0f);
     float availNameW = maxProfileRight - textLeft;
-    if (row.profile.id == m_currentActiveId) availNameW -= 58.0f;
-    if (row.is_best && row.result.available_count > 0) availNameW -= 60.0f;
-    availNameW = std::max(70.0f, availNameW);
+    if (row.profile.id == m_currentActiveId) availNameW -= badgeActiveW;
+    if (row.is_best && row.result.available_count > 0) availNameW -= badgeBestW;
+    availNameW = std::max(dpf(70.0f), availNameW);
 
     Gdiplus::StringFormat fmtName;
     fmtName.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
     fmtName.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-    float drawNameW = std::min(nameBounds.Width + 4.0f, availNameW);
+    float drawNameW = std::min(nameBounds.Width + dpf(4.0f), availNameW);
     g.DrawString(pName.c_str(), -1, m_gpFontTitle.get(),
-        Gdiplus::RectF(textLeft, static_cast<float>(y) + 6.0f, drawNameW, 18.0f), &fmtName, &textPriBr);
+        Gdiplus::RectF(textLeft, static_cast<float>(y) + dpf(6.0f), drawNameW, dpf(19.0f)), &fmtName, &textPriBr);
 
-    float badgeX = textLeft + drawNameW + 4.0f;
-    if (row.profile.id == m_currentActiveId && badgeX + 54.0f <= maxProfileRight) {
+    float badgeX = textLeft + drawNameW + dpf(4.0f);
+    if (row.profile.id == m_currentActiveId && badgeX + dpf(54.0f) <= maxProfileRight) {
         Gdiplus::SolidBrush activeBr(Gdiplus::Color(255, GetRValue(pal.accentBlue), GetGValue(pal.accentBlue), GetBValue(pal.accentBlue)));
-        g.DrawString(L"[Активен]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &activeBr);
-        badgeX += 56.0f;
+        g.DrawString(L"[Активен]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + dpf(8.0f)), &activeBr);
+        badgeX += dpf(56.0f);
     }
-    if (row.is_best && row.result.available_count > 0 && badgeX + 54.0f <= maxProfileRight) {
+    if (row.is_best && row.result.available_count > 0 && badgeX + dpf(54.0f) <= maxProfileRight) {
         Gdiplus::SolidBrush bestBr(Gdiplus::Color(255, 34, 197, 94));
-        g.DrawString(L"[Лучший]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + 8.0f), &bestBr);
-        badgeX += 56.0f;
+        g.DrawString(L"[Лучший]", -1, m_gpFontBadge.get(), Gdiplus::PointF(badgeX, static_cast<float>(y) + dpf(8.0f)), &bestBr);
     }
 
-    // Sub-line: primary IP + SmartDNS tag / avg latency
     std::wstring subLine = utf8_to_wide(row.profile.primary_ipv4);
     if (row.profile.is_smart_dns) {
         subLine += L" \u2022 SmartDNS";
@@ -916,23 +1162,21 @@ void AiCheckDialog::draw_list_item(
         subLine += L" \u2022 ср. " + std::to_wstring(row.result.avg_latency_ms) + L" мс";
     }
     g.DrawString(subLine.c_str(), -1, m_gpFontSub.get(),
-        Gdiplus::RectF(textLeft, static_cast<float>(y) + 27.0f, maxProfileRight - textLeft, 17.0f), &fmtName, &textSecBr);
+        Gdiplus::RectF(textLeft, static_cast<float>(y) + dpf(27.0f), std::max(dpf(40.0f), maxProfileRight - textLeft), dpf(18.0f)), &fmtName, &textSecBr);
 
-    // 2..5. Service Status Pills (ChatGPT, Claude, Gemini, Copilot)
-    float pillH = 26.0f;
+    float pillH = dpf(26.0f);
     float pillY = static_cast<float>(y) + (static_cast<float>(height) - pillH) / 2.0f;
-    float pillPadX = 4.0f;
-    float pillW = std::max(60.0f, svcColW - (pillPadX * 2.0f));
+    float pillPadX = dpf(4.0f);
+    float pillW = std::max(dpf(48.0f), svcColW - (pillPadX * 2.0f));
 
     draw_service_pill(g, row.result.chatgpt, profileColW + 0.0f * svcColW + pillPadX, pillY, pillW, pillH);
     draw_service_pill(g, row.result.claude,  profileColW + 1.0f * svcColW + pillPadX, pillY, pillW, pillH);
     draw_service_pill(g, row.result.gemini,  profileColW + 2.0f * svcColW + pillPadX, pillY, pillW, pillH);
     draw_service_pill(g, row.result.copilot, profileColW + 3.0f * svcColW + pillPadX, pillY, pillW, pillH);
 
-    // 6. Total Badge (X/4)
     float totalX = static_cast<float>(width) - totalColW;
-    float badgeW = totalColW - 10.0f;
-    float badgeH = 26.0f;
+    float badgeW = totalColW - dpf(10.0f);
+    float badgeH = pillH;
     float badgeY = pillY;
 
     Gdiplus::Color totFill;
@@ -962,9 +1206,9 @@ void AiCheckDialog::draw_list_item(
         totStr    = std::to_wstring(row.result.available_count) + L"/4";
     }
 
-    Gdiplus::RectF rcTot(totalX + 2.0f, badgeY, badgeW, badgeH);
+    Gdiplus::RectF rcTot(totalX + dpf(2.0f), badgeY, badgeW, badgeH);
     Gdiplus::GraphicsPath totPath;
-    AddRoundedRect(totPath, rcTot, 6.0f);
+    AddRoundedRect(totPath, rcTot, dpf(6.0f));
     Gdiplus::SolidBrush totFillBr(totFill);
     Gdiplus::Pen totBorderPen(totBorder, 1.2f);
     g.FillPath(&totFillBr, &totPath);
@@ -998,10 +1242,34 @@ LRESULT AiCheckDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     switch (uMsg) {
     case WM_GETMINMAXINFO: {
         auto* pMMI = reinterpret_cast<MINMAXINFO*>(lParam);
-        RECT rcMin = { 0, 0, 820, 480 };
-        AdjustWindowRectEx(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE));
-        pMMI->ptMinTrackSize.x = rcMin.right - rcMin.left;
-        pMMI->ptMinTrackSize.y = rcMin.bottom - rcMin.top;
+        RECT rcMin = { 0, 0, dp(820), dp(480) };
+        adjust_window_rect_for_dpi(&rcMin, GetWindowLongW(hWnd, GWL_STYLE), FALSE, GetWindowLongW(hWnd, GWL_EXSTYLE), m_dpi);
+        int minW = rcMin.right - rcMin.left;
+        int minH = rcMin.bottom - rcMin.top;
+        RECT rcWork = get_monitor_work_area(hWnd);
+        int workW = rcWork.right - rcWork.left;
+        int workH = rcWork.bottom - rcWork.top;
+        if (workW > 0) minW = std::min(minW, workW);
+        if (workH > 0) minH = std::min(minH, workH);
+        pMMI->ptMinTrackSize.x = minW;
+        pMMI->ptMinTrackSize.y = minH;
+        return 0;
+    }
+
+    case WM_DPICHANGED: {
+        m_dpi = HIWORD(wParam);
+        setup_fonts();
+        apply_fonts_to_controls();
+        const auto* pSuggested = reinterpret_cast<const RECT*>(lParam);
+        if (pSuggested) {
+            RECT rcWork = get_monitor_work_area(hWnd);
+            int sugW = std::min(static_cast<int>(pSuggested->right - pSuggested->left), static_cast<int>(rcWork.right - rcWork.left));
+            int sugH = std::min(static_cast<int>(pSuggested->bottom - pSuggested->top), static_cast<int>(rcWork.bottom - rcWork.top));
+            int sugX = std::clamp(static_cast<int>(pSuggested->left), static_cast<int>(rcWork.left), std::max(static_cast<int>(rcWork.left), static_cast<int>(rcWork.right) - sugW));
+            int sugY = std::clamp(static_cast<int>(pSuggested->top), static_cast<int>(rcWork.top), std::max(static_cast<int>(rcWork.top), static_cast<int>(rcWork.bottom) - sugH));
+            SetWindowPos(hWnd, nullptr, sugX, sugY, sugW, sugH, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        reposition_controls();
         return 0;
     }
 
@@ -1012,19 +1280,35 @@ LRESULT AiCheckDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         return 0;
     }
 
+    case WM_MOUSEWHEEL: {
+        if (m_hListWnd && IsWindow(m_hListWnd)) {
+            return SendMessageW(m_hListWnd, uMsg, wParam, lParam);
+        }
+        break;
+    }
+
     case WM_ERASEBKGND:
         return 1;
 
     case WM_PAINT: {
-        PAINTSTRUCT ps;
+        PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(hWnd, &ps);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
+        if (w <= 0 || h <= 0) {
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
 
         HDC hdcMem = CreateCompatibleDC(hdc);
         HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+        if (!hbmMem) {
+            DeleteDC(hdcMem);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
         HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
         auto pal = GetPalette(m_isDarkMode);
@@ -1033,29 +1317,21 @@ LRESULT AiCheckDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         FillRect(hdcMem, &rc, hbrBg);
         DeleteObject(hbrBg);
 
-        {
+        if (m_gpHeaderTitle && m_gpHeaderSub && m_gpHeaderBold && m_gpHeaderCol) {
             Gdiplus::Graphics g(hdcMem);
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
             g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
             g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
 
-            int marginX = 20;
-            int contentW = w - (marginX * 2);
-
-            Gdiplus::FontFamily ffDisplay(L"Segoe UI Variable Display");
-            Gdiplus::FontFamily ffRegular(L"Segoe UI");
-            Gdiplus::Font fontHeader(&ffDisplay, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-            Gdiplus::Font fontSub(&ffRegular, 9.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
-            Gdiplus::Font fontBold(&ffRegular, 9.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
-            Gdiplus::Font fontColHdr(&ffRegular, 8.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPoint);
+            int marginX = dp(20);
+            int contentW = std::max(dp(200), w - (marginX * 2));
 
             Gdiplus::SolidBrush textPriBr(Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary)));
             Gdiplus::SolidBrush textSecBr(Gdiplus::Color(255, GetRValue(pal.textSecondary), GetGValue(pal.textSecondary), GetBValue(pal.textSecondary)));
             Gdiplus::SolidBrush textMutedBr(Gdiplus::Color(255, GetRValue(pal.textMuted), GetGValue(pal.textMuted), GetBValue(pal.textMuted)));
 
-            // 1. Title & Client IP Subtitle
             g.DrawString(L"Проверка доступности ИИ (ChatGPT, Claude, Gemini, Copilot)",
-                -1, &fontHeader, Gdiplus::PointF(static_cast<float>(marginX), 12.0f), &textPriBr);
+                -1, m_gpHeaderTitle.get(), Gdiplus::PointF(static_cast<float>(marginX), dpf(12.0f)), &textPriBr);
 
             std::wstring ipSubtitle;
             std::wstring verdictTitle;
@@ -1063,7 +1339,7 @@ LRESULT AiCheckDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
             int completedCnt = 0;
             int totalCnt = 0;
             bool hasBest = false;
-            bool checking = m_isChecking.load();
+            bool checking = m_isChecking.load(std::memory_order_acquire);
 
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
@@ -1083,12 +1359,17 @@ LRESULT AiCheckDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                 hasBest      = (m_bestRowIndex >= 0);
             }
 
-            g.DrawString(ipSubtitle.c_str(), -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX), 36.0f), &textSecBr);
+            Gdiplus::StringFormat sfSingle;
+            sfSingle.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+            sfSingle.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
 
-            // 2. Verdict Card (Y = 60..126)
-            Gdiplus::RectF rcVerdict(static_cast<float>(marginX), 60.0f, static_cast<float>(contentW), 66.0f);
+            g.DrawString(ipSubtitle.c_str(), -1, m_gpHeaderSub.get(),
+                Gdiplus::RectF(static_cast<float>(marginX), dpf(36.0f), static_cast<float>(contentW), dpf(20.0f)), &sfSingle, &textSecBr);
+
+            // Verdict Card
+            Gdiplus::RectF rcVerdict(static_cast<float>(marginX), dpf(60.0f), static_cast<float>(contentW), dpf(66.0f));
             Gdiplus::GraphicsPath vPath;
-            AddRoundedRect(vPath, rcVerdict, 8.0f);
+            AddRoundedRect(vPath, rcVerdict, dpf(8.0f));
             Gdiplus::SolidBrush cardBr(Gdiplus::Color(255, GetRValue(pal.cardBg), GetGValue(pal.cardBg), GetBValue(pal.cardBg)));
             Gdiplus::Pen cardPen(Gdiplus::Color(255, GetRValue(pal.cardBorder), GetGValue(pal.cardBorder), GetBValue(pal.cardBorder)), 1.0f);
             g.FillPath(&cardBr, &vPath);
@@ -1099,57 +1380,61 @@ LRESULT AiCheckDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                 : Gdiplus::Color(255, GetRValue(pal.textPrimary), GetGValue(pal.textPrimary), GetBValue(pal.textPrimary));
             Gdiplus::SolidBrush vTitleBr(vTitleCol);
 
-            g.DrawString(verdictTitle.c_str(), -1, &fontBold, Gdiplus::PointF(static_cast<float>(marginX + 14), 69.0f), &vTitleBr);
-            g.DrawString(verdictSub.c_str(), -1, &fontSub, Gdiplus::PointF(static_cast<float>(marginX + 14), 92.0f), &textSecBr);
+            g.DrawString(verdictTitle.c_str(), -1, m_gpHeaderBold.get(),
+                Gdiplus::RectF(static_cast<float>(marginX + dp(14)), dpf(69.0f), static_cast<float>(contentW - dp(28)), dpf(20.0f)), &sfSingle, &vTitleBr);
+            g.DrawString(verdictSub.c_str(), -1, m_gpHeaderSub.get(),
+                Gdiplus::RectF(static_cast<float>(marginX + dp(14)), dpf(92.0f), static_cast<float>(contentW - dp(28)), dpf(19.0f)), &sfSingle, &textSecBr);
 
             if (checking && totalCnt > 0) {
-                float progX = static_cast<float>(marginX + 14);
-                float progY = 114.0f;
-                float progW = static_cast<float>(contentW - 28);
-                float progH = 6.0f;
+                float progX = static_cast<float>(marginX + dp(14));
+                float progY = dpf(114.0f);
+                float progW = static_cast<float>(std::max(dp(40), contentW - dp(28)));
+                float progH = dpf(6.0f);
 
                 Gdiplus::RectF rcTrack(progX, progY, progW, progH);
                 Gdiplus::GraphicsPath trackPath;
-                AddRoundedRect(trackPath, rcTrack, 3.0f);
+                AddRoundedRect(trackPath, rcTrack, dpf(3.0f));
                 Gdiplus::SolidBrush trackBg(m_isDarkMode ? Gdiplus::Color(255, 38, 44, 56) : Gdiplus::Color(255, 226, 232, 240));
                 g.FillPath(&trackBg, &trackPath);
 
                 float ratio = std::clamp(static_cast<float>(completedCnt) / static_cast<float>(totalCnt), 0.0f, 1.0f);
                 if (ratio > 0.01f) {
-                    float fillW = std::max(8.0f, progW * ratio);
+                    float fillW = std::max(dpf(8.0f), progW * ratio);
                     Gdiplus::RectF rcFill(progX, progY, fillW, progH);
                     Gdiplus::GraphicsPath fillPath;
-                    AddRoundedRect(fillPath, rcFill, 3.0f);
+                    AddRoundedRect(fillPath, rcFill, dpf(3.0f));
                     Gdiplus::SolidBrush fillBr(Gdiplus::Color(255, 34, 197, 94));
                     g.FillPath(&fillBr, &fillPath);
                 }
             }
 
-            // 3. Table Column Header Bar (Y = 134..160)
-            int listH = std::max(100, h - 166 - 38 - 16 - 14);
-            bool needScroll = (totalCnt * ROW_STEP) > listH;
-            int itemW = needScroll ? (contentW - 7 - 4 - 6) : contentW;
+            // Table Column Header Bar
+            int listH = std::max(dp(80), h - dp(166) - dp(38) - dp(16) - dp(14));
+            int rowStep = get_row_step();
+            bool needScroll = (totalCnt * rowStep) > listH;
+            int itemW = needScroll ? std::max(dp(200), contentW - dp(17)) : contentW;
 
-            float profileColW = std::max(230.0f, static_cast<float>(itemW) * 0.30f);
-            float totalColW   = 74.0f;
-            float svcAreaW    = static_cast<float>(itemW) - profileColW - totalColW - 10.0f;
+            float profileColW = std::max(dpf(220.0f), static_cast<float>(itemW) * 0.30f);
+            float totalColW   = dpf(74.0f);
+            float svcAreaW    = std::max(dpf(160.0f), static_cast<float>(itemW) - profileColW - totalColW - dpf(10.0f));
             float svcColW     = svcAreaW / 4.0f;
 
-            float hdrY = 138.0f;
-            float hdrH = 22.0f;
+            float hdrY = dpf(138.0f);
+            float hdrH = dpf(22.0f);
 
-            g.DrawString(L"DNS Профиль", -1, &fontColHdr, Gdiplus::PointF(static_cast<float>(marginX + 14), hdrY + 2.0f), &textMutedBr);
+            g.DrawString(L"DNS Профиль", -1, m_gpHeaderCol.get(),
+                Gdiplus::PointF(static_cast<float>(marginX + dp(14)), hdrY + dpf(2.0f)), &textMutedBr);
 
             Gdiplus::StringFormat fmtCenter;
             fmtCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
             fmtCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
 
             float baseLeft = static_cast<float>(marginX);
-            g.DrawString(L"ChatGPT", -1, &fontColHdr, Gdiplus::RectF(baseLeft + profileColW + 0.0f * svcColW, hdrY, svcColW, hdrH), &fmtCenter, &textMutedBr);
-            g.DrawString(L"Claude",  -1, &fontColHdr, Gdiplus::RectF(baseLeft + profileColW + 1.0f * svcColW, hdrY, svcColW, hdrH), &fmtCenter, &textMutedBr);
-            g.DrawString(L"Gemini",  -1, &fontColHdr, Gdiplus::RectF(baseLeft + profileColW + 2.0f * svcColW, hdrY, svcColW, hdrH), &fmtCenter, &textMutedBr);
-            g.DrawString(L"Copilot", -1, &fontColHdr, Gdiplus::RectF(baseLeft + profileColW + 3.0f * svcColW, hdrY, svcColW, hdrH), &fmtCenter, &textMutedBr);
-            g.DrawString(L"Итог",    -1, &fontColHdr, Gdiplus::RectF(baseLeft + static_cast<float>(itemW) - totalColW, hdrY, totalColW, hdrH), &fmtCenter, &textMutedBr);
+            g.DrawString(L"ChatGPT", -1, m_gpHeaderCol.get(), Gdiplus::RectF(baseLeft + profileColW + 0.0f * svcColW, hdrY, svcColW, hdrH), &fmtCenter, &textMutedBr);
+            g.DrawString(L"Claude",  -1, m_gpHeaderCol.get(), Gdiplus::RectF(baseLeft + profileColW + 1.0f * svcColW, hdrY, svcColW, hdrH), &fmtCenter, &textMutedBr);
+            g.DrawString(L"Gemini",  -1, m_gpHeaderCol.get(), Gdiplus::RectF(baseLeft + profileColW + 2.0f * svcColW, hdrY, svcColW, hdrH), &fmtCenter, &textMutedBr);
+            g.DrawString(L"Copilot", -1, m_gpHeaderCol.get(), Gdiplus::RectF(baseLeft + profileColW + 3.0f * svcColW, hdrY, svcColW, hdrH), &fmtCenter, &textMutedBr);
+            g.DrawString(L"Итог",    -1, m_gpHeaderCol.get(), Gdiplus::RectF(baseLeft + static_cast<float>(itemW) - totalColW, hdrY, totalColW, hdrH), &fmtCenter, &textMutedBr);
         }
 
         BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
@@ -1161,13 +1446,14 @@ LRESULT AiCheckDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     }
 
     case WM_APP_AI_CHECK_UPDATE: {
-        if (wParam == 1 && m_hBtnRecheck) {
+        if (wParam == 1 && !m_isChecking.load(std::memory_order_acquire) && m_hBtnRecheck && IsWindow(m_hBtnRecheck)) {
             EnableWindow(m_hBtnRecheck, TRUE);
             SetWindowTextW(m_hBtnRecheck, L"Проверить заново");
+            InvalidateRect(m_hBtnRecheck, nullptr, FALSE);
         }
         RECT rcClient = {};
         GetClientRect(hWnd, &rcClient);
-        RECT rcHeader = { 0, 0, rcClient.right, 166 };
+        RECT rcHeader = { 0, 0, rcClient.right, dp(166) };
         InvalidateRect(hWnd, &rcHeader, FALSE);
         if (m_hListWnd && IsWindow(m_hListWnd)) {
             InvalidateRect(m_hListWnd, nullptr, FALSE);
@@ -1205,6 +1491,13 @@ LRESULT AiCheckDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         on_close();
         return 0;
     }
+
+    case WM_NCDESTROY: {
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA, 0);
+        m_hWnd = nullptr;
+        m_finished = true;
+        return 0;
+    }
     }
 
     return DefWindowProcW(hWnd, uMsg, wParam, lParam);
@@ -1228,19 +1521,31 @@ LRESULT CALLBACK AiCheckDialog::list_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wPa
 
 LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+    case WM_GETDLGCODE:
+        return DLGC_WANTARROWS;
+
     case WM_ERASEBKGND:
         return 1;
 
     case WM_PAINT: {
-        PAINTSTRUCT ps;
+        PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(hWnd, &ps);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
+        if (w <= 0 || h <= 0) {
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
 
         HDC hdcMem = CreateCompatibleDC(hdc);
         HBITMAP hbmMem = CreateCompatibleBitmap(hdc, w, h);
+        if (!hbmMem) {
+            DeleteDC(hdcMem);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
         HGDIOBJ oldBmp = SelectObject(hdcMem, hbmMem);
 
         auto pal = GetPalette(m_isDarkMode);
@@ -1256,36 +1561,39 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
             g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
 
             std::lock_guard<std::mutex> lock(m_mutex);
+            int rowHeight = get_row_height();
+            int rowStep = get_row_step();
             int totalItems = static_cast<int>(m_rows.size());
-            int totalContentHeight = totalItems * ROW_STEP;
+            int totalContentHeight = totalItems * rowStep;
             bool needScroll = totalContentHeight > h;
             int maxScroll = needScroll ? (totalContentHeight - h) : 0;
             m_scrollOffset = std::clamp(m_scrollOffset, 0, maxScroll);
 
-            int scrollBarW = 7;
-            int scrollBarMarginRight = 4;
-            int itemW = needScroll ? (w - scrollBarW - scrollBarMarginRight - 6) : w;
+            int scrollBarW = dp(7);
+            int scrollBarMarginRight = dp(4);
+            int scrollReserve = dp(17);
+            int itemW = needScroll ? std::max(dp(180), w - scrollReserve) : w;
 
             for (int i = 0; i < totalItems; ++i) {
-                int y = i * ROW_STEP - m_scrollOffset;
-                if (y + ROW_HEIGHT < 0 || y > h) continue;
+                int y = i * rowStep - m_scrollOffset;
+                if (y + rowHeight < 0 || y > h) continue;
 
                 bool isSelected = (i == m_selectedIndex);
                 bool isHovered  = (i == m_hoveredIndex);
-                draw_list_item(g, static_cast<size_t>(i), y, itemW, ROW_HEIGHT, isSelected, isHovered);
+                draw_list_item(g, static_cast<size_t>(i), y, itemW, rowHeight, isSelected, isHovered);
             }
 
             if (needScroll) {
                 float sbX = static_cast<float>(w - scrollBarMarginRight - scrollBarW);
-                float sbY = 4.0f;
-                float sbH = static_cast<float>(h - 8);
+                float sbY = dpf(4.0f);
+                float sbH = std::max(dpf(20.0f), static_cast<float>(h) - dpf(8.0f));
 
                 Gdiplus::SolidBrush trackBr(m_isDarkMode ? Gdiplus::Color(25, 255, 255, 255) : Gdiplus::Color(20, 0, 0, 0));
                 Gdiplus::GraphicsPath trackPath;
-                AddRoundedRect(trackPath, Gdiplus::RectF(sbX, sbY, static_cast<float>(scrollBarW), sbH), 3.5f);
+                AddRoundedRect(trackPath, Gdiplus::RectF(sbX, sbY, static_cast<float>(scrollBarW), sbH), dpf(3.5f));
                 g.FillPath(&trackBr, &trackPath);
 
-                float thumbH = std::max(32.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+                float thumbH = std::min(sbH, std::max(dpf(32.0f), (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH));
                 float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
                 float thumbY = sbY + scrollRatio * (sbH - thumbH);
 
@@ -1302,7 +1610,7 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
 
                 Gdiplus::SolidBrush thumbBr(thumbColor);
                 Gdiplus::GraphicsPath thumbPath;
-                AddRoundedRect(thumbPath, Gdiplus::RectF(sbX, thumbY, static_cast<float>(scrollBarW), thumbH), 3.5f);
+                AddRoundedRect(thumbPath, Gdiplus::RectF(sbX, thumbY, static_cast<float>(scrollBarW), thumbH), dpf(3.5f));
                 g.FillPath(&thumbBr, &thumbPath);
             }
         }
@@ -1318,7 +1626,7 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
     case WM_MOUSEMOVE: {
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
@@ -1328,14 +1636,16 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
             std::lock_guard<std::mutex> lock(m_mutex);
             totalItems = static_cast<int>(m_rows.size());
         }
-        int totalContentHeight = totalItems * ROW_STEP;
+        int rowStep = std::max(1, get_row_step());
+        int totalContentHeight = totalItems * rowStep;
         bool needScroll = totalContentHeight > h;
         int maxScroll = needScroll ? (totalContentHeight - h) : 0;
+        int scrollReserve = dp(17);
 
         if (m_isDraggingScroll) {
             if (needScroll) {
-                float sbH = static_cast<float>(h - 8);
-                float thumbH = std::max(32.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+                float sbH = std::max(dpf(20.0f), static_cast<float>(h) - dpf(8.0f));
+                float thumbH = std::min(sbH, std::max(dpf(32.0f), (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH));
                 float availableTrack = sbH - thumbH;
                 if (availableTrack > 0.0f) {
                     float deltaY = static_cast<float>(my - m_dragStartY);
@@ -1347,15 +1657,15 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
             return 0;
         }
 
-        bool overScrollArea = needScroll && (mx >= (w - 17));
+        bool overScrollArea = needScroll && (mx >= (w - scrollReserve));
         if (overScrollArea) {
             if (m_hoveredIndex != -1) {
                 m_hoveredIndex = -1;
                 InvalidateRect(hWnd, nullptr, FALSE);
             }
-            float sbY = 4.0f;
-            float sbH = static_cast<float>(h - 8);
-            float thumbH = std::max(32.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
+            float sbY = dpf(4.0f);
+            float sbH = std::max(dpf(20.0f), static_cast<float>(h) - dpf(8.0f));
+            float thumbH = std::min(sbH, std::max(dpf(32.0f), (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH));
             float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
             float thumbY = sbY + scrollRatio * (sbH - thumbH);
 
@@ -1370,7 +1680,7 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
                 InvalidateRect(hWnd, nullptr, FALSE);
             }
             int contentY = my + m_scrollOffset;
-            int idx = contentY / ROW_STEP;
+            int idx = (contentY >= 0) ? (contentY / rowStep) : -1;
             if (idx >= 0 && idx < totalItems) {
                 if (idx != m_hoveredIndex) {
                     m_hoveredIndex = idx;
@@ -1382,7 +1692,10 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
             }
         }
 
-        TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+        TRACKMOUSEEVENT tme{};
+        tme.cbSize = sizeof(TRACKMOUSEEVENT);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hWnd;
         TrackMouseEvent(&tme);
         break;
     }
@@ -1400,49 +1713,59 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
         SetFocus(hWnd);
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
 
-        int totalItems = 0;
+        int rowStep = std::max(1, get_row_step());
+        int scrollReserve = dp(17);
+        bool startDrag = false;
+        bool changed = false;
+
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            totalItems = static_cast<int>(m_rows.size());
-        }
-        int totalContentHeight = totalItems * ROW_STEP;
-        bool needScroll = totalContentHeight > h;
-        int maxScroll = needScroll ? (totalContentHeight - h) : 0;
+            int totalItems = static_cast<int>(m_rows.size());
+            int totalContentHeight = totalItems * rowStep;
+            bool needScroll = totalContentHeight > h;
+            int maxScroll = needScroll ? (totalContentHeight - h) : 0;
 
-        if (needScroll && mx >= (w - 17)) {
-            float sbY = 4.0f;
-            float sbH = static_cast<float>(h - 8);
-            float thumbH = std::max(32.0f, (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH);
-            float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
-            float thumbY = sbY + scrollRatio * (sbH - thumbH);
+            if (needScroll && mx >= (w - scrollReserve)) {
+                float sbY = dpf(4.0f);
+                float sbH = std::max(dpf(20.0f), static_cast<float>(h) - dpf(8.0f));
+                float thumbH = std::min(sbH, std::max(dpf(32.0f), (static_cast<float>(h) / static_cast<float>(totalContentHeight)) * sbH));
+                float scrollRatio = (maxScroll > 0) ? (static_cast<float>(m_scrollOffset) / static_cast<float>(maxScroll)) : 0.0f;
+                float thumbY = sbY + scrollRatio * (sbH - thumbH);
 
-            if (my >= thumbY && my <= thumbY + thumbH) {
-                m_isDraggingScroll = true;
-                m_dragStartY = my;
-                m_dragStartOffset = m_scrollOffset;
-                SetCapture(hWnd);
-            } else if (my < thumbY) {
-                m_scrollOffset = std::max(0, m_scrollOffset - h);
+                if (my >= thumbY && my <= thumbY + thumbH) {
+                    m_isDraggingScroll = true;
+                    m_dragStartY = my;
+                    m_dragStartOffset = m_scrollOffset;
+                    startDrag = true;
+                } else if (my < thumbY) {
+                    m_scrollOffset = std::max(0, m_scrollOffset - h);
+                } else {
+                    m_scrollOffset = std::min(maxScroll, m_scrollOffset + h);
+                }
+                changed = true;
             } else {
-                m_scrollOffset = std::min(maxScroll, m_scrollOffset + h);
+                int contentY = my + m_scrollOffset;
+                int idx = (contentY >= 0) ? (contentY / rowStep) : -1;
+                if (idx >= 0 && idx < totalItems) {
+                    m_selectedIndex = idx;
+                    m_userChangedSelection = true;
+                    changed = true;
+                }
             }
-            InvalidateRect(hWnd, nullptr, FALSE);
-            return 0;
         }
 
-        int contentY = my + m_scrollOffset;
-        int idx = contentY / ROW_STEP;
-        if (idx >= 0 && idx < totalItems) {
-            m_selectedIndex = idx;
-            m_userChangedSelection = true;
+        if (startDrag) {
+            SetCapture(hWnd);
+        }
+        if (changed) {
             InvalidateRect(hWnd, nullptr, FALSE);
         }
-        break;
+        return 0;
     }
 
     case WM_LBUTTONUP: {
@@ -1462,64 +1785,117 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
     case WM_LBUTTONDBLCLK: {
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int w = rc.right - rc.left;
-        if (mx < w - 17) {
-            int contentY = my + m_scrollOffset;
-            int idx = contentY / ROW_STEP;
+        int h = rc.bottom - rc.top;
+        int rowStep = std::max(1, get_row_step());
+        int scrollReserve = dp(17);
+
+        bool applied = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            int totalItems = static_cast<int>(m_rows.size());
+            bool needScroll = (totalItems * rowStep) > h;
+            if (!needScroll || mx < w - scrollReserve) {
+                int contentY = my + m_scrollOffset;
+                int idx = (contentY >= 0) ? (contentY / rowStep) : -1;
+                if (idx >= 0 && idx < totalItems) {
+                    m_selectedIndex = idx;
+                    m_userChangedSelection = true;
+                    m_selectedProfileId = m_rows[static_cast<size_t>(idx)].profile.id;
+                    m_finished = true;
+                    applied = true;
+                }
+            }
+        }
+
+        if (applied) {
+            m_cancelFlag.store(true, std::memory_order_release);
+            if (m_hWnd && IsWindow(m_hWnd)) {
+                ShowWindow(m_hWnd, SW_HIDE);
+            }
+        }
+        return 0;
+    }
+
+    case WM_MOUSEWHEEL: {
+        int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if ((delta > 0 && m_wheelAccum < 0) || (delta < 0 && m_wheelAccum > 0)) {
+            m_wheelAccum = 0;
+        }
+        int rowStep = std::max(1, get_row_step());
+        m_wheelAccum += delta * rowStep;
+        int movePx = m_wheelAccum / WHEEL_DELTA;
+        m_wheelAccum %= WHEEL_DELTA;
+        if (movePx != 0) {
+            RECT rc{};
+            GetClientRect(hWnd, &rc);
+            int totalH = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                totalH = static_cast<int>(m_rows.size()) * rowStep;
+            }
+            int maxScroll = std::max<int>(0, totalH - static_cast<int>(rc.bottom - rc.top));
+            m_scrollOffset = std::clamp(m_scrollOffset - movePx, 0, maxScroll);
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        return 0;
+    }
+
+    case WM_KEYDOWN: {
+        int rowStep = std::max(1, get_row_step());
+        RECT rc{};
+        GetClientRect(hWnd, &rc);
+        int clientH = rc.bottom - rc.top;
+
+        if (wParam == VK_UP) {
+            bool updated = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                int totalItems = static_cast<int>(m_rows.size());
+                if (totalItems > 0) {
+                    m_selectedIndex = std::clamp(m_selectedIndex - 1, 0, totalItems - 1);
+                    m_userChangedSelection = true;
+                    int targetY = m_selectedIndex * rowStep;
+                    if (targetY < m_scrollOffset) m_scrollOffset = targetY;
+                    updated = true;
+                }
+            }
+            if (updated) InvalidateRect(hWnd, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_DOWN) {
+            bool updated = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                int totalItems = static_cast<int>(m_rows.size());
+                if (totalItems > 0) {
+                    m_selectedIndex = std::clamp(m_selectedIndex + 1, 0, totalItems - 1);
+                    m_userChangedSelection = true;
+                    int targetY = (m_selectedIndex + 1) * rowStep;
+                    if (targetY > m_scrollOffset + clientH) {
+                        m_scrollOffset = targetY - clientH;
+                    }
+                    updated = true;
+                }
+            }
+            if (updated) InvalidateRect(hWnd, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_PRIOR) {
+            m_scrollOffset = std::max(0, m_scrollOffset - clientH);
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_NEXT) {
             int totalItems = 0;
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 totalItems = static_cast<int>(m_rows.size());
             }
-            if (idx >= 0 && idx < totalItems) {
-                m_selectedIndex = idx;
-                m_userChangedSelection = true;
-                on_apply();
-            }
-        }
-        break;
-    }
-
-    case WM_MOUSEWHEEL: {
-        int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-        RECT rc;
-        GetClientRect(hWnd, &rc);
-        int totalH = 0;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            totalH = static_cast<int>(m_rows.size()) * ROW_STEP;
-        }
-        int maxScroll = std::max<int>(0, totalH - static_cast<int>(rc.bottom - rc.top));
-        m_scrollOffset -= (delta / WHEEL_DELTA) * ROW_STEP;
-        m_scrollOffset = std::clamp(m_scrollOffset, 0, maxScroll);
-        InvalidateRect(hWnd, nullptr, FALSE);
-        return 0;
-    }
-
-    case WM_KEYDOWN: {
-        int totalItems = 0;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            totalItems = static_cast<int>(m_rows.size());
-        }
-        if (wParam == VK_UP) {
-            m_selectedIndex = std::max(0, m_selectedIndex - 1);
-            m_userChangedSelection = true;
-            int targetY = m_selectedIndex * ROW_STEP;
-            if (targetY < m_scrollOffset) m_scrollOffset = targetY;
-            InvalidateRect(hWnd, nullptr, FALSE);
-            return 0;
-        }
-        if (wParam == VK_DOWN) {
-            m_selectedIndex = std::min(std::max(0, totalItems - 1), m_selectedIndex + 1);
-            m_userChangedSelection = true;
-            RECT rc; GetClientRect(hWnd, &rc);
-            int targetY = (m_selectedIndex + 1) * ROW_STEP;
-            if (targetY > m_scrollOffset + (rc.bottom - rc.top)) {
-                m_scrollOffset = targetY - (rc.bottom - rc.top);
-            }
+            int maxScroll = std::max<int>(0, totalItems * rowStep - clientH);
+            m_scrollOffset = std::min(maxScroll, m_scrollOffset + clientH);
             InvalidateRect(hWnd, nullptr, FALSE);
             return 0;
         }
@@ -1535,23 +1911,31 @@ LRESULT AiCheckDialog::handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, 
     }
 
     case WM_SETCURSOR: {
-        POINT pt;
+        POINT pt{};
         GetCursorPos(&pt);
         ScreenToClient(hWnd, &pt);
-        RECT rc;
+        RECT rc{};
         GetClientRect(hWnd, &rc);
         int totalItems = 0;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             totalItems = static_cast<int>(m_rows.size());
         }
-        bool needScroll = (totalItems * ROW_STEP) > (rc.bottom - rc.top);
-        if (needScroll && pt.x >= (rc.right - rc.left - 17)) {
+        bool needScroll = (totalItems * get_row_step()) > (rc.bottom - rc.top);
+        if (needScroll && pt.x >= (rc.right - rc.left - dp(17))) {
             SetCursor(LoadCursorW(nullptr, IDC_ARROW));
         } else {
             SetCursor(LoadCursorW(nullptr, IDC_HAND));
         }
         return TRUE;
+    }
+
+    case WM_NCDESTROY: {
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA, 0);
+        if (m_hListWnd == hWnd) {
+            m_hListWnd = nullptr;
+        }
+        return 0;
     }
     }
 

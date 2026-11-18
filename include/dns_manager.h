@@ -3,10 +3,13 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 
-#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #include <iphlpapi.h>
 #include <netioapi.h>
 #include <guiddef.h>
@@ -180,12 +183,19 @@ private:
     void set_last_error(const std::wstring& msg) const;
 
     static bool is_virtual_adapter(const IP_ADAPTER_ADDRESSES* adapter);
-    static bool execute_hidden_process(const std::wstring& command);
+    static bool execute_hidden_process(const std::wstring& exe_path, const std::wstring& args);
     static std::wstring format_win32_error(DWORD error_code);
+    void query_static_dns_servers(const GUID& guid,
+                                  const std::wstring& guid_str,
+                                  std::vector<std::wstring>& out_v4,
+                                  std::vector<std::wstring>& out_v6,
+                                  bool& out_has_static) const;
     bool query_is_dhcp_dns(const GUID& guid, const std::wstring& guid_str) const;
+    bool flush_dns_cache_unlocked();
     void configure_doh_server(const std::wstring& server_ip, const std::wstring& doh_template);
     void configure_interface_doh(const std::wstring& adapter_id, const std::vector<std::wstring>& servers, const std::wstring& doh_template);
 
+    mutable std::mutex op_mutex_;
     mutable std::mutex error_mutex_;
     mutable std::wstring last_error_;
     HMODULE m_hIpHlp = nullptr;

@@ -20,7 +20,15 @@ public:
     BackgroundTasks& operator=(const BackgroundTasks&) = delete;
 
     void run(std::function<void()> task) {
+        if (!task || stopping_.load(std::memory_order_acquire)) {
+            return;
+        }
+
         std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_.load(std::memory_order_acquire)) {
+            return;
+        }
+
         // Clean up completed background threads
         for (auto it = tasks_.begin(); it != tasks_.end(); ) {
             if ((*it)->finished.load(std::memory_order_acquire) && (*it)->worker.joinable()) {
@@ -31,10 +39,14 @@ public:
             }
         }
 
+        tasks_.reserve(tasks_.size() + 1);
         auto item = std::make_shared<TaskItem>();
         item->finished.store(false, std::memory_order_release);
         item->worker = std::thread([task = std::move(task), item]() {
-            task();
+            try {
+                task();
+            } catch (...) {
+            }
             item->finished.store(true, std::memory_order_release);
         });
         tasks_.push_back(std::move(item));
@@ -45,6 +57,7 @@ public:
         std::vector<std::shared_ptr<TaskItem>> to_join;
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            stopping_.store(true, std::memory_order_release);
             to_join.swap(tasks_);
         }
         for (auto& item : to_join) {

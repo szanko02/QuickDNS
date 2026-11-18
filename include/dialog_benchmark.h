@@ -7,6 +7,7 @@
 #include <optional>
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <algorithm>
@@ -39,7 +40,6 @@ struct BenchmarkItem {
     bool is_most_stable_smart = false;
 
     void reset_stats() {
-        current_ping = -1;
         latency_history.clear();
         total_queries = 0;
         success_queries = 0;
@@ -52,9 +52,17 @@ struct BenchmarkItem {
         is_most_stable = false;
         is_fastest_smart = false;
         is_most_stable_smart = false;
-        quality = DnsQuality::Moderate;
-        status_text = L"Ожидание...";
-        quality_label = L"Ожидание";
+        if (profile.is_dhcp) {
+            current_ping = 0;
+            quality = DnsQuality::Fast;
+            status_text = L"DHCP (Авто)";
+            quality_label = L"Провайдер";
+        } else {
+            current_ping = -1;
+            quality = DnsQuality::Moderate;
+            status_text = L"Ожидание...";
+            quality_label = L"Ожидание";
+        }
     }
 
     void recalculate_stats() {
@@ -67,21 +75,21 @@ struct BenchmarkItem {
             max_ping = -1;
             avg_ping = -1;
             jitter = 0.0f;
-            reliability = (total_queries > 0) ? (static_cast<float>(success_queries) * 100.0f / total_queries) : 0.0f;
+            reliability = (total_queries > 0) ? (static_cast<float>(success_queries) * 100.0f / static_cast<float>(total_queries)) : 0.0f;
             return;
         }
         min_ping = *std::min_element(valid.begin(), valid.end());
         max_ping = *std::max_element(valid.begin(), valid.end());
         long long sum = 0;
         for (int v : valid) sum += v;
-        avg_ping = static_cast<int>(sum / valid.size());
+        avg_ping = static_cast<int>(sum / static_cast<long long>(valid.size()));
 
         float diffSum = 0.0f;
         for (int v : valid) {
             diffSum += std::abs(static_cast<float>(v) - static_cast<float>(avg_ping));
         }
         jitter = diffSum / static_cast<float>(valid.size());
-        reliability = (total_queries > 0) ? (static_cast<float>(success_queries) * 100.0f / total_queries) : 100.0f;
+        reliability = (total_queries > 0) ? (static_cast<float>(success_queries) * 100.0f / static_cast<float>(total_queries)) : 100.0f;
     }
 };
 
@@ -102,6 +110,9 @@ public:
         bool isDarkMode = true
     );
 
+    int dp(int px) const;
+    float dpf(float px) const;
+
 private:
     BenchmarkDialog(HWND hParent, HINSTANCE hInstance, const std::vector<DnsProfile>& profiles, const std::string& currentActiveId, bool isDarkMode);
     ~BenchmarkDialog();
@@ -109,9 +120,15 @@ private:
     bool create_dialog_window();
     void apply_theme();
     void setup_fonts();
+    void apply_fonts_to_controls();
     void create_controls();
+    int get_row_height() const;
+    int get_row_gap() const;
+    int get_row_step() const;
+
     void start_ping_worker();
     void stop_ping_worker();
+    void update_timed_elapsed();
     void toggle_pause();
     void on_apply();
     void on_close();
@@ -121,13 +138,14 @@ private:
     void stop_timed_test(bool finishedNaturally = false);
     void reset_all_stats();
     void update_verdict();
-    void update_filtered_indices();
+    void update_filtered_indices_locked();
     void set_duration_mode(BenchmarkDurationMode mode);
     void set_filter_smart_only(bool smartOnly);
     void show_ai_presets_menu();
 
     static LRESULT CALLBACK dialog_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK list_proc_thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK domain_edit_subclass(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     LRESULT handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT handle_list_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -140,7 +158,12 @@ private:
     HWND m_hWnd = nullptr;
     HWND m_hListWnd = nullptr;
 
+    UINT m_dpi = 96;
     bool m_isDarkMode = true;
+    bool m_domainEditFocused = false;
+    bool m_domainEditHovered = false;
+    RECT m_domainBoxRect{};
+
     HBRUSH m_hbrBg = nullptr;
     HBRUSH m_hbrCard = nullptr;
 
@@ -151,9 +174,13 @@ private:
     HFONT m_hFontSmall = nullptr;
     HFONT m_hFontSmallBold = nullptr;
 
-    // Cached GDI+ Fonts for 60 FPS smooth rendering
+    // Cached GDI+ Fonts
     std::unique_ptr<Gdiplus::FontFamily> m_gpFontFamily;
+    std::unique_ptr<Gdiplus::FontFamily> m_gpDisplayFamily;
     std::unique_ptr<Gdiplus::FontFamily> m_gpMonoFamily;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderTitle;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderSub;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderBold;
     std::unique_ptr<Gdiplus::Font> m_gpFontTitle;
     std::unique_ptr<Gdiplus::Font> m_gpFontSub;
     std::unique_ptr<Gdiplus::Font> m_gpFontBadge;
@@ -186,10 +213,12 @@ private:
     std::string m_currentActiveId;
     std::mutex m_itemsMutex;
     std::mutex m_domainMutex;
+    std::mutex m_timerMutex;
 
     int m_selectedIndex = 0;
     int m_hoveredIndex = -1;
     int m_scrollOffset = 0;
+    int m_wheelAccum = 0;
     bool m_isDraggingScroll = false;
     bool m_scrollThumbHovered = false;
     int m_dragStartY = 0;
@@ -203,9 +232,10 @@ private:
     bool m_filterOnlySmartDns = false;
     BenchmarkDurationMode m_durationMode = BenchmarkDurationMode::Timed30s;
     std::atomic<bool> m_isTimedRunning{false};
-    int m_targetDurationSec = 30;
-    int m_elapsedSec = 0;
-    std::chrono::steady_clock::time_point m_timedStartTime;
+    std::atomic<int> m_targetDurationSec{30};
+    std::atomic<int> m_elapsedSec{0};
+    std::chrono::steady_clock::time_point m_timedStartTime{};
+    std::chrono::steady_clock::time_point m_pauseStartTime{};
     bool m_timedFinished = false;
 
     // Overall Winners

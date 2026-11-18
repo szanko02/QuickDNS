@@ -13,10 +13,8 @@
 #define IDC_BTN_FLUSH_DNS           1007
 #define IDC_BTN_ADD_PROFILE         1008
 #define IDC_BTN_DELETE_PROFILE      1009
-#define IDC_STATUS_CARD             1010
 #define IDC_STATUS_TITLE            1011
 #define IDC_STATUS_DNS_VAL          1012
-#define IDC_CHECK_AUTORUN           1013
 #define IDC_BTN_BENCHMARK           1015
 #define IDC_GRAPH_VIEW              1016
 #define IDC_STATUS_PING             1017
@@ -38,13 +36,13 @@
 #define IDC_EDIT_SEC_IPV4           1104
 #define IDC_BTN_SAVE_PROFILE        1105
 #define IDC_BTN_CANCEL_PROFILE      1106
+#define IDC_EDIT_DOH                1107
+#define IDC_CHECK_SMARTDNS          1108
 
 // Benchmark Dialog Controls
 #define IDC_LIST_BENCHMARK          1201
 #define IDC_BTN_BENCHMARK_APPLY     1202
-#define IDC_BTN_BENCHMARK_RETEST    1203
 #define IDC_BTN_BENCHMARK_CLOSE     1204
-#define IDC_STATUS_BENCHMARK        1205
 
 // SmartDNS Catalog Dialog Controls
 #define IDC_LIST_SMARTDNS           1301
@@ -52,7 +50,6 @@
 #define IDC_BTN_SMARTDNS_APPLY      1303
 #define IDC_BTN_SMARTDNS_WEBSITE    1304
 #define IDC_BTN_SMARTDNS_CLOSE      1305
-#define IDC_STATUS_SMARTDNS         1306
 #define IDC_BTN_SMARTDNS_SCRAPE_VERIFY 1307
 #define IDC_BTN_SMARTDNS_PICK_IP    3010
 
@@ -77,4 +74,3 @@
 #define IDC_BTN_AI_RECHECK          5002
 #define IDC_BTN_AI_APPLY            5003
 #define IDC_BTN_AI_CLOSE            5004
-

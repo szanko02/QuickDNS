@@ -5,13 +5,329 @@
 
 #include <windows.h>
 #include <shlobj.h>
-#include <fstream>
-#include <sstream>
 #include <algorithm>
 #include <iostream>
 #include <chrono>
 
 using json = nlohmann::json;
+
+namespace {
+
+char ascii_tolower(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return static_cast<char>(c - 'A' + 'a');
+    }
+    return c;
+}
+
+bool starts_with_icase_ascii(std::string_view str, std::string_view prefix) {
+    if (str.size() < prefix.size()) return false;
+    for (size_t i = 0; i < prefix.size(); ++i) {
+        if (ascii_tolower(str[i]) != ascii_tolower(prefix[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_valid_website_url(const std::string& url) {
+    if (url.empty() || url.size() > 2048) {
+        return false;
+    }
+
+    size_t scheme_len = 0;
+    if (starts_with_icase_ascii(url, "https://")) {
+        scheme_len = 8;
+    } else if (starts_with_icase_ascii(url, "http://")) {
+        scheme_len = 7;
+    } else {
+        return false;
+    }
+
+    if (url.size() <= scheme_len) {
+        return false;
+    }
+
+    for (char ch : url) {
+        unsigned char uc = static_cast<unsigned char>(ch);
+        if (uc <= 0x1F || uc == 0x7F || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+            return false;
+        }
+    }
+
+    std::string_view rest(url.data() + scheme_len, url.size() - scheme_len);
+    size_t authority_end = rest.find_first_of("/?#");
+    std::string_view authority = (authority_end == std::string_view::npos)
+                                     ? rest
+                                     : rest.substr(0, authority_end);
+
+    if (authority.empty() ||
+        authority[0] == ':' ||
+        authority[0] == '.' ||
+        authority.find('@') != std::string_view::npos ||
+        authority.find('\\') != std::string_view::npos) {
+        return false;
+    }
+
+    return true;
+}
+
+bool sanitize_profile_fields(DnsProfile& p, bool log_warnings, const char* caller_name) {
+    bool modified = false;
+
+    if (!p.primary_ipv4.empty() && !quickdns::DnsManager::is_valid_ipv4(p.primary_ipv4)) {
+        if (log_warnings) {
+            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid primary_ipv4 in "
+                       << QuickDns::Encoding::utf8_to_wide(caller_name) << L" cleared.\n";
+        }
+        p.primary_ipv4.clear();
+        modified = true;
+    }
+
+    if (!p.secondary_ipv4.empty() && !quickdns::DnsManager::is_valid_ipv4(p.secondary_ipv4)) {
+        if (log_warnings) {
+            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid secondary_ipv4 in "
+                       << QuickDns::Encoding::utf8_to_wide(caller_name) << L" cleared.\n";
+        }
+        p.secondary_ipv4.clear();
+        modified = true;
+    }
+
+    if (!p.primary_ipv6.empty() && !quickdns::DnsManager::is_valid_ipv6(p.primary_ipv6)) {
+        if (log_warnings) {
+            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid primary_ipv6 in "
+                       << QuickDns::Encoding::utf8_to_wide(caller_name) << L" cleared.\n";
+        }
+        p.primary_ipv6.clear();
+        modified = true;
+    }
+
+    if (!p.secondary_ipv6.empty() && !quickdns::DnsManager::is_valid_ipv6(p.secondary_ipv6)) {
+        if (log_warnings) {
+            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid secondary_ipv6 in "
+                       << QuickDns::Encoding::utf8_to_wide(caller_name) << L" cleared.\n";
+        }
+        p.secondary_ipv6.clear();
+        modified = true;
+    }
+
+    if (!p.doh_template.empty()) {
+        std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(p.doh_template);
+        if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
+            if (log_warnings) {
+                std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid doh_template in "
+                           << QuickDns::Encoding::utf8_to_wide(caller_name) << L" cleared: " << w_doh << L"\n";
+            }
+            p.doh_template.clear();
+            modified = true;
+        }
+    }
+
+    if (!p.website_url.empty() && !is_valid_website_url(p.website_url)) {
+        if (log_warnings) {
+            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid website_url in "
+                       << QuickDns::Encoding::utf8_to_wide(caller_name) << L" cleared.\n";
+        }
+        p.website_url.clear();
+        modified = true;
+    }
+
+    std::vector<std::string> clean_pool;
+    clean_pool.reserve(std::min(p.ip_pool.size(), ConfigManager::MAX_IP_POOL_SIZE));
+    for (const auto& ip : p.ip_pool) {
+        if (ip.empty() || !quickdns::DnsManager::is_valid_ipv4(ip)) {
+            modified = true;
+            continue;
+        }
+        if (std::find(clean_pool.begin(), clean_pool.end(), ip) != clean_pool.end()) {
+            modified = true;
+            continue;
+        }
+        if (clean_pool.size() >= ConfigManager::MAX_IP_POOL_SIZE) {
+            modified = true;
+            continue;
+        }
+        clean_pool.push_back(ip);
+    }
+    if (clean_pool != p.ip_pool) {
+        p.ip_pool = std::move(clean_pool);
+        modified = true;
+    }
+
+    return modified;
+}
+
+bool sync_active_ipv4_into_pool(DnsProfile& p) {
+    if (p.is_dhcp) {
+        return false;
+    }
+
+    bool modified = false;
+    auto ensure_in_pool = [&](const std::string& ip) {
+        if (ip.empty() || !quickdns::DnsManager::is_valid_ipv4(ip)) {
+            return;
+        }
+        if (std::find(p.ip_pool.begin(), p.ip_pool.end(), ip) != p.ip_pool.end()) {
+            return;
+        }
+        if (p.ip_pool.size() >= ConfigManager::MAX_IP_POOL_SIZE) {
+            for (auto it = p.ip_pool.end(); it != p.ip_pool.begin();) {
+                --it;
+                if (*it != p.primary_ipv4 && *it != p.secondary_ipv4) {
+                    p.ip_pool.erase(it);
+                    break;
+                }
+            }
+        }
+        if (p.ip_pool.size() < ConfigManager::MAX_IP_POOL_SIZE) {
+            p.ip_pool.push_back(ip);
+            modified = true;
+        }
+    };
+
+    ensure_in_pool(p.primary_ipv4);
+    ensure_in_pool(p.secondary_ipv4);
+    return modified;
+}
+
+bool has_env_var(const wchar_t* name) {
+    return GetEnvironmentVariableW(name, nullptr, 0) > 0;
+}
+
+std::filesystem::path get_executable_directory() {
+    std::wstring buf(MAX_PATH, L'\0');
+    while (buf.size() <= 32768) {
+        DWORD len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (len == 0) {
+            break;
+        }
+        if (len < buf.size()) {
+            buf.resize(len);
+            std::filesystem::path exe_path(buf);
+            if (exe_path.has_parent_path()) {
+                return exe_path.parent_path();
+            }
+            break;
+        }
+        buf.resize(buf.size() * 2, L'\0');
+    }
+    return {};
+}
+
+void clear_readonly_attribute(const std::filesystem::path& p) {
+    DWORD attrs = GetFileAttributesW(p.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY) != 0) {
+        DWORD next_attrs = attrs & ~FILE_ATTRIBUTE_READONLY;
+        if (next_attrs == 0) next_attrs = FILE_ATTRIBUTE_NORMAL;
+        SetFileAttributesW(p.c_str(), next_attrs);
+    }
+}
+
+bool backup_corrupt_config(const std::filesystem::path& config_path, std::filesystem::path& out_broken_path) {
+    auto now = std::chrono::system_clock::now();
+    auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+
+    std::filesystem::path broken_path = config_path;
+    broken_path += L".broken-" + std::to_wstring(sec);
+
+    std::error_code ec;
+    if (std::filesystem::exists(broken_path, ec)) {
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        broken_path = config_path;
+        broken_path += L".broken-" + std::to_wstring(ms);
+    }
+
+    clear_readonly_attribute(config_path);
+    if (MoveFileExW(config_path.c_str(), broken_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        out_broken_path = std::move(broken_path);
+        return true;
+    }
+
+    if (CopyFileW(config_path.c_str(), broken_path.c_str(), FALSE)) {
+        DeleteFileW(config_path.c_str());
+        out_broken_path = std::move(broken_path);
+        return true;
+    }
+
+    return false;
+}
+
+void notify_corrupt_config_unlocked(const std::filesystem::path& broken_path) {
+    bool is_ci_or_test = (has_env_var(L"CI") ||
+                          has_env_var(L"GITHUB_ACTIONS") ||
+                          has_env_var(L"TESTING"));
+    if (!is_ci_or_test && GetConsoleWindow() == nullptr) {
+        std::wstring warn = L"Обнаружена ошибка в файле конфигурации profiles.json. Файл переименован в " +
+                            broken_path.filename().wstring() + L", созданы настройки по умолчанию.";
+        MessageBoxW(nullptr, warn.c_str(), L"QuickDNS - Ошибка конфигурации", MB_OK | MB_ICONWARNING);
+    }
+}
+
+bool parse_profile_from_json_object(const json& j, DnsProfile& p, bool* out_was_sanitized) {
+    bool sanitized = false;
+
+    auto get_str = [&](const char* key) -> std::string {
+        if (j.contains(key)) {
+            if (j[key].is_string()) {
+                return j[key].get<std::string>();
+            }
+            if (!j[key].is_null()) {
+                sanitized = true;
+            }
+        }
+        return "";
+    };
+
+    auto get_bool = [&](const char* key, bool def = false) -> bool {
+        if (j.contains(key)) {
+            if (j[key].is_boolean()) {
+                return j[key].get<bool>();
+            }
+            sanitized = true;
+        }
+        return def;
+    };
+
+    p.id = get_str("id");
+    p.name = get_str("name");
+    p.description = get_str("description");
+    p.primary_ipv4 = get_str("primary_ipv4");
+    p.secondary_ipv4 = get_str("secondary_ipv4");
+    p.primary_ipv6 = get_str("primary_ipv6");
+    p.secondary_ipv6 = get_str("secondary_ipv6");
+    p.doh_template = get_str("doh_template");
+    p.is_builtin = get_bool("is_builtin", false);
+    p.is_dhcp = get_bool("is_dhcp", false);
+    p.is_smart_dns = get_bool("is_smart_dns", false);
+    p.website_url = get_str("website_url");
+    p.unblocked_summary = get_str("unblocked_summary");
+    p.ip_pool.clear();
+
+    if (j.contains("ip_pool")) {
+        if (j["ip_pool"].is_array()) {
+            for (const auto& item : j["ip_pool"]) {
+                if (item.is_string()) {
+                    p.ip_pool.push_back(item.get<std::string>());
+                } else {
+                    sanitized = true;
+                }
+            }
+        } else {
+            sanitized = true;
+        }
+    }
+
+    if (sanitize_profile_fields(p, false, "from_json")) {
+        sanitized = true;
+    }
+
+    if (out_was_sanitized) {
+        *out_was_sanitized = sanitized;
+    }
+    return !p.id.empty();
+}
+
+} // namespace
 
 void to_json(json& j, const DnsProfile& p) {
     j = json{
@@ -33,47 +349,11 @@ void to_json(json& j, const DnsProfile& p) {
 }
 
 void from_json(const json& j, DnsProfile& p) {
-    auto get_str = [&j](const char* key) -> std::string {
-        if (j.contains(key) && j[key].is_string()) {
-            return j[key].get<std::string>();
-        }
-        return "";
-    };
-    auto get_bool = [&j](const char* key, bool def = false) -> bool {
-        if (j.contains(key) && j[key].is_boolean()) {
-            return j[key].get<bool>();
-        }
-        return def;
-    };
-
-    p.id = get_str("id");
-    p.name = get_str("name");
-    p.description = get_str("description");
-    p.primary_ipv4 = get_str("primary_ipv4");
-    p.secondary_ipv4 = get_str("secondary_ipv4");
-    p.primary_ipv6 = get_str("primary_ipv6");
-    p.secondary_ipv6 = get_str("secondary_ipv6");
-    p.doh_template = get_str("doh_template");
-    p.is_builtin = get_bool("is_builtin", false);
-    p.is_dhcp = get_bool("is_dhcp", false);
-    p.is_smart_dns = get_bool("is_smart_dns", false);
-    p.website_url = get_str("website_url");
-    p.unblocked_summary = get_str("unblocked_summary");
-    p.ip_pool.clear();
-    if (j.contains("ip_pool") && j["ip_pool"].is_array()) {
-        for (const auto& item : j["ip_pool"]) {
-            if (item.is_string()) {
-                std::string ip = item.get<std::string>();
-                if (!ip.empty() && std::find(p.ip_pool.begin(), p.ip_pool.end(), ip) == p.ip_pool.end()) {
-                    p.ip_pool.push_back(ip);
-                }
-            }
-        }
+    if (!j.is_object()) {
+        p = DnsProfile{};
+        return;
     }
-}
-
-namespace {
-thread_local bool g_migrated_on_load = false;
+    parse_profile_from_json_object(j, p, nullptr);
 }
 
 ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
@@ -83,44 +363,37 @@ ConfigManager::ConfigManager(const std::filesystem::path& config_path) {
         m_config_path = config_path;
     }
 
-    bool loaded = load_from_file();
-
-    bool needs_reset = false;
-    if (loaded) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        for (const auto& p : m_profiles) {
-            if (p.name.find("\xEF\xBF\xBD") != std::string::npos ||
-                p.description.find("\xEF\xBF\xBD") != std::string::npos) {
-                needs_reset = true;
-                break;
-            }
-        }
-    }
-
-    if (!loaded || needs_reset) {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_profiles = get_default_presets();
-            m_active_profile_id = "dhcp";
-        }
-        save_to_file();
-    } else if (g_migrated_on_load) {
-        save_to_file();
-    }
+    load_from_file();
 }
 
 std::filesystem::path ConfigManager::resolve_default_config_path() {
     PWSTR roamingPath = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &roamingPath))) {
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &roamingPath);
+    if (SUCCEEDED(hr) && roamingPath != nullptr && roamingPath[0] != L'\0') {
         std::filesystem::path p = std::filesystem::path(roamingPath) / L"QuickDNS" / L"profiles.json";
         CoTaskMemFree(roamingPath);
         return p;
     }
-    const wchar_t* wAppData = _wgetenv(L"APPDATA");
-    if (wAppData) {
-        return std::filesystem::path(wAppData) / L"QuickDNS" / L"profiles.json";
+    if (roamingPath != nullptr) {
+        CoTaskMemFree(roamingPath);
     }
-    return std::filesystem::path("profiles.json");
+
+    DWORD appDataLen = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
+    if (appDataLen > 1) {
+        std::wstring appData(appDataLen - 1, L'\0');
+        DWORD written = GetEnvironmentVariableW(L"APPDATA", appData.data(), appDataLen);
+        if (written > 0 && appData[0] != L'\0') {
+            appData.resize(written);
+            return std::filesystem::path(appData) / L"QuickDNS" / L"profiles.json";
+        }
+    }
+
+    std::filesystem::path exeDir = get_executable_directory();
+    if (!exeDir.empty()) {
+        return exeDir / L"profiles.json";
+    }
+
+    return std::filesystem::path(L"profiles.json");
 }
 
 std::filesystem::path ConfigManager::get_config_file_path() const {
@@ -150,7 +423,7 @@ std::string ConfigManager::get_active_profile_id() const {
 
 void ConfigManager::set_active_profile_id(const std::string& id) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_active_profile_id = id;
+    m_active_profile_id = id.empty() ? "dhcp" : id;
 }
 
 std::string ConfigManager::get_theme_mode() const {
@@ -165,40 +438,58 @@ void ConfigManager::set_theme_mode(const std::string& theme) {
 
 bool ConfigManager::add_profile(const DnsProfile& profile) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (profile.id.empty()) return false;
-
-    DnsProfile clean_profile = profile;
-    if (!clean_profile.doh_template.empty()) {
-        std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(clean_profile.doh_template);
-        if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
-            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid doh_template in add_profile cleared: " << w_doh << L"\n";
-            clean_profile.doh_template.clear();
-        }
+    if (profile.id.empty()) {
+        return false;
     }
 
     for (const auto& p : m_profiles) {
-        if (p.id == clean_profile.id) {
+        if (p.id == profile.id) {
+            return false;
+        }
+    }
+    for (const auto& def : get_default_presets()) {
+        if (def.id == profile.id) {
             return false;
         }
     }
 
-    m_profiles.push_back(clean_profile);
+    DnsProfile clean_profile = profile;
+    clean_profile.is_builtin = false;
+    clean_profile.is_dhcp = false;
+    sanitize_profile_fields(clean_profile, true, "add_profile");
+    sync_active_ipv4_into_pool(clean_profile);
+
+    m_profiles.push_back(std::move(clean_profile));
     return true;
 }
 
 bool ConfigManager::update_profile(const DnsProfile& profile) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    DnsProfile clean_profile = profile;
-    if (!clean_profile.doh_template.empty()) {
-        std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(clean_profile.doh_template);
-        if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
-            std::wcerr << L"[QuickDNS::ConfigManager] WARNING: Invalid doh_template in update_profile cleared: " << w_doh << L"\n";
-            clean_profile.doh_template.clear();
-        }
+    if (profile.id.empty()) {
+        return false;
     }
+
     for (auto& p : m_profiles) {
-        if (p.id == clean_profile.id) {
-            p = clean_profile;
+        if (p.id == profile.id) {
+            DnsProfile clean_profile = profile;
+            clean_profile.is_builtin = p.is_builtin;
+            clean_profile.is_dhcp = p.is_dhcp;
+
+            if (clean_profile.is_dhcp) {
+                clean_profile.primary_ipv4.clear();
+                clean_profile.secondary_ipv4.clear();
+                clean_profile.primary_ipv6.clear();
+                clean_profile.secondary_ipv6.clear();
+                clean_profile.doh_template.clear();
+                clean_profile.ip_pool.clear();
+                clean_profile.is_smart_dns = false;
+                sanitize_profile_fields(clean_profile, true, "update_profile");
+            } else {
+                sanitize_profile_fields(clean_profile, true, "update_profile");
+                sync_active_ipv4_into_pool(clean_profile);
+            }
+
+            p = std::move(clean_profile);
             return true;
         }
     }
@@ -209,8 +500,21 @@ bool ConfigManager::delete_profile(const std::string& id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto it = m_profiles.begin(); it != m_profiles.end(); ++it) {
         if (it->id == id) {
-            if (it->is_builtin) return false;
+            if (it->is_builtin) {
+                return false;
+            }
             m_profiles.erase(it);
+
+            bool active_exists = false;
+            for (const auto& p : m_profiles) {
+                if (p.id == m_active_profile_id) {
+                    active_exists = true;
+                    break;
+                }
+            }
+            if (!active_exists) {
+                m_active_profile_id = "dhcp";
+            }
             return true;
         }
     }
@@ -511,6 +815,8 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
 }
 
 bool ConfigManager::save_to_file() {
+    std::lock_guard<std::mutex> save_lock(m_save_mutex);
+
     std::string active_id;
     std::string theme;
     std::vector<DnsProfile> profiles_copy;
@@ -526,7 +832,8 @@ bool ConfigManager::save_to_file() {
 
     try {
         if (path.has_parent_path()) {
-            std::filesystem::create_directories(path.parent_path());
+            std::error_code dir_ec;
+            std::filesystem::create_directories(path.parent_path(), dir_ec);
         }
 
         json root;
@@ -537,10 +844,14 @@ bool ConfigManager::save_to_file() {
             root["profiles"].push_back(p);
         }
 
-        std::string json_str = root.dump(2);
+        std::string json_str = root.dump(2, ' ', false, json::error_handler_t::replace);
+        if (json_str.size() > static_cast<size_t>(MAXDWORD)) {
+            return false;
+        }
 
         std::filesystem::path tmp_path = path;
         tmp_path += L".tmp";
+        clear_readonly_attribute(tmp_path);
 
         HANDLE hFile = CreateFileW(
             tmp_path.c_str(),
@@ -565,7 +876,7 @@ bool ConfigManager::save_to_file() {
             nullptr
         );
 
-        if (!write_ok || bytes_written != json_str.size()) {
+        if (!write_ok || bytes_written != static_cast<DWORD>(json_str.size())) {
             CloseHandle(hFile);
             DeleteFileW(tmp_path.c_str());
             return false;
@@ -574,8 +885,16 @@ bool ConfigManager::save_to_file() {
         FlushFileBuffers(hFile);
         CloseHandle(hFile);
 
-        if (std::filesystem::exists(path)) {
-            if (!ReplaceFileW(path.c_str(), tmp_path.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr)) {
+        clear_readonly_attribute(path);
+        std::error_code exists_ec;
+        if (std::filesystem::exists(path, exists_ec)) {
+            if (!ReplaceFileW(
+                    path.c_str(),
+                    tmp_path.c_str(),
+                    nullptr,
+                    REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS,
+                    nullptr,
+                    nullptr)) {
                 if (!MoveFileExW(tmp_path.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
                     DeleteFileW(tmp_path.c_str());
                     return false;
@@ -595,147 +914,339 @@ bool ConfigManager::save_to_file() {
 }
 
 bool ConfigManager::load_from_file() {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    g_migrated_on_load = false;
+    std::filesystem::path path;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        path = m_config_path;
+    }
+
+    auto ensure_defaults_in_memory = [this](bool force_reset) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (force_reset || m_profiles.empty()) {
+            m_profiles = get_default_presets();
+            m_active_profile_id = "dhcp";
+            m_theme_mode = "dark";
+        }
+    };
+
+    auto handle_corrupt_file = [&](const std::filesystem::path& target_path) -> bool {
+        std::filesystem::path broken_path;
+        bool backed_up = backup_corrupt_config(target_path, broken_path);
+        ensure_defaults_in_memory(true);
+        if (backed_up) {
+            notify_corrupt_config_unlocked(broken_path);
+            save_to_file();
+        }
+        return false;
+    };
+
+    // 1. Open file with transient share-lock retries (5 x 50 ms)
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    DWORD open_err = ERROR_SUCCESS;
+    for (int attempt = 0; attempt <= 5; ++attempt) {
+        hFile = CreateFileW(
+            path.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+            nullptr
+        );
+        if (hFile != INVALID_HANDLE_VALUE) {
+            open_err = ERROR_SUCCESS;
+            break;
+        }
+        open_err = GetLastError();
+        if (open_err == ERROR_FILE_NOT_FOUND || open_err == ERROR_PATH_NOT_FOUND) {
+            break;
+        }
+        if (open_err != ERROR_SHARING_VIOLATION && open_err != ERROR_LOCK_VIOLATION) {
+            break;
+        }
+        if (attempt < 5) {
+            Sleep(50);
+        }
+    }
+
+    if (hFile == INVALID_HANDLE_VALUE) {
+        if (open_err == ERROR_FILE_NOT_FOUND || open_err == ERROR_PATH_NOT_FOUND) {
+            // File does not exist: initialize default presets and persist to disk
+            ensure_defaults_in_memory(true);
+            save_to_file();
+            return true;
+        }
+        // Transient lock or permission error: keep disk file untouched
+        ensure_defaults_in_memory(false);
+        return false;
+    }
+
+    // 2. Validate file size (cap at 4 MB) and read contents
+    LARGE_INTEGER file_size = {};
+    if (!GetFileSizeEx(hFile, &file_size) || file_size.QuadPart < 0) {
+        CloseHandle(hFile);
+        ensure_defaults_in_memory(false);
+        return false;
+    }
+
+    if (file_size.QuadPart == 0 ||
+        static_cast<uint64_t>(file_size.QuadPart) > MAX_CONFIG_FILE_BYTES) {
+        CloseHandle(hFile);
+        return handle_corrupt_file(path);
+    }
+
+    std::string content;
     try {
-        if (!std::filesystem::exists(m_config_path)) {
-            return false;
-        }
-
-        std::ifstream file(m_config_path, std::ios::in | std::ios::binary);
-        if (!file.is_open()) return false;
-
-        std::string content((std::istreambuf_iterator<char>(file)),
-                             std::istreambuf_iterator<char>());
-        file.close();
-
-        json root;
-        try {
-            root = json::parse(content);
-        } catch (const std::exception&) {
-            auto now = std::chrono::system_clock::now();
-            auto ts = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-            std::filesystem::path broken_path = m_config_path;
-            broken_path += L".broken-" + std::to_wstring(ts);
-
-            std::error_code ec;
-            std::filesystem::rename(m_config_path, broken_path, ec);
-
-            std::wstring warn = L"Обнаружена ошибка в файле конфигурации profiles.json. Файл переименован в " +
-                                broken_path.filename().wstring() + L", созданы настройки по умолчанию.";
-            bool is_ci_or_test = (std::getenv("CI") != nullptr ||
-                                  std::getenv("GITHUB_ACTIONS") != nullptr ||
-                                  std::getenv("TESTING") != nullptr);
-            if (!is_ci_or_test && GetConsoleWindow() == nullptr) {
-                MessageBoxW(nullptr, warn.c_str(), L"QuickDNS - Ошибка конфигурации", MB_OK | MB_ICONWARNING);
-            }
-            return false;
-        }
-
-        if (root.contains("active_profile_id") && root["active_profile_id"].is_string()) {
-            m_active_profile_id = root["active_profile_id"].get<std::string>();
-        }
-
-        if (root.contains("theme") && root["theme"].is_string()) {
-            std::string t = root["theme"].get<std::string>();
-            m_theme_mode = (t == "light") ? "light" : "dark";
-        }
-
-        if (root.contains("profiles") && root["profiles"].is_array()) {
-            std::vector<DnsProfile> loaded;
-            for (const auto& item : root["profiles"]) {
-                if (item.is_object() && item.contains("id") && item["id"].is_string()) {
-                    DnsProfile p = item.get<DnsProfile>();
-                    if (!p.id.empty()) {
-                        if (!p.doh_template.empty()) {
-                            std::wstring w_doh = QuickDns::Encoding::utf8_to_wide(p.doh_template);
-                            if (!quickdns::DnsManager::is_valid_doh_template(w_doh)) {
-                                p.doh_template.clear();
-                            }
-                        }
-                        loaded.push_back(p);
-                    }
-                }
-            }
-            if (!loaded.empty()) {
-                auto defaultPresets = get_default_presets();
-                for (auto& p : loaded) {
-                    for (const auto& def : defaultPresets) {
-                        if (def.id == p.id) {
-                            p.is_builtin = true;
-                            for (const auto& def_ip : def.ip_pool) {
-                                if (!def_ip.empty() &&
-                                    std::find(p.ip_pool.begin(), p.ip_pool.end(), def_ip) == p.ip_pool.end()) {
-                                    p.ip_pool.push_back(def_ip);
-                                    g_migrated_on_load = true;
-                                }
-                            }
-                            bool primary_in_pool = !p.primary_ipv4.empty() &&
-                                std::find(p.ip_pool.begin(), p.ip_pool.end(), p.primary_ipv4) != p.ip_pool.end();
-                            if ((!primary_in_pool && p.primary_ipv4 != def.primary_ipv4) ||
-                                p.doh_template != def.doh_template ||
-                                p.name != def.name ||
-                                p.description != def.description ||
-                                p.is_smart_dns != def.is_smart_dns ||
-                                p.website_url != def.website_url ||
-                                p.unblocked_summary != def.unblocked_summary) {
-                                if (!primary_in_pool) {
-                                    p.primary_ipv4 = def.primary_ipv4;
-                                    p.secondary_ipv4 = def.secondary_ipv4;
-                                }
-                                p.primary_ipv6 = def.primary_ipv6;
-                                p.secondary_ipv6 = def.secondary_ipv6;
-                                p.doh_template = def.doh_template;
-                                p.name = def.name;
-                                p.description = def.description;
-                                p.is_smart_dns = def.is_smart_dns;
-                                p.website_url = def.website_url;
-                                p.unblocked_summary = def.unblocked_summary;
-                                g_migrated_on_load = true;
-                            }
-                            break;
-                        }
-                    }
-                }
-                for (size_t i = 0; i < defaultPresets.size(); ++i) {
-                    const auto& def = defaultPresets[i];
-                    bool found = false;
-                    for (const auto& p : loaded) {
-                        if (p.id == def.id) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        bool inserted = false;
-                        if (i > 0) {
-                            const std::string& prev_id = defaultPresets[i - 1].id;
-                            for (auto it = loaded.begin(); it != loaded.end(); ++it) {
-                                if (it->id == prev_id) {
-                                    loaded.insert(it + 1, def);
-                                    inserted = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!inserted) {
-                            if (!loaded.empty() && loaded.back().id == "dhcp") {
-                                loaded.insert(loaded.end() - 1, def);
-                            } else {
-                                loaded.push_back(def);
-                            }
-                        }
-                        g_migrated_on_load = true;
-                    }
-                }
-
-                m_profiles = std::move(loaded);
-                return true;
-            }
-        }
-
-        return false;
+        content.resize(static_cast<size_t>(file_size.QuadPart));
     } catch (...) {
+        CloseHandle(hFile);
+        ensure_defaults_in_memory(false);
         return false;
+    }
+
+    size_t total_read = 0;
+    bool read_ok = true;
+    while (total_read < content.size()) {
+        DWORD to_read = static_cast<DWORD>(std::min<size_t>(content.size() - total_read, 65536));
+        DWORD bytes_read = 0;
+        if (!ReadFile(hFile, content.data() + total_read, to_read, &bytes_read, nullptr)) {
+            read_ok = false;
+            break;
+        }
+        if (bytes_read == 0) {
+            break;
+        }
+        total_read += bytes_read;
+    }
+    CloseHandle(hFile);
+
+    if (!read_ok) {
+        // I/O read error: do not overwrite existing disk file
+        ensure_defaults_in_memory(false);
+        return false;
+    }
+    content.resize(total_read);
+    if (content.empty()) {
+        return handle_corrupt_file(path);
+    }
+
+    // 3. Parse JSON and validate schema/invariants outside m_mutex
+    try {
+        json root = json::parse(content);
+        if (!root.is_object() || !root.contains("profiles") || !root["profiles"].is_array()) {
+            return handle_corrupt_file(path);
+        }
+
+        bool migrated = false;
+
+        std::string active_id = "dhcp";
+        if (root.contains("active_profile_id") && root["active_profile_id"].is_string()) {
+            active_id = root["active_profile_id"].get<std::string>();
+            if (active_id.empty()) {
+                active_id = "dhcp";
+                migrated = true;
+            }
+        } else {
+            migrated = true;
+        }
+
+        std::string theme = "dark";
+        if (root.contains("theme") && root["theme"].is_string()) {
+            std::string raw_theme = root["theme"].get<std::string>();
+            if (raw_theme == "light" || raw_theme == "dark") {
+                theme = raw_theme;
+            } else {
+                migrated = true;
+            }
+        } else {
+            migrated = true;
+        }
+
+        std::vector<DnsProfile> loaded;
+        for (const auto& item : root["profiles"]) {
+            if (!item.is_object() || !item.contains("id") || !item["id"].is_string()) {
+                migrated = true;
+                continue;
+            }
+
+            DnsProfile p;
+            bool was_sanitized = false;
+            if (!parse_profile_from_json_object(item, p, &was_sanitized)) {
+                migrated = true;
+                continue;
+            }
+            if (was_sanitized) {
+                migrated = true;
+            }
+
+            // Deduplicate profile IDs (preserve first occurrence)
+            bool duplicate_id = false;
+            for (const auto& existing : loaded) {
+                if (existing.id == p.id) {
+                    duplicate_id = true;
+                    break;
+                }
+            }
+            if (duplicate_id) {
+                migrated = true;
+                continue;
+            }
+
+            loaded.push_back(std::move(p));
+        }
+
+        if (loaded.empty()) {
+            return handle_corrupt_file(path);
+        }
+
+        const auto defaultPresets = get_default_presets();
+        for (auto& p : loaded) {
+            const DnsProfile* matched_def = nullptr;
+            for (const auto& def : defaultPresets) {
+                if (def.id == p.id) {
+                    matched_def = &def;
+                    break;
+                }
+            }
+
+            if (matched_def == nullptr) {
+                // Non-preset custom profile: enforce custom invariants and sync IPs into ip_pool
+                if (p.is_builtin || p.is_dhcp) {
+                    p.is_builtin = false;
+                    p.is_dhcp = false;
+                    migrated = true;
+                }
+                if (sync_active_ipv4_into_pool(p)) {
+                    migrated = true;
+                }
+            } else {
+                const DnsProfile& def = *matched_def;
+                if (!p.is_builtin || p.is_dhcp != def.is_dhcp) {
+                    p.is_builtin = true;
+                    p.is_dhcp = def.is_dhcp;
+                    migrated = true;
+                }
+
+                if (def.is_dhcp) {
+                    if (p != def) {
+                        p = def;
+                        migrated = true;
+                    }
+                } else {
+                    for (const auto& def_ip : def.ip_pool) {
+                        if (!def_ip.empty() &&
+                            std::find(p.ip_pool.begin(), p.ip_pool.end(), def_ip) == p.ip_pool.end()) {
+                            if (p.ip_pool.size() < MAX_IP_POOL_SIZE) {
+                                p.ip_pool.push_back(def_ip);
+                                migrated = true;
+                            }
+                        }
+                    }
+
+                    bool primary_in_pool = !p.primary_ipv4.empty() &&
+                        std::find(p.ip_pool.begin(), p.ip_pool.end(), p.primary_ipv4) != p.ip_pool.end();
+
+                    if (!primary_in_pool) {
+                        if (p.primary_ipv4 != def.primary_ipv4 || p.secondary_ipv4 != def.secondary_ipv4) {
+                            p.primary_ipv4 = def.primary_ipv4;
+                            p.secondary_ipv4 = def.secondary_ipv4;
+                            migrated = true;
+                        }
+                    } else if (!p.secondary_ipv4.empty()) {
+                        bool secondary_in_pool = (p.secondary_ipv4 != p.primary_ipv4) &&
+                            std::find(p.ip_pool.begin(), p.ip_pool.end(), p.secondary_ipv4) != p.ip_pool.end();
+                        if (!secondary_in_pool) {
+                            if (!def.secondary_ipv4.empty() && def.secondary_ipv4 != p.primary_ipv4) {
+                                p.secondary_ipv4 = def.secondary_ipv4;
+                            } else if (!def.primary_ipv4.empty() && def.primary_ipv4 != p.primary_ipv4) {
+                                p.secondary_ipv4 = def.primary_ipv4;
+                            } else {
+                                p.secondary_ipv4.clear();
+                            }
+                            migrated = true;
+                        }
+                    }
+
+                    if (p.primary_ipv6 != def.primary_ipv6 ||
+                        p.secondary_ipv6 != def.secondary_ipv6 ||
+                        p.doh_template != def.doh_template ||
+                        p.name != def.name ||
+                        p.description != def.description ||
+                        p.is_smart_dns != def.is_smart_dns ||
+                        p.website_url != def.website_url ||
+                        p.unblocked_summary != def.unblocked_summary) {
+                        p.primary_ipv6 = def.primary_ipv6;
+                        p.secondary_ipv6 = def.secondary_ipv6;
+                        p.doh_template = def.doh_template;
+                        p.name = def.name;
+                        p.description = def.description;
+                        p.is_smart_dns = def.is_smart_dns;
+                        p.website_url = def.website_url;
+                        p.unblocked_summary = def.unblocked_summary;
+                        migrated = true;
+                    }
+                }
+            }
+        }
+
+        // Ensure all built-in presets exist in canonical order
+        for (size_t i = 0; i < defaultPresets.size(); ++i) {
+            const auto& def = defaultPresets[i];
+            bool found = false;
+            for (const auto& p : loaded) {
+                if (p.id == def.id) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                bool inserted = false;
+                if (i > 0) {
+                    const std::string& prev_id = defaultPresets[i - 1].id;
+                    for (auto it = loaded.begin(); it != loaded.end(); ++it) {
+                        if (it->id == prev_id) {
+                            loaded.insert(it + 1, def);
+                            inserted = true;
+                            break;
+                        }
+                    }
+                }
+                if (!inserted) {
+                    if (!loaded.empty() && loaded.back().id == "dhcp") {
+                        loaded.insert(loaded.end() - 1, def);
+                    } else {
+                        loaded.push_back(def);
+                    }
+                }
+                migrated = true;
+            }
+        }
+
+        // Verify active_profile_id references an existing loaded profile
+        bool active_found = false;
+        for (const auto& p : loaded) {
+            if (p.id == active_id) {
+                active_found = true;
+                break;
+            }
+        }
+        if (!active_found) {
+            active_id = "dhcp";
+            migrated = true;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_profiles = std::move(loaded);
+            m_active_profile_id = std::move(active_id);
+            m_theme_mode = std::move(theme);
+        }
+
+        if (migrated) {
+            save_to_file();
+        }
+        return true;
+    } catch (...) {
+        return handle_corrupt_file(path);
     }
 }

@@ -18,15 +18,21 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout Source
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
 
     - name: Set up MSVC
       uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
 
     - name: Configure CMake
-      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -S . -A x64 -DCMAKE_BUILD_TYPE=Release
 
     - name: Build Application & Tests
       run: cmake --build build --config Release
@@ -38,30 +44,42 @@ jobs:
     - name: Package Release
       shell: pwsh
       run: |
-        Copy-Item -Path build/Release/QuickDNS.exe -Destination QuickDNS.exe -Force
-        (Get-FileHash build/Release/QuickDNS.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline QuickDNS.exe.sha256
-        ./scripts/package_release.ps1
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        Copy-Item -LiteralPath build/Release/QuickDNS.exe -Destination QuickDNS.exe -Force
+        (Get-FileHash -LiteralPath QuickDNS.exe -Algorithm SHA256).Hash.ToLowerInvariant() | Out-File -Encoding ascii -NoNewline -FilePath QuickDNS.exe.sha256
+        ./scripts/package_release.ps1 -ExePath "QuickDNS.exe"
         New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
-        Copy-Item -Path QuickDNS.exe -Destination release-artifacts/QuickDNS.exe -Force
-        Copy-Item -Path QuickDNS.exe.sha256 -Destination release-artifacts/QuickDNS.exe.sha256 -Force
-        Copy-Item -Path dist/*.zip -Destination release-artifacts/ -Force
-        Copy-Item -Path RELEASE_NOTES.md -Destination release-artifacts/RELEASE_NOTES.md -Force
+        Copy-Item -LiteralPath QuickDNS.exe -Destination release-artifacts/QuickDNS.exe -Force
+        Copy-Item -LiteralPath QuickDNS.exe.sha256 -Destination release-artifacts/QuickDNS.exe.sha256 -Force
+        Copy-Item -Path dist/QuickDNS-*-Portable.zip -Destination release-artifacts/ -Force
+        Copy-Item -LiteralPath RELEASE_NOTES.md -Destination release-artifacts/RELEASE_NOTES.md -Force
 
     - name: Upload Release Files
       uses: actions/upload-artifact@v4
       with:
         name: QuickDNS-Release-Files
         path: release-artifacts/*
+        if-no-files-found: error
 
   release:
     name: Publish Release
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
+    timeout-minutes: 20
     permissions:
       contents: write
+
     steps:
-    - uses: actions/download-artifact@v4
+    - name: Checkout Repository History
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Download Release Files
+      uses: actions/download-artifact@v4
       with:
         name: QuickDNS-Release-Files
         path: artifacts
@@ -70,15 +88,85 @@ jobs:
       shell: pwsh
       run: Get-ChildItem -Recurse artifacts
 
+    - name: Determine Release Metadata & Branch Ancestry
+      id: meta
+      shell: pwsh
+      env:
+        TAG_NAME: ${{ github.ref_name }}
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+
+        $tagName = $env:TAG_NAME
+        & git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to fetch origin/main for release ancestry verification."
+        }
+
+        $ErrorActionPreference = 'Continue'
+        & git merge-base --is-ancestor HEAD refs/remotes/origin/main
+        $ancestryCode = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+
+        $isOnMain = ($ancestryCode -eq 0)
+        $hasPrereleaseSuffix = ($tagName -match '-')
+
+        if ($isOnMain -and -not $hasPrereleaseSuffix) {
+            $isPrerelease = 'false'
+            $makeLatest = 'true'
+        } else {
+            $isPrerelease = 'true'
+            $makeLatest = 'false'
+        }
+
+        $releaseTitle = ""
+        $notesPath = "artifacts/RELEASE_NOTES.md"
+        if (Test-Path -LiteralPath $notesPath) {
+            foreach ($line in Get-Content -LiteralPath $notesPath -Encoding UTF8) {
+                if ($line -match '^\s*#+\s*(.+?)\s*$') {
+                    $candidate = $matches[1].Trim()
+                    if ($candidate -match 'v[0-9]+\.[0-9]+\.[0-9]+') {
+                        if ($candidate.Contains($tagName)) {
+                            $releaseTitle = $candidate
+                        }
+                    } elseif ($candidate.Length -gt 0) {
+                        $releaseTitle = $candidate
+                    }
+                    break
+                }
+            }
+        }
+
+        if (-not $releaseTitle) {
+            $ErrorActionPreference = 'Continue'
+            $tagSubject = (& git tag -l --format='%(contents:subject)' $tagName 2>$null | Select-Object -First 1)
+            $ErrorActionPreference = 'Stop'
+            if ($tagSubject -and $tagSubject.Trim().Length -gt 0) {
+                $releaseTitle = $tagSubject.Trim()
+            } else {
+                $releaseTitle = $tagName
+            }
+        }
+
+        $releaseTitle = ($releaseTitle -replace '[\r\n]+', ' ').Trim()
+        "title=$releaseTitle" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        "prerelease=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        "make_latest=$makeLatest" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        Write-Host "Release title: $releaseTitle"
+        Write-Host "Ancestry on origin/main: $isOnMain | prerelease: $isPrerelease | make_latest: $makeLatest"
+
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        name: QuickDNS v2.1.0 - AI Services Availability Checker (ChatGPT, Claude, Gemini, Copilot) & Direct TLS/DNS Probing
+        name: ${{ steps.meta.outputs.title }}
         body_path: artifacts/RELEASE_NOTES.md
+        prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+        make_latest: ${{ steps.meta.outputs.make_latest }}
+        fail_on_unmatched_files: true
         files: |
           artifacts/QuickDNS.exe
           artifacts/QuickDNS.exe.sha256
-          artifacts/*.zip
+          artifacts/QuickDNS-*-Portable.zip
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

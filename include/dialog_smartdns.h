@@ -6,6 +6,7 @@
 #include <vector>
 #include <optional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <atomic>
 #include "config_manager.h"
@@ -39,16 +40,6 @@ struct SmartDnsEntry {
 
 class SmartDnsDialog {
 public:
-    /**
-     * @brief Displays the SmartDNS Catalog & Unblocked Services modal dialog.
-     * @param hParent Parent window handle.
-     * @param hInstance Application instance.
-     * @param profiles Loaded DNS profiles.
-     * @param currentActiveId ID of currently active profile.
-     * @param isDarkMode Whether dark mode is enabled.
-     * @param pConfig Optional pointer to ConfigManager for dynamic IP updates.
-     * @return Selected profile ID if user clicked "Apply", std::nullopt otherwise.
-     */
     static std::optional<std::string> show(
         HWND hParent,
         HINSTANCE hInstance,
@@ -57,6 +48,9 @@ public:
         bool isDarkMode = true,
         ConfigManager* pConfig = nullptr
     );
+
+    int dp(int px) const;
+    float dpf(float px) const;
 
 private:
     SmartDnsDialog(
@@ -72,9 +66,12 @@ private:
     bool create_dialog_window();
     void apply_theme();
     void setup_fonts();
+    void apply_fonts_to_controls();
     void create_controls();
     void populate_smartdns_data(const std::vector<DnsProfile>& profiles);
     void update_filtered_list();
+    void update_action_buttons_state();
+    void stop_verify_worker();
     void on_apply_selected();
     void on_pick_ip_from_pool();
     void on_open_website(size_t index);
@@ -90,7 +87,8 @@ private:
 
     void reposition_controls();
     void recalculate_item_layouts();
-    int calculate_item_height(const SmartDnsEntry& entry, int cardWidth) const;
+    int calculate_item_height(Gdiplus::Graphics& g, const SmartDnsEntry& entry, int cardWidth) const;
+    Gdiplus::RectF get_website_pill_rect(Gdiplus::Graphics& g, int cardWidth, int cardY) const;
     int get_item_at_point(int mouseY, int& outItemY) const;
     void draw_card_item(Gdiplus::Graphics& g, size_t index, int y, int width, int height, bool isSelected, bool isHovered);
     void draw_custom_button(DRAWITEMSTRUCT* pDis);
@@ -107,10 +105,15 @@ private:
     HWND m_hBtnVerify = nullptr;
     HWND m_hBtnClose = nullptr;
 
+    UINT m_dpi = 96;
+
     ConfigManager* m_pConfig = nullptr;
-    bool m_isVerifying = false;
+    std::atomic<bool> m_isVerifying{false};
+    std::atomic<bool> m_cancelVerify{false};
     std::thread m_verifyThread;
-    std::atomic<bool> m_verifyCancelled{false};
+    std::mutex m_verifyMutex;
+    std::vector<SmartDnsVerificationResult> m_pendingVerifyResults;
+    bool m_hasVerifyResults = false;
 
     std::wstring m_statusText;
     bool m_searchEditFocused = false;
@@ -127,8 +130,22 @@ private:
     HFONT m_hFontSmall = nullptr;
     HFONT m_hFontSmallBold = nullptr;
 
+    // Cached GDI+ fonts for zero per-frame font allocations
+    std::unique_ptr<Gdiplus::FontFamily> m_gpFontFamily;
+    std::unique_ptr<Gdiplus::FontFamily> m_gpDisplayFamily;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderTitle;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderSub;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderLbl;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderStatus;
+    std::unique_ptr<Gdiplus::Font> m_gpCardTitle;
+    std::unique_ptr<Gdiplus::Font> m_gpCardBadge;
+    std::unique_ptr<Gdiplus::Font> m_gpCardSub;
+    std::unique_ptr<Gdiplus::Font> m_gpCardCatHeader;
+    std::unique_ptr<Gdiplus::Font> m_gpCardTag;
+    std::unique_ptr<Gdiplus::Font> m_gpCardLink;
+
     std::vector<SmartDnsEntry> m_allEntries;
-    std::vector<size_t> m_filteredIndices; // indices into m_allEntries
+    std::vector<size_t> m_filteredIndices;
     std::vector<int> m_itemHeights;
     std::vector<int> m_itemYPositions;
     int m_totalContentHeight = 0;
@@ -138,6 +155,7 @@ private:
     int m_selectedIndex = 0;
     int m_hoveredIndex = -1;
     int m_scrollOffset = 0;
+    int m_wheelAccum = 0;
     bool m_isDraggingScroll = false;
     bool m_scrollThumbHovered = false;
     int m_dragStartY = 0;

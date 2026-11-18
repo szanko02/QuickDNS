@@ -32,6 +32,9 @@ public:
         bool isDarkMode = true
     );
 
+    int dp(int px) const;
+    float dpf(float px) const;
+
 private:
     AiCheckDialog(
         HWND hParent,
@@ -45,8 +48,12 @@ private:
     bool create_dialog_window();
     void apply_theme();
     void setup_fonts();
+    void apply_fonts_to_controls();
     void create_controls();
     void reposition_controls();
+    int get_row_height() const;
+    int get_row_gap() const;
+    int get_row_step() const;
 
     void start_check();
     void stop_check();
@@ -76,6 +83,7 @@ private:
     HWND m_hBtnRecheck = nullptr;
     HWND m_hBtnClose = nullptr;
 
+    UINT m_dpi = 96;
     bool m_isDarkMode = true;
     HBRUSH m_hbrBg = nullptr;
     HBRUSH m_hbrCard = nullptr;
@@ -88,7 +96,12 @@ private:
     HFONT m_hFontSmallBold = nullptr;
 
     std::unique_ptr<Gdiplus::FontFamily> m_gpFontFamily;
+    std::unique_ptr<Gdiplus::FontFamily> m_gpDisplayFamily;
     std::unique_ptr<Gdiplus::FontFamily> m_gpMonoFamily;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderTitle;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderSub;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderBold;
+    std::unique_ptr<Gdiplus::Font> m_gpHeaderCol;
     std::unique_ptr<Gdiplus::Font> m_gpFontTitle;
     std::unique_ptr<Gdiplus::Font> m_gpFontSub;
     std::unique_ptr<Gdiplus::Font> m_gpFontBadge;
@@ -113,6 +126,7 @@ private:
     int m_selectedIndex = 0;
     int m_hoveredIndex = -1;
     int m_scrollOffset = 0;
+    int m_wheelAccum = 0;
     bool m_isDraggingScroll = false;
     bool m_scrollThumbHovered = false;
     int m_dragStartY = 0;
