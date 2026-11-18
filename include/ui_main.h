@@ -229,8 +229,10 @@ private:
     std::thread m_pingWorker;
     std::atomic<bool> m_stopPingWorker{false};
     std::atomic<bool> m_pingImmediate{false};
+    std::mutex m_pingMutex;
     std::mutex m_historyMutex;
     std::string m_pingTargetIp;
+    std::string m_pingTargetDoh;
     std::vector<int> m_latencyHistory;
     std::atomic<int> m_currentPingMs{-1};
 };

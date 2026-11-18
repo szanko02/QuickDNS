@@ -56,6 +56,15 @@ public:
     static int ping_dns_server_domain(const std::string& ip_str, const std::string& target_domain, int timeout_ms = 800);
 
     /**
+     * @brief Measures DNS-over-HTTPS (RFC 8484 HTTP/2 POST, with GET fallback) query latency in milliseconds.
+     * @param doh_url HTTPS DoH endpoint URL (e.g. "https://dns.dns-ai.ru/dns-query").
+     * @param domain Target domain to query (e.g. "google.com").
+     * @param timeout_ms Per-query timeout in milliseconds (default 2000ms).
+     * @return Latency in milliseconds, or -1 if unreachable/timed out.
+     */
+    static int ping_doh_server_domain(const std::string& doh_url, const std::string& domain, int timeout_ms = 2000);
+
+    /**
      * @brief Measures DNS query latency against a target DNS IP address in milliseconds.
      * Queries a pool of test domains (chatgpt.com, claude.ai, google.com).
      * @param ip_str IPv4 or IPv6 address of the DNS server.

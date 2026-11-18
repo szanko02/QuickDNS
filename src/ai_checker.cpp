@@ -19,6 +19,8 @@
 #include <bcrypt.h>
 
 #include "ai_checker.h"
+#include "smartdns_verifier.h"
+#include "app_updater.h"
 #include "encoding_utils.h"
 
 #ifdef _MSC_VER
@@ -1332,7 +1334,7 @@ std::string winhttp_fetch_text(
     }
 
     HINTERNET hSession = WinHttpOpen(
-        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) QuickDNS/2.3.0",
+        (std::wstring(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) QuickDNS/") + quickdns::APP_VERSION_W).c_str(),
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,
@@ -1506,6 +1508,541 @@ std::vector<std::string> query_dns_over_tcp(
 
     closesocket(sock);
     return quickdns::AiChecker::parse_dns_all_a_responses(resp_buf.data(), resp_buf.size(), txid);
+}
+
+constexpr size_t kMaxDohReplyBytes = 4096;
+
+bool read_winhttp_dns_body(
+    HINTERNET hRequest,
+    std::vector<uint8_t>& out_body,
+    const std::atomic<bool>* cancel_flag)
+{
+    out_body.clear();
+    out_body.reserve(512);
+    uint8_t chunk[1024];
+    DWORD bytes_read = 0;
+    while (true) {
+        if (is_cancelled(cancel_flag)) {
+            return false;
+        }
+        bytes_read = 0;
+        if (!WinHttpReadData(hRequest, chunk, sizeof(chunk), &bytes_read)) {
+            return false;
+        }
+        if (bytes_read == 0) {
+            break;
+        }
+        if (out_body.size() + bytes_read > kMaxDohReplyBytes) {
+            return false;
+        }
+        out_body.insert(out_body.end(), chunk, chunk + bytes_read);
+    }
+    return !out_body.empty();
+}
+
+// Performs a TLS 1.2/1.3 exchange via Windows Schannel directly against `server_ip:port`
+// using `host_sni` for SNI and X.509 certificate verification (bypasses poisoned/broken system DNS).
+std::string schannel_raw_exchange(
+    const std::string& server_ip,
+    uint16_t port,
+    const std::string& host_sni,
+    const std::string& send_payload,
+    bool is_dot_framing,
+    int timeout_ms,
+    const std::atomic<bool>* cancel_flag)
+{
+    if (is_cancelled(cancel_flag) || server_ip.empty() || host_sni.empty() ||
+        send_payload.empty() || timeout_ms <= 0 || has_unsafe_header_chars(host_sni)) {
+        return {};
+    }
+
+    uint8_t oa = 0, ob = 0, oc = 0, od = 0;
+    if (!quickdns::AiChecker::parse_ipv4_octets(server_ip, oa, ob, oc, od) ||
+        !quickdns::AiChecker::is_valid_public_ipv4_octets(oa, ob, oc, od)) {
+        return {};
+    }
+
+    quickdns::ensure_winsock();
+
+    sockaddr_in sa4{};
+    sa4.sin_family = AF_INET;
+    sa4.sin_port = htons(port);
+    if (inet_pton(AF_INET, server_ip.c_str(), &sa4.sin_addr) != 1) {
+        return {};
+    }
+
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) {
+        return {};
+    }
+
+    u_long non_blocking = 1;
+    ioctlsocket(sock, FIONBIO, &non_blocking);
+
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+    int rc = connect(sock, reinterpret_cast<const sockaddr*>(&sa4), sizeof(sa4));
+    if (rc == SOCKET_ERROR) {
+        int err = WSAGetLastError();
+        if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
+            closesocket(sock);
+            return {};
+        }
+        int so_err = 0;
+        if (wait_tcp_connect(sock, deadline, cancel_flag, so_err) != ConnectWaitResult::Connected) {
+            closesocket(sock);
+            return {};
+        }
+    }
+
+    SCHANNEL_CRED cred{};
+    cred.dwVersion = SCHANNEL_CRED_VERSION;
+    cred.dwFlags = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_AUTO_CRED_VALIDATION | SCH_USE_STRONG_CRYPTO;
+
+    CredHandle hCred{};
+    TimeStamp tsExpiry{};
+    SECURITY_STATUS ss = AcquireCredentialsHandleW(
+        nullptr,
+        const_cast<LPWSTR>(UNISP_NAME_W),
+        SECPKG_CRED_OUTBOUND,
+        nullptr,
+        &cred,
+        nullptr,
+        nullptr,
+        &hCred,
+        &tsExpiry
+    );
+    if (ss != SEC_E_OK) {
+        closesocket(sock);
+        return {};
+    }
+
+    CtxtHandle hCtx{};
+    bool has_ctx = false;
+    bool tls_ok = false;
+    std::wstring w_host = utf8_to_wide(host_sni);
+
+    DWORD isc_flags = ISC_REQ_SEQUENCE_DETECT |
+                      ISC_REQ_REPLAY_DETECT |
+                      ISC_REQ_CONFIDENTIALITY |
+                      ISC_RET_EXTENDED_ERROR |
+                      ISC_REQ_ALLOCATE_MEMORY |
+                      ISC_REQ_STREAM;
+
+    std::vector<char> in_buf(kInitialTlsBufferSize);
+    size_t in_used = 0;
+    bool need_more_network_data = false;
+
+    while (!is_cancelled(cancel_flag) && remaining_ms(deadline) > 0) {
+        if (has_ctx && (in_used == 0 || need_more_network_data)) {
+            if (in_used >= in_buf.size()) {
+                if (in_buf.size() >= kMaxTlsBufferSize) break;
+                in_buf.resize(std::min<size_t>(in_buf.size() * 2, kMaxTlsBufferSize));
+            }
+            int got = socket_recv_some(
+                sock,
+                in_buf.data() + in_used,
+                static_cast<int>(in_buf.size() - in_used),
+                remaining_ms(deadline),
+                cancel_flag
+            );
+            if (got <= 0) break;
+            in_used += static_cast<size_t>(got);
+            need_more_network_data = false;
+        }
+
+        SecBuffer in_sec[2]{};
+        in_sec[0].pvBuffer = in_buf.data();
+        in_sec[0].cbBuffer = static_cast<unsigned long>(in_used);
+        in_sec[0].BufferType = SECBUFFER_TOKEN;
+        in_sec[1].BufferType = SECBUFFER_EMPTY;
+
+        SecBufferDesc in_desc{SECBUFFER_VERSION, 2, in_sec};
+        SecBuffer out_sec[1]{{0, SECBUFFER_TOKEN, nullptr}};
+        SecBufferDesc out_desc{SECBUFFER_VERSION, 1, out_sec};
+
+        DWORD out_attrs = 0;
+        ss = InitializeSecurityContextW(
+            &hCred,
+            has_ctx ? &hCtx : nullptr,
+            const_cast<SEC_WCHAR*>(w_host.c_str()),
+            isc_flags,
+            0,
+            SECURITY_NATIVE_DREP,
+            has_ctx ? &in_desc : nullptr,
+            0,
+            &hCtx,
+            &out_desc,
+            &out_attrs,
+            &tsExpiry
+        );
+
+        if (!has_ctx && (ss == SEC_E_OK || ss == SEC_I_CONTINUE_NEEDED)) {
+            has_ctx = true;
+        }
+
+        bool send_failed = false;
+        if (out_sec[0].pvBuffer != nullptr) {
+            if (out_sec[0].cbBuffer > 0 &&
+                (ss == SEC_E_OK || ss == SEC_I_CONTINUE_NEEDED ||
+                 (FAILED(ss) && (out_attrs & ISC_RET_EXTENDED_ERROR)))) {
+                if (!socket_send_all(
+                        sock,
+                        static_cast<const char*>(out_sec[0].pvBuffer),
+                        static_cast<int>(out_sec[0].cbBuffer),
+                        deadline,
+                        cancel_flag)) {
+                    send_failed = true;
+                }
+            }
+            FreeContextBuffer(out_sec[0].pvBuffer);
+        }
+        if (send_failed) break;
+
+        if (ss == SEC_E_INCOMPLETE_MESSAGE) {
+            need_more_network_data = true;
+            continue;
+        }
+
+        if (has_ctx && in_used > 0) {
+            if (in_sec[1].BufferType == SECBUFFER_EXTRA && in_sec[1].cbBuffer > 0 && in_sec[1].cbBuffer <= in_used) {
+                size_t extra_len = in_sec[1].cbBuffer;
+                const char* src = (in_sec[1].pvBuffer != nullptr)
+                    ? static_cast<const char*>(in_sec[1].pvBuffer)
+                    : (in_buf.data() + (in_used - extra_len));
+                std::memmove(in_buf.data(), src, extra_len);
+                in_used = extra_len;
+            } else {
+                in_used = 0;
+            }
+        }
+
+        if (ss == SEC_E_OK) {
+            tls_ok = true;
+            break;
+        }
+        if (ss == SEC_I_CONTINUE_NEEDED) {
+            continue;
+        }
+        break;
+    }
+
+    if (!tls_ok) {
+        if (has_ctx) DeleteSecurityContext(&hCtx);
+        FreeCredentialsHandle(&hCred);
+        closesocket(sock);
+        return {};
+    }
+
+    SecPkgContext_StreamSizes sizes{};
+    if (QueryContextAttributesW(&hCtx, SECPKG_ATTR_STREAM_SIZES, &sizes) != SEC_E_OK || sizes.cbMaximumMessage == 0) {
+        DeleteSecurityContext(&hCtx);
+        FreeCredentialsHandle(&hCred);
+        closesocket(sock);
+        return {};
+    }
+
+    size_t req_offset = 0;
+    while (req_offset < send_payload.size()) {
+        size_t chunk_len = std::min(static_cast<size_t>(sizes.cbMaximumMessage), send_payload.size() - req_offset);
+        std::vector<char> io_buf(sizes.cbHeader + chunk_len + sizes.cbTrailer);
+        std::memcpy(io_buf.data() + sizes.cbHeader, send_payload.data() + req_offset, chunk_len);
+
+        SecBuffer bufs[4]{};
+        bufs[0] = {sizes.cbHeader, SECBUFFER_STREAM_HEADER, io_buf.data()};
+        bufs[1] = {static_cast<unsigned long>(chunk_len), SECBUFFER_DATA, io_buf.data() + sizes.cbHeader};
+        bufs[2] = {sizes.cbTrailer, SECBUFFER_STREAM_TRAILER, io_buf.data() + sizes.cbHeader + chunk_len};
+        bufs[3] = {0, SECBUFFER_EMPTY, nullptr};
+        SecBufferDesc msg_desc{SECBUFFER_VERSION, 4, bufs};
+
+        if (EncryptMessage(&hCtx, 0, &msg_desc, 0) != SEC_E_OK) {
+            DeleteSecurityContext(&hCtx);
+            FreeCredentialsHandle(&hCred);
+            closesocket(sock);
+            return {};
+        }
+
+        for (int bi = 0; bi < 3; ++bi) {
+            if (bufs[bi].cbBuffer > 0 && bufs[bi].pvBuffer != nullptr) {
+                if (!socket_send_all(
+                        sock,
+                        static_cast<const char*>(bufs[bi].pvBuffer),
+                        static_cast<int>(bufs[bi].cbBuffer),
+                        deadline,
+                        cancel_flag)) {
+                    DeleteSecurityContext(&hCtx);
+                    FreeCredentialsHandle(&hCred);
+                    closesocket(sock);
+                    return {};
+                }
+            }
+        }
+        req_offset += chunk_len;
+    }
+
+    std::string plaintext;
+    plaintext.reserve(4096);
+    bool need_more_cipher = (in_used == 0);
+
+    while (plaintext.size() < kMaxHttpPlaintextSize && !is_cancelled(cancel_flag)) {
+        int rem = remaining_ms(deadline);
+        if (rem <= 0) break;
+
+        if (need_more_cipher) {
+            if (in_used >= in_buf.size()) {
+                if (in_buf.size() >= kMaxTlsBufferSize) break;
+                in_buf.resize(std::min<size_t>(in_buf.size() * 2, kMaxTlsBufferSize));
+            }
+            int got = socket_recv_some(
+                sock,
+                in_buf.data() + in_used,
+                static_cast<int>(in_buf.size() - in_used),
+                rem,
+                cancel_flag
+            );
+            if (got <= 0) break;
+            in_used += static_cast<size_t>(got);
+            need_more_cipher = false;
+        }
+
+        SecBuffer dec_bufs[4]{};
+        dec_bufs[0] = {static_cast<unsigned long>(in_used), SECBUFFER_DATA, in_buf.data()};
+        dec_bufs[1].BufferType = SECBUFFER_EMPTY;
+        dec_bufs[2].BufferType = SECBUFFER_EMPTY;
+        dec_bufs[3].BufferType = SECBUFFER_EMPTY;
+        SecBufferDesc dec_desc{SECBUFFER_VERSION, 4, dec_bufs};
+
+        ss = DecryptMessage(&hCtx, &dec_desc, 0, nullptr);
+        if (ss == SEC_E_INCOMPLETE_MESSAGE) {
+            need_more_cipher = true;
+            continue;
+        }
+        if (ss == SEC_I_CONTEXT_EXPIRED) {
+            break;
+        }
+        if (ss != SEC_E_OK && ss != SEC_I_RENEGOTIATE) {
+            break;
+        }
+
+        SecBuffer* extra_buf = nullptr;
+        for (int i = 0; i < 4; ++i) {
+            if (dec_bufs[i].BufferType == SECBUFFER_DATA &&
+                dec_bufs[i].cbBuffer > 0 &&
+                dec_bufs[i].pvBuffer != nullptr) {
+                size_t to_append = std::min<size_t>(dec_bufs[i].cbBuffer, kMaxHttpPlaintextSize - plaintext.size());
+                plaintext.append(static_cast<const char*>(dec_bufs[i].pvBuffer), to_append);
+            } else if (dec_bufs[i].BufferType == SECBUFFER_EXTRA && dec_bufs[i].cbBuffer > 0) {
+                extra_buf = &dec_bufs[i];
+            }
+        }
+
+        if (extra_buf != nullptr && extra_buf->cbBuffer <= in_used) {
+            size_t extra_len = extra_buf->cbBuffer;
+            const char* src = (extra_buf->pvBuffer != nullptr)
+                ? static_cast<const char*>(extra_buf->pvBuffer)
+                : (in_buf.data() + (in_used - extra_len));
+            std::memmove(in_buf.data(), src, extra_len);
+            in_used = extra_len;
+            need_more_cipher = false;
+        } else {
+            in_used = 0;
+            need_more_cipher = true;
+        }
+
+        if (ss == SEC_I_RENEGOTIATE) {
+            // Post-handshake TLS 1.3 NewSessionTicket consumption
+            SecBuffer rin_sec[2]{{static_cast<unsigned long>(in_used), SECBUFFER_TOKEN, in_buf.data()}, {0, SECBUFFER_EMPTY, nullptr}};
+            SecBufferDesc rin_desc{SECBUFFER_VERSION, 2, rin_sec};
+            SecBuffer rout_sec[1]{{0, SECBUFFER_TOKEN, nullptr}};
+            SecBufferDesc rout_desc{SECBUFFER_VERSION, 1, rout_sec};
+            DWORD rout_attrs = 0;
+            SECURITY_STATUS rss = InitializeSecurityContextW(
+                &hCred, &hCtx, const_cast<SEC_WCHAR*>(w_host.c_str()),
+                isc_flags, 0, SECURITY_NATIVE_DREP, &rin_desc, 0,
+                &hCtx, &rout_desc, &rout_attrs, &tsExpiry);
+            if (rout_sec[0].pvBuffer != nullptr) {
+                FreeContextBuffer(rout_sec[0].pvBuffer);
+            }
+            if (rin_sec[1].BufferType == SECBUFFER_EXTRA && rin_sec[1].cbBuffer > 0 && rin_sec[1].cbBuffer <= in_used) {
+                size_t rextra = rin_sec[1].cbBuffer;
+                const char* rsrc = (rin_sec[1].pvBuffer != nullptr)
+                    ? static_cast<const char*>(rin_sec[1].pvBuffer)
+                    : (in_buf.data() + (in_used - rextra));
+                std::memmove(in_buf.data(), rsrc, rextra);
+                in_used = rextra;
+                need_more_cipher = false;
+            } else {
+                in_used = 0;
+                need_more_cipher = true;
+            }
+            if (rss != SEC_E_OK && rss != SEC_I_CONTINUE_NEEDED && rss != SEC_E_INCOMPLETE_MESSAGE) {
+                break;
+            }
+        }
+
+        if (is_dot_framing) {
+            if (plaintext.size() >= 2) {
+                uint16_t dns_len = static_cast<uint16_t>(
+                    (static_cast<uint8_t>(plaintext[0]) << 8) | static_cast<uint8_t>(plaintext[1]));
+                if (dns_len < 12 || dns_len > kMaxDohReplyBytes) {
+                    break;
+                }
+                if (plaintext.size() >= static_cast<size_t>(2 + dns_len)) {
+                    break;
+                }
+            }
+        } else {
+            HttpStreamInspection post_check = inspect_http_stream(plaintext);
+            if (post_check.complete_headers) {
+                if (post_check.http_status != 200) {
+                    break;
+                }
+                if (post_check.content_length >= 0 &&
+                    static_cast<int64_t>(post_check.received_body_len) >= post_check.content_length) {
+                    break;
+                }
+            }
+        }
+    }
+
+    DeleteSecurityContext(&hCtx);
+    FreeCredentialsHandle(&hCred);
+    closesocket(sock);
+    return plaintext;
+}
+
+// Fallback resolver when WinHTTP cannot resolve the DoH hostname (poisoned/broken system DNS):
+// tries RFC 7858 DNS-over-TLS (:853) and HTTP/1.1 DoH POST (:443) directly against bootstrap IPs.
+std::string resolve_via_bootstrap_ip(
+    const std::string& bootstrap_ip,
+    const std::string& host_sni,
+    const std::string& doh_path,
+    const std::string& domain,
+    int timeout_ms,
+    const std::atomic<bool>* cancel_flag)
+{
+    if (bootstrap_ip.empty() || host_sni.empty() || domain.empty() ||
+        timeout_ms <= 0 || is_cancelled(cancel_flag)) {
+        return "";
+    }
+
+    const uint16_t txid = generate_dns_txid();
+    auto query = quickdns::AiChecker::build_dns_a_query(txid, domain);
+    if (query.empty() || query.size() > 4096) {
+        return "";
+    }
+
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+    // 1. Try RFC 7858 DNS-over-TLS (:853) with SNI = host_sni (works on HTTP/2-strict DoH providers like DNS-AI)
+    int dot_budget = std::max(250, (timeout_ms * 3) / 5);
+    std::string dot_req;
+    dot_req.resize(2 + query.size());
+    dot_req[0] = static_cast<char>((query.size() >> 8) & 0xFF);
+    dot_req[1] = static_cast<char>(query.size() & 0xFF);
+    std::memcpy(dot_req.data() + 2, query.data(), query.size());
+
+    std::string dot_raw = schannel_raw_exchange(
+        bootstrap_ip, 853, host_sni, dot_req, true, dot_budget, cancel_flag);
+    if (dot_raw.size() >= 14) {
+        uint16_t dns_len = static_cast<uint16_t>(
+            (static_cast<uint8_t>(dot_raw[0]) << 8) | static_cast<uint8_t>(dot_raw[1]));
+        if (dns_len >= 12 && dot_raw.size() >= static_cast<size_t>(2 + dns_len)) {
+            std::string ip = quickdns::AiChecker::parse_dns_a_response(
+                reinterpret_cast<const uint8_t*>(dot_raw.data() + 2), dns_len, txid);
+            if (!ip.empty()) {
+                return ip;
+            }
+        }
+    }
+
+    // 2. Fallback: HTTP/1.1 DoH POST (:443) with SNI = host_sni
+    int https_budget = remaining_ms(deadline);
+    if (https_budget >= 200 && !is_cancelled(cancel_flag) &&
+        !doh_path.empty() && doh_path[0] == '/' && !has_unsafe_header_chars(doh_path)) {
+        std::string http_req =
+            "POST " + doh_path + " HTTP/1.1\r\n"
+            "Host: " + host_sni + "\r\n"
+            "User-Agent: QuickDNS/" + std::string(quickdns::APP_VERSION) + "\r\n"
+            "Content-Type: application/dns-message\r\n"
+            "Accept: application/dns-message\r\n"
+            "Content-Length: " + std::to_string(query.size()) + "\r\n"
+            "Connection: close\r\n\r\n";
+        http_req.append(reinterpret_cast<const char*>(query.data()), query.size());
+
+        std::string https_raw = schannel_raw_exchange(
+            bootstrap_ip, 443, host_sni, http_req, false, https_budget, cancel_flag);
+        if (!https_raw.empty()) {
+            HttpsProbeResult parsed;
+            parse_http_response(https_raw, parsed);
+            if (parsed.http_status == 200 && parsed.body.size() >= 12) {
+                std::string ip = quickdns::AiChecker::parse_dns_a_response(
+                    reinterpret_cast<const uint8_t*>(parsed.body.data()), parsed.body.size(), txid);
+                if (!ip.empty()) {
+                    return ip;
+                }
+            }
+        }
+    }
+
+    return "";
+}
+
+bool crack_doh_host_and_path(
+    const std::string& doh_url,
+    std::wstring& out_host_wide,
+    std::string& out_host_utf8,
+    INTERNET_PORT& out_port,
+    std::wstring& out_path_wide,
+    std::string& out_path_utf8)
+{
+    std::string trimmed = trim_ascii(doh_url);
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    size_t tmpl_pos = trimmed.find("{?dns}");
+    if (tmpl_pos != std::string::npos) {
+        trimmed.erase(tmpl_pos, 6);
+    }
+
+    std::wstring wurl = utf8_to_wide(trimmed);
+    if (wurl.empty()) {
+        return false;
+    }
+
+    URL_COMPONENTS urlComp{};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t host[256] = {};
+    wchar_t path[1024] = {};
+    wchar_t extra[512] = {};
+    urlComp.lpszHostName = host;
+    urlComp.dwHostNameLength = ARRAYSIZE(host);
+    urlComp.lpszUrlPath = path;
+    urlComp.dwUrlPathLength = ARRAYSIZE(path);
+    urlComp.lpszExtraInfo = extra;
+    urlComp.dwExtraInfoLength = ARRAYSIZE(extra);
+
+    if (!WinHttpCrackUrl(wurl.c_str(), static_cast<DWORD>(wurl.length()), 0, &urlComp)) {
+        return false;
+    }
+    if (urlComp.nScheme != INTERNET_SCHEME_HTTPS || urlComp.dwHostNameLength == 0) {
+        return false;
+    }
+
+    out_host_wide.assign(host, urlComp.dwHostNameLength);
+    out_host_utf8 = to_lower_ascii(QuickDns::Encoding::wide_to_utf8(out_host_wide));
+    out_port = urlComp.nPort;
+
+    out_path_wide.assign(path, urlComp.dwUrlPathLength);
+    if (out_path_wide.empty()) {
+        out_path_wide = L"/";
+    }
+    if (urlComp.dwExtraInfoLength > 0) {
+        out_path_wide.append(extra, urlComp.dwExtraInfoLength);
+    }
+    out_path_utf8 = QuickDns::Encoding::wide_to_utf8(out_path_wide);
+    return true;
 }
 
 struct ThreadPoolGuard {
@@ -2098,12 +2635,172 @@ std::string AiChecker::resolve_domain_via_dns(
     return ips.front();
 }
 
+std::string AiChecker::resolve_domain_via_doh(
+    const std::string& doh_url,
+    const std::string& domain,
+    int timeout_ms,
+    const std::atomic<bool>* cancel_flag)
+{
+    if (doh_url.empty() || domain.empty() || timeout_ms <= 0 || is_cancelled(cancel_flag)) {
+        return "";
+    }
+
+    std::wstring host_wide;
+    std::string host_utf8;
+    INTERNET_PORT port = INTERNET_DEFAULT_HTTPS_PORT;
+    std::wstring norm_path;
+    std::string path_utf8;
+    if (!crack_doh_host_and_path(doh_url, host_wide, host_utf8, port, norm_path, path_utf8)) {
+        return "";
+    }
+
+    const uint16_t txid = generate_dns_txid();
+    auto query = build_dns_a_query(txid, domain);
+    if (query.empty()) {
+        return "";
+    }
+
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+    HINTERNET hSession = WinHttpOpen(
+        (std::wstring(L"QuickDNS/") + quickdns::APP_VERSION_W + L" (Windows NT 10.0; Win64; x64)").c_str(),
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0
+    );
+    if (!hSession) {
+        return "";
+    }
+
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+
+    DWORD to = static_cast<DWORD>(std::max(150, timeout_ms));
+    WinHttpSetTimeouts(hSession, to, to, to, to);
+
+    DWORD protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &protocols, sizeof(protocols));
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host_wide.c_str(), port, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        return "";
+    }
+
+    std::string resolved_ip;
+    DWORD postStatus = 0;
+
+    // 1. Primary RFC 8484 HTTP/2 POST (application/dns-message)
+    HINTERNET hReqPost = WinHttpOpenRequest(
+        hConnect,
+        L"POST",
+        norm_path.c_str(),
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        WINHTTP_FLAG_SECURE
+    );
+    if (hReqPost) {
+        const std::wstring headers = L"Content-Type: application/dns-message\r\nAccept: application/dns-message\r\n";
+        BOOL sent = WinHttpSendRequest(
+            hReqPost,
+            headers.c_str(),
+            static_cast<DWORD>(headers.length()),
+            query.data(),
+            static_cast<DWORD>(query.size()),
+            static_cast<DWORD>(query.size()),
+            0
+        );
+        if (sent && !is_cancelled(cancel_flag) && WinHttpReceiveResponse(hReqPost, nullptr)) {
+            DWORD statusCode = 0;
+            DWORD sz = sizeof(statusCode);
+            WinHttpQueryHeaders(
+                hReqPost,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX,
+                &statusCode,
+                &sz,
+                WINHTTP_NO_HEADER_INDEX
+            );
+            postStatus = statusCode;
+            if (statusCode == 200) {
+                std::vector<uint8_t> body;
+                if (read_winhttp_dns_body(hReqPost, body, cancel_flag)) {
+                    resolved_ip = parse_dns_a_response(body.data(), body.size(), txid);
+                }
+            }
+        }
+        WinHttpCloseHandle(hReqPost);
+    }
+
+    // 2. Fallback RFC 8484 GET ?dns=... on method/content-type rejection (400 / 405 / 415 / 501)
+    if (resolved_ip.empty() && !is_cancelled(cancel_flag) &&
+        (postStatus == 400 || postStatus == 405 || postStatus == 415 || postStatus == 501)) {
+        int rem = remaining_ms(deadline);
+        if (rem >= 100) {
+            std::string b64q = SmartDnsVerifier::base64url_encode(query);
+            std::wstring getPath = norm_path;
+            getPath += (getPath.find(L'?') == std::wstring::npos) ? L"?dns=" : L"&dns=";
+            getPath += utf8_to_wide(b64q);
+
+            HINTERNET hReqGet = WinHttpOpenRequest(
+                hConnect,
+                L"GET",
+                getPath.c_str(),
+                nullptr,
+                WINHTTP_NO_REFERER,
+                WINHTTP_DEFAULT_ACCEPT_TYPES,
+                WINHTTP_FLAG_SECURE
+            );
+            if (hReqGet) {
+                DWORD get_to = static_cast<DWORD>(std::max(100, rem));
+                WinHttpSetTimeouts(hReqGet, get_to, get_to, get_to, get_to);
+                const std::wstring headers = L"Accept: application/dns-message\r\n";
+                BOOL sent = WinHttpSendRequest(
+                    hReqGet,
+                    headers.c_str(),
+                    static_cast<DWORD>(headers.length()),
+                    nullptr,
+                    0,
+                    0,
+                    0
+                );
+                if (sent && !is_cancelled(cancel_flag) && WinHttpReceiveResponse(hReqGet, nullptr)) {
+                    DWORD statusCode = 0;
+                    DWORD sz = sizeof(statusCode);
+                    WinHttpQueryHeaders(
+                        hReqGet,
+                        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX,
+                        &statusCode,
+                        &sz,
+                        WINHTTP_NO_HEADER_INDEX
+                    );
+                    if (statusCode == 200) {
+                        std::vector<uint8_t> body;
+                        if (read_winhttp_dns_body(hReqGet, body, cancel_flag)) {
+                            resolved_ip = parse_dns_a_response(body.data(), body.size(), txid);
+                        }
+                    }
+                }
+                WinHttpCloseHandle(hReqGet);
+            }
+        }
+    }
+
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return resolved_ip;
+}
+
 AiServiceCheckResult AiChecker::check_single_service(
     const std::string& dns_server_ip,
     AiService service,
     const std::string& client_country_code,
     int timeout_ms,
-    const std::atomic<bool>* cancel_flag)
+    const std::atomic<bool>* cancel_flag,
+    const std::string& doh_url)
 {
     AiServiceCheckResult res;
     res.service = service;
@@ -2125,8 +2822,31 @@ AiServiceCheckResult AiChecker::check_single_service(
     }
 
     int safe_timeout = std::max(300, timeout_ms);
-    int dns_timeout = std::min(1200, std::max(400, safe_timeout / 2));
-    res.resolved_ip = resolve_domain_via_dns(dns_server_ip, domain, dns_timeout, cancel_flag);
+    if (!dns_server_ip.empty()) {
+        int max_udp_wait = doh_url.empty() ? 1200 : 850;
+        int dns_timeout = std::min(max_udp_wait, std::max(400, safe_timeout / 2));
+        res.resolved_ip = resolve_domain_via_dns(dns_server_ip, domain, dns_timeout, cancel_flag);
+    }
+    if (is_cancelled(cancel_flag)) {
+        res.status = AiAccessStatus::Unreachable;
+        res.detail = L"Отменено";
+        return res;
+    }
+    if (res.resolved_ip.empty() && !doh_url.empty()) {
+        int doh_timeout = std::max(1200, std::min(2500, safe_timeout));
+        res.resolved_ip = resolve_domain_via_doh(doh_url, domain, doh_timeout, cancel_flag);
+        if (res.resolved_ip.empty() && !dns_server_ip.empty() && !is_cancelled(cancel_flag)) {
+            std::wstring host_w;
+            std::string host_u8;
+            INTERNET_PORT port = 443;
+            std::wstring path_w;
+            std::string path_u8;
+            if (crack_doh_host_and_path(doh_url, host_w, host_u8, port, path_w, path_u8)) {
+                res.resolved_ip = resolve_via_bootstrap_ip(
+                    dns_server_ip, host_u8, path_u8, domain, std::min(2000, safe_timeout), cancel_flag);
+            }
+        }
+    }
     if (is_cancelled(cancel_flag)) {
         res.status = AiAccessStatus::Unreachable;
         res.detail = L"Отменено";
@@ -2368,13 +3088,16 @@ AiDnsProfileResult AiChecker::check_profile(
     res.profile_id = profile.id;
     res.profile_name = profile.name;
     res.dns_ip_used = !profile.primary_ipv4.empty() ? profile.primary_ipv4 : profile.secondary_ipv4;
+    if (res.dns_ip_used.empty() && !profile.doh_template.empty() && !profile.is_dhcp) {
+        res.dns_ip_used = profile.doh_template;
+    }
 
     res.chatgpt.service = AiService::ChatGPT;
     res.claude.service  = AiService::Claude;
     res.gemini.service  = AiService::Gemini;
     res.copilot.service = AiService::Copilot;
 
-    if (res.dns_ip_used.empty()) {
+    if (profile.is_dhcp || (profile.primary_ipv4.empty() && profile.secondary_ipv4.empty() && profile.doh_template.empty())) {
         res.chatgpt.status = AiAccessStatus::DnsFailed;
         res.chatgpt.detail = L"Нет IP DNS";
         res.claude.status  = AiAccessStatus::DnsFailed;
@@ -2392,9 +3115,11 @@ AiDnsProfileResult AiChecker::check_profile(
         return res;
     }
 
+    const std::string primary_udp_ip = !profile.primary_ipv4.empty() ? profile.primary_ipv4 : profile.secondary_ipv4;
+
     auto safe_check = [&](const std::string& dns_ip, AiService svc) -> AiServiceCheckResult {
         try {
-            return check_single_service(dns_ip, svc, client_loc, timeout_ms, cancel_flag);
+            return check_single_service(dns_ip, svc, client_loc, timeout_ms, cancel_flag, profile.doh_template);
         } catch (...) {
             AiServiceCheckResult fallback;
             fallback.service = svc;
@@ -2432,18 +3157,18 @@ AiDnsProfileResult AiChecker::check_profile(
         }
     };
 
-    run_four(res.dns_ip_used);
+    run_four(primary_udp_ip);
 
-    // If primary DNS IP failed to resolve all 4 services and secondary IP is available, try secondary IP
+    // If primary DNS IP (+ DoH if configured) failed to resolve all 4 services and secondary IP is available, try secondary IP
     if (!is_cancelled(cancel_flag) &&
         res.chatgpt.status == AiAccessStatus::DnsFailed &&
         res.claude.status == AiAccessStatus::DnsFailed &&
         res.gemini.status == AiAccessStatus::DnsFailed &&
         res.copilot.status == AiAccessStatus::DnsFailed &&
         !profile.secondary_ipv4.empty() &&
-        profile.secondary_ipv4 != res.dns_ip_used) {
+        profile.secondary_ipv4 != primary_udp_ip) {
         res.dns_ip_used = profile.secondary_ipv4;
-        run_four(res.dns_ip_used);
+        run_four(profile.secondary_ipv4);
     }
 
     aggregate_profile_result(res);

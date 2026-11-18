@@ -732,6 +732,22 @@ std::vector<DnsProfile> ConfigManager::get_default_presets() {
             {"66.66.66.66", "108.160.138.51"}
         },
         {
+            "dns_ai",
+            "DNS-AI (DoH)",
+            "DNS-AI.ru - Шифрованный SmartDNS (DoH) для нейросетей без рекламы и телеметрии (Win11+)",
+            "194.87.196.13",
+            "45.151.102.219",
+            "2a00:b700:5::3:62",
+            "2a12:5940:d4ef::219",
+            "https://dns.dns-ai.ru/dns-query",
+            true,
+            false,
+            true,
+            "https://dns-ai.ru/",
+            "ChatGPT, OpenAI, Claude, Gemini, AI Studio, Copilot, Grok, Cursor + AdBlock (только DoH)",
+            {"194.87.196.13", "45.151.102.219"}
+        },
+        {
             "cloudflare",
             "Cloudflare (1.1.1.1)",
             "Cloudflare - Быстрый глобальный DNS с высокой приватностью",

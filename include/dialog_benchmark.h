@@ -20,6 +20,7 @@ namespace quickdns {
 
 struct BenchmarkItem {
     DnsProfile profile;
+    std::string doh_template;
     int current_ping = -1;
     DnsQuality quality = DnsQuality::SlowOrDown;
     std::wstring status_text = L"Ожидание...";

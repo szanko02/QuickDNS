@@ -62,7 +62,9 @@ struct SmartDnsVerificationResult {
     std::string best_secondary_ip;
     int best_primary_latency = -1;
     int best_secondary_latency = -1;
+    int best_latency_ms = -1;
     DohVerificationResult doh_result;
+    bool is_doh_only = false;
     bool ip_updated = false; // true if best IPs differ from originals or replaced dead ones
 };
 

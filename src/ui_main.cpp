@@ -112,6 +112,45 @@ namespace {
         return found;
     }
 
+    bool is_windows_build_below_22000() {
+        static const bool is_below_22000 = []() -> bool {
+            struct RtlOsVersionInfoExW {
+                ULONG dwOSVersionInfoSize;
+                ULONG dwMajorVersion;
+                ULONG dwMinorVersion;
+                ULONG dwBuildNumber;
+                ULONG dwPlatformId;
+                WCHAR szCSDVersion[128];
+                USHORT wServicePackMajor;
+                USHORT wServicePackMinor;
+                USHORT wSuiteMask;
+                UCHAR wProductType;
+                UCHAR wReserved;
+            };
+            using PFN_RtlGetVersion = LONG(WINAPI*)(RtlOsVersionInfoExW*);
+            HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+            if (hNtdll) {
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
+                auto pfn = reinterpret_cast<PFN_RtlGetVersion>(GetProcAddress(hNtdll, "RtlGetVersion"));
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+                if (pfn) {
+                    RtlOsVersionInfoExW osvi{};
+                    osvi.dwOSVersionInfoSize = sizeof(osvi);
+                    if (pfn(&osvi) == 0) {
+                        return osvi.dwBuildNumber < 22000;
+                    }
+                }
+            }
+            return false;
+        }();
+        return is_below_22000;
+    }
+
     struct ButtonAnimationState {
         float hover = 0.0f;
         float targetHover = 0.0f;
@@ -526,6 +565,7 @@ bool MainWindow::initialize(HINSTANCE hInstance, int nCmdShow) {
     // Load initial network & profile data
     refresh_network_adapters();
     populate_profiles_combobox();
+    update_ping_target_ip();
     auto_sync_profile_with_adapter();
     update_status_card();
 
@@ -2293,6 +2333,7 @@ void MainWindow::draw_sparkline(HWND hWnd, HDC hdc) {
 
 void MainWindow::update_ping_target_ip() {
     std::string targetIp;
+    std::string targetDoh;
     if (m_selectedAdapterIndex >= 0 && m_selectedAdapterIndex < static_cast<int>(m_adapters.size())) {
         const auto& adp = m_adapters[m_selectedAdapterIndex];
         if (!adp.dns_ipv4.empty()) {
@@ -2317,10 +2358,95 @@ void MainWindow::update_ping_target_ip() {
                 break;
             }
         }
+
+        if (!adp.is_dhcp_dns) {
+            std::vector<DnsProfile> fallbackList;
+            const std::vector<DnsProfile>* pList = &m_profiles;
+            if (pList->empty() && m_configManager) {
+                fallbackList = m_configManager->get_all_profiles();
+                pList = &fallbackList;
+            }
+
+            std::string activeId = m_configManager ? m_configManager->get_active_profile_id() : std::string{};
+            const DnsProfile* matchedProfile = nullptr;
+
+            if (!adp.dns_ipv4.empty()) {
+                std::string adPri = wide_to_utf8(adp.dns_ipv4[0]);
+                std::string adSec = adp.dns_ipv4.size() > 1 ? wide_to_utf8(adp.dns_ipv4[1]) : "";
+
+                // 1. Exact match (preferring activeId if multiple match)
+                for (const auto& p : *pList) {
+                    if (p.is_dhcp) continue;
+                    if (p.primary_ipv4 == adPri) {
+                        bool secMatches = (p.secondary_ipv4.empty() && adSec.empty()) ||
+                                          (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adSec);
+                        if (secMatches) {
+                            matchedProfile = &p;
+                            if (p.id == activeId) break;
+                        }
+                    }
+                }
+
+                // 2. Primary IP match
+                if (!matchedProfile) {
+                    for (const auto& p : *pList) {
+                        if (p.is_dhcp) continue;
+                        if (p.primary_ipv4 == adPri) {
+                            matchedProfile = &p;
+                            if (p.id == activeId) break;
+                        }
+                    }
+                }
+
+                // 3. Any IP match in adapter.dns_ipv4 (including ip_pool)
+                if (!matchedProfile) {
+                    for (const auto& adIpWide : adp.dns_ipv4) {
+                        std::string adIp = wide_to_utf8(adIpWide);
+                        for (const auto& p : *pList) {
+                            if (p.is_dhcp) continue;
+                            bool inPool = (std::find(p.ip_pool.begin(), p.ip_pool.end(), adIp) != p.ip_pool.end());
+                            if (p.primary_ipv4 == adIp || (!p.secondary_ipv4.empty() && p.secondary_ipv4 == adIp) || inPool) {
+                                matchedProfile = &p;
+                                if (p.id == activeId) break;
+                            }
+                        }
+                        if (matchedProfile && matchedProfile->id == activeId) break;
+                    }
+                }
+            } else if (!adp.dns_ipv6.empty()) {
+                std::string adPri6 = wide_to_utf8(adp.dns_ipv6[0]);
+                for (const auto& p : *pList) {
+                    if (p.is_dhcp || p.primary_ipv6.empty()) continue;
+                    if (p.primary_ipv6 == adPri6) {
+                        matchedProfile = &p;
+                        if (p.id == activeId) break;
+                    }
+                }
+                if (!matchedProfile) {
+                    for (const auto& adIpWide : adp.dns_ipv6) {
+                        std::string adIp = wide_to_utf8(adIpWide);
+                        for (const auto& p : *pList) {
+                            if (p.is_dhcp) continue;
+                            if ((!p.primary_ipv6.empty() && p.primary_ipv6 == adIp) ||
+                                (!p.secondary_ipv6.empty() && p.secondary_ipv6 == adIp)) {
+                                matchedProfile = &p;
+                                if (p.id == activeId) break;
+                            }
+                        }
+                        if (matchedProfile && matchedProfile->id == activeId) break;
+                    }
+                }
+            }
+
+            if (matchedProfile && !matchedProfile->doh_template.empty()) {
+                targetDoh = matchedProfile->doh_template;
+            }
+        }
     }
     {
-        std::lock_guard<std::mutex> lock(m_historyMutex);
+        std::lock_guard<std::mutex> lock(m_pingMutex);
         m_pingTargetIp = std::move(targetIp);
+        m_pingTargetDoh = std::move(targetDoh);
     }
 }
 
@@ -2329,14 +2455,22 @@ void MainWindow::start_ping_worker() {
     m_pingWorker = std::thread([this]() {
         while (!m_stopPingWorker.load(std::memory_order_acquire)) {
             std::string ip_to_ping;
+            std::string targetDoh;
             {
-                std::lock_guard<std::mutex> lock(m_historyMutex);
+                std::lock_guard<std::mutex> lock(m_pingMutex);
                 ip_to_ping = m_pingTargetIp;
+                targetDoh = m_pingTargetDoh;
             }
 
             int ping_val = -1;
             if (!ip_to_ping.empty()) {
                 ping_val = DnsBenchmark::ping_dns_server(ip_to_ping, 800, true);
+            }
+            if (ping_val < 0 && !targetDoh.empty() && !m_stopPingWorker.load(std::memory_order_acquire)) {
+                ping_val = DnsBenchmark::ping_doh_server_domain(targetDoh, "google.com", 2000);
+            }
+            if (m_stopPingWorker.load(std::memory_order_acquire)) {
+                break;
             }
 
             m_currentPingMs.store(ping_val, std::memory_order_release);
@@ -2994,6 +3128,28 @@ void MainWindow::apply_selected_dns() {
     if (m_selectedProfileIndex < 0 || m_selectedProfileIndex >= static_cast<int>(m_profiles.size())) {
         MessageBoxW(get_modal_parent(), L"Выберите профиль DNS.", L"Предупреждение", MB_OK | MB_ICONWARNING);
         return;
+    }
+
+    if (m_profiles[m_selectedProfileIndex].id == "dns_ai" && is_windows_build_below_22000()) {
+        ModalDepthGuard modalGuard(this);
+        const wchar_t* warnText =
+            L"Сервис DNS-AI (dns-ai.ru) полностью отключает незашифрованный DNS на порту 53 "
+            L"и работает только через защищенный протокол DoH (DNS-over-HTTPS).\n\n"
+            L"В Windows 10 нет встроенной системной поддержки DoH (она доступна только начиная с Windows 11). "
+            L"Применение DNS-AI на уровне сетевого адаптера в Windows 10 приведет к потере разрешения имен сайтов в системе.\n\n"
+            L"На Windows 10 рекомендуется отменить установку в систему и прописать DoH вручную внутри браузера "
+            L"(Chrome, Edge или Firefox -> Безопасный DNS):\n"
+            L"https://dns.dns-ai.ru/dns-query\n\n"
+            L"Все равно применить профиль DNS-AI к сетевому адаптеру?";
+        UINT mbFlags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | (m_inTray ? MB_SETFOREGROUND : 0);
+        int choice = MessageBoxW(get_modal_parent(), warnText, L"Предупреждение для Windows 10", mbFlags);
+        if (choice != IDYES || m_isDestroying.load() || m_isBusy.load() || m_isDownloadingUpdate.load()) {
+            return;
+        }
+        if (m_selectedAdapterIndex < 0 || m_selectedAdapterIndex >= static_cast<int>(m_adapters.size()) ||
+            m_selectedProfileIndex < 0 || m_selectedProfileIndex >= static_cast<int>(m_profiles.size())) {
+            return;
+        }
     }
 
     m_isBusy = true;
@@ -3713,7 +3869,9 @@ void MainWindow::show_ip_pool_picker() {
             pRes->profile_name = utf8_to_wide(profile.name);
             pRes->best_primary_ip = verRes.best_primary_ip;
             pRes->best_secondary_ip = verRes.best_secondary_ip;
-            pRes->best_primary_latency = verRes.best_primary_latency;
+            pRes->best_primary_latency = (verRes.best_primary_latency >= 0)
+                ? verRes.best_primary_latency
+                : (verRes.doh_result.is_working ? verRes.doh_result.latency_ms : -1);
             for (const auto& c : verRes.candidate_ips) {
                 if (c.is_alive && c.latency_ms >= 0) {
                     pRes->alive_ips.push_back(c.ip);

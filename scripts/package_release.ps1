@@ -1,5 +1,5 @@
-# Packages QuickDNS Portable ZIP archive (e.g. dist/QuickDNS-v2.3.0-Portable.zip).
-# Auto-detects version from CMakeLists.txt (2.3.0) unless -Version is explicitly passed.
+# Packages QuickDNS Portable ZIP archive (e.g. dist/QuickDNS-v2.3.1-Portable.zip).
+# Auto-detects version from CMakeLists.txt (2.3.1) unless -Version is explicitly passed.
 [CmdletBinding()]
 param(
     [string]$Version,

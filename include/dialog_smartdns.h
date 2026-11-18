@@ -32,6 +32,9 @@ struct SmartDnsEntry {
     std::vector<SmartDnsCategory> categories;
     bool is_active = false;
     std::wstring doh_status;
+    bool doh_working = false;
+    int doh_latency_ms = -1;
+    bool udp_alive = false;
     int ping_ms = -1;
     bool is_verified = false;
     std::vector<std::wstring> ip_pool;

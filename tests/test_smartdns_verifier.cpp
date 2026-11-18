@@ -169,6 +169,36 @@ void test_apply_best_ips_offline() {
         // Idempotent re-apply when already up to date
         int secondCount = SmartDnsVerifier::apply_best_ips(cfg, {vRes});
         TEST_CHECK(secondCount == 0, "Re-applying identical best IPs is idempotent (returns 0)");
+
+        // DoH-only profile (UDP port 53 disabled, e.g. dns_ai) must preserve existing primary/secondary IPs
+        SmartDnsVerificationResult dohOnlyRes;
+        dohOnlyRes.profile_id = "dns_ai";
+        dohOnlyRes.profile_name = "DNS-AI (DoH)";
+        dohOnlyRes.original_primary_ip = "194.87.196.13";
+        dohOnlyRes.original_secondary_ip = "45.151.102.219";
+        dohOnlyRes.best_primary_ip = "194.87.196.13";
+        dohOnlyRes.best_secondary_ip = "45.151.102.219";
+        dohOnlyRes.best_primary_latency = -1;
+        dohOnlyRes.best_secondary_latency = -1;
+        dohOnlyRes.best_latency_ms = 38;
+        dohOnlyRes.doh_result.doh_url = "https://dns.dns-ai.ru/dns-query";
+        dohOnlyRes.doh_result.is_working = true;
+        dohOnlyRes.doh_result.latency_ms = 38;
+        dohOnlyRes.doh_result.http_status = 200;
+        dohOnlyRes.is_doh_only = true;
+        dohOnlyRes.ip_updated = false;
+        dohOnlyRes.candidate_ips = {
+            {"194.87.196.13", -1, false, "preset"},
+            {"45.151.102.219", -1, false, "preset"}
+        };
+
+        int dohUpdated = SmartDnsVerifier::apply_best_ips(cfg, {dohOnlyRes});
+        auto dnsAiAfter = cfg.get_profile_by_id("dns_ai");
+        TEST_CHECK(dohUpdated == 0 && dnsAiAfter.has_value() &&
+                   dnsAiAfter->primary_ipv4 == "194.87.196.13" &&
+                   dnsAiAfter->secondary_ipv4 == "45.151.102.219" &&
+                   dnsAiAfter->ip_pool.size() == 2,
+                   "apply_best_ips preserves DoH-only dns_ai primary/secondary IPs and ip_pool");
     }
 
     // Verify persistence on reload from disk
@@ -232,6 +262,28 @@ void test_candidate_discovery() {
         if (item.ip == "31.58.216.201") hasSecInBezRu = true;
     }
     TEST_CHECK(hasRfInBezRu && hasSecInBezRu, "Bezmezhau RU candidates include RF primary and secondary IPs");
+
+    DnsProfile dnsAiProfile;
+    dnsAiProfile.id = "dns_ai";
+    dnsAiProfile.name = "DNS-AI (DoH)";
+    dnsAiProfile.primary_ipv4 = "194.87.196.13";
+    dnsAiProfile.secondary_ipv4 = "45.151.102.219";
+    dnsAiProfile.doh_template = "https://dns.dns-ai.ru/dns-query";
+    dnsAiProfile.website_url = "https://dns-ai.ru/";
+    dnsAiProfile.is_smart_dns = true;
+    dnsAiProfile.ip_pool = {"194.87.196.13", "45.151.102.219"};
+
+    auto dnsAiCandidates = SmartDnsVerifier::discover_candidate_ips(dnsAiProfile);
+    bool hasDnsAiPri = false;
+    bool hasDnsAiSec = false;
+    bool hasDnsAiWebProxyIp = false;
+    for (const auto& item : dnsAiCandidates) {
+        if (item.ip == "194.87.196.13") hasDnsAiPri = true;
+        if (item.ip == "45.151.102.219") hasDnsAiSec = true;
+        if (item.ip == "152.228.98.30") hasDnsAiWebProxyIp = true;
+    }
+    TEST_CHECK(hasDnsAiPri && hasDnsAiSec && !hasDnsAiWebProxyIp,
+               "DNS-AI discovery includes resolver nodes and excludes website SNI proxy IP 152.228.98.30");
 }
 
 void test_live_udp_dns_verification() {
@@ -284,6 +336,26 @@ void test_profile_verification() {
     auto vRes = SmartDnsVerifier::verify_profile(cfProfile);
     TEST_CHECK(!vRes.best_primary_ip.empty() && vRes.best_primary_latency >= 0,
                "verify_profile identified reachable primary IP for Cloudflare");
+
+    DnsProfile dnsAiProfile;
+    dnsAiProfile.id = "dns_ai";
+    dnsAiProfile.name = "DNS-AI (DoH)";
+    dnsAiProfile.primary_ipv4 = "194.87.196.13";
+    dnsAiProfile.secondary_ipv4 = "45.151.102.219";
+    dnsAiProfile.doh_template = "https://dns.dns-ai.ru/dns-query";
+    dnsAiProfile.website_url = "https://dns-ai.ru/";
+    dnsAiProfile.is_smart_dns = true;
+    dnsAiProfile.ip_pool = {"194.87.196.13", "45.151.102.219"};
+
+    auto aiRes = SmartDnsVerifier::verify_profile(dnsAiProfile);
+    TEST_CHECK(aiRes.best_primary_ip == "194.87.196.13" &&
+               aiRes.best_secondary_ip == "45.151.102.219" &&
+               !aiRes.ip_updated,
+               "verify_profile preserves primary/secondary IPs and ip_updated==false for DoH-only dns_ai");
+    if (aiRes.doh_result.is_working) {
+        TEST_CHECK(aiRes.is_doh_only && aiRes.best_latency_ms == aiRes.doh_result.latency_ms && aiRes.best_latency_ms > 0,
+                   "verify_profile records DoH latency for working DoH-only dns_ai");
+    }
 }
 
 } // namespace

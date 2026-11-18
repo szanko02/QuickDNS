@@ -342,6 +342,7 @@ BenchmarkDialog::BenchmarkDialog(
     for (const auto& p : profiles) {
         BenchmarkItem item;
         item.profile = p;
+        item.doh_template = p.doh_template;
         if (p.is_dhcp) {
             item.current_ping = 0;
             item.status_text = L"DHCP (Авто)";
@@ -1218,6 +1219,7 @@ void BenchmarkDialog::start_ping_worker() {
         struct ProbeTarget {
             size_t idx = 0;
             std::string ip;
+            std::string doh_template;
             bool isDhcp = false;
         };
 
@@ -1242,6 +1244,7 @@ void BenchmarkDialog::start_ping_worker() {
                     pt.idx = i;
                     pt.isDhcp = m_items[i].profile.is_dhcp;
                     pt.ip = select_profile_target_ip(m_items[i].profile);
+                    pt.doh_template = m_items[i].doh_template;
                     targets.push_back(std::move(pt));
                 }
             }
@@ -1261,10 +1264,18 @@ void BenchmarkDialog::start_ping_worker() {
                             const auto& t = targets[tIdx];
                             if (t.isDhcp) {
                                 pings[tIdx] = -2;
-                            } else if (t.ip.empty()) {
-                                pings[tIdx] = -1;
                             } else {
-                                pings[tIdx] = DnsBenchmark::ping_dns_server_domain(t.ip, currentDomain, 450);
+                                int pingVal = -1;
+                                if (!t.ip.empty()) {
+                                    pingVal = DnsBenchmark::ping_dns_server_domain(t.ip, currentDomain, 450);
+                                }
+                                if (pingVal < 0 && !t.doh_template.empty() && m_workerRunning.load(std::memory_order_acquire)) {
+                                    pingVal = DnsBenchmark::ping_doh_server_domain(t.doh_template, currentDomain, 2000);
+                                    if (pingVal == 0) {
+                                        pingVal = 1;
+                                    }
+                                }
+                                pings[tIdx] = pingVal;
                             }
                         }
                     });
@@ -1648,7 +1659,13 @@ void BenchmarkDialog::draw_list_item(Gdiplus::Graphics& g, size_t filteredIdx, i
         subInfo = L"DHCP роутера/провайдера";
     } else {
         std::string dispIp = select_profile_target_ip(it.profile);
-        subInfo = L"IP: " + (dispIp.empty() ? std::wstring(L"—") : utf8_to_wide(dispIp));
+        if (!dispIp.empty()) {
+            subInfo = L"IP: " + utf8_to_wide(dispIp);
+        } else if (!it.doh_template.empty()) {
+            subInfo = L"DoH: " + utf8_to_wide(it.doh_template);
+        } else {
+            subInfo = L"IP: —";
+        }
         if (it.avg_ping > 0) {
             std::wstringstream ss;
             ss << std::fixed << std::setprecision(1);

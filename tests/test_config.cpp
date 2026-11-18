@@ -146,6 +146,21 @@ int main() {
         TEST_CHECK(akile.has_value() && akile->primary_ipv4 == "66.66.66.66" && akile->is_smart_dns,
                    "Preset 'akile' verified");
 
+        auto dns_ai = cfg.get_profile_by_id("dns_ai");
+        TEST_CHECK(dns_ai.has_value() &&
+                   dns_ai->name == "DNS-AI (DoH)" &&
+                   dns_ai->primary_ipv4 == "194.87.196.13" &&
+                   dns_ai->secondary_ipv4 == "45.151.102.219" &&
+                   dns_ai->primary_ipv6 == "2a00:b700:5::3:62" &&
+                   dns_ai->secondary_ipv6 == "2a12:5940:d4ef::219" &&
+                   dns_ai->doh_template == "https://dns.dns-ai.ru/dns-query" &&
+                   dns_ai->website_url == "https://dns-ai.ru/" &&
+                   dns_ai->is_builtin && !dns_ai->is_dhcp && dns_ai->is_smart_dns &&
+                   dns_ai->ip_pool.size() == 2 &&
+                   pool_contains(dns_ai->ip_pool, "194.87.196.13") &&
+                   pool_contains(dns_ai->ip_pool, "45.151.102.219"),
+                   "Preset 'dns_ai' (DNS-AI DoH) verified");
+
         auto cloudflare = cfg.get_profile_by_id("cloudflare");
         TEST_CHECK(cloudflare.has_value() && !cloudflare->is_smart_dns && cloudflare->is_builtin,
                    "Preset 'cloudflare' verified");
@@ -321,6 +336,12 @@ int main() {
             auto bezRu = cfgOld.get_profile_by_id("bezmezhau_ru");
             TEST_CHECK(bezRu.has_value() && bezRu->primary_ipv4 == "185.236.10.189",
                        "Migrated v2.0.1 inserted missing 'bezmezhau_ru' preset");
+            auto dnsAiMigrated = cfgOld.get_profile_by_id("dns_ai");
+            TEST_CHECK(dnsAiMigrated.has_value() &&
+                       dnsAiMigrated->primary_ipv4 == "194.87.196.13" &&
+                       dnsAiMigrated->doh_template == "https://dns.dns-ai.ru/dns-query" &&
+                       dnsAiMigrated->is_smart_dns && dnsAiMigrated->is_builtin,
+                       "Migrated v2.0.1 auto-inserted missing 'dns_ai' (DNS-AI DoH) preset");
         }
     }
 

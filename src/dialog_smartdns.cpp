@@ -591,6 +591,25 @@ void SmartDnsDialog::populate_smartdns_data(const std::vector<DnsProfile>& profi
         m_allEntries.push_back(std::move(e));
     }
 
+    // 13. DNS-AI (DoH)
+    {
+        SmartDnsEntry e;
+        e.profile_id = "dns_ai";
+        e.name = L"DNS-AI (DoH)";
+        e.website_url = L"https://dns-ai.ru/";
+        e.primary_ipv4 = L"194.87.196.13";
+        e.secondary_ipv4 = L"45.151.102.219";
+        e.doh_template = L"https://dns.dns-ai.ru/dns-query";
+        e.location = L"Россия / Европа (только DoH)";
+        e.description = L"Шифрованный SmartDNS (только DoH/DoT, порт 53 закрыт) для нейросетей без рекламы, трекеров и телеметрии (Windows 11+).";
+        e.categories = {
+            { L"Нейросети и AI", { L"ChatGPT", L"OpenAI API", L"Claude", L"Gemini", L"Google AI Studio", L"Microsoft Copilot", L"Grok", L"Cursor AI" } },
+            { L"Защита и Приватность", { L"Только шифрованный DoH (HTTP/2)", L"AdBlock (600k+ фильтров)", L"Антитрекинг и защита от малвари" } }
+        };
+        e.is_active = (e.profile_id == m_currentActiveId);
+        m_allEntries.push_back(std::move(e));
+    }
+
     // User-defined / Custom SmartDNS profiles
     for (const auto& p : profiles) {
         if (!p.is_smart_dns) continue;
@@ -1384,6 +1403,8 @@ void SmartDnsDialog::on_pick_ip_from_pool() {
             if (c.ip == ipUtf8) {
                 if (c.is_alive && c.latency_ms >= 0) {
                     label += L" (" + std::to_wstring(c.latency_ms) + L" ms)";
+                } else if (entry.doh_working && !entry.udp_alive) {
+                    label += L" (только DoH)";
                 } else {
                     label += L" (тайм-аут)";
                 }
@@ -1480,7 +1501,8 @@ void SmartDnsDialog::on_pick_ip_from_pool() {
         std::string newSecUtf8 = wide_to_utf8(entry.secondary_ipv4);
         for (const auto& c : entry.candidates) {
             if (c.ip == newPriUtf8) {
-                entry.ping_ms = c.is_alive ? c.latency_ms : -1;
+                entry.udp_alive = c.is_alive && c.latency_ms > 0;
+                entry.ping_ms = c.is_alive ? c.latency_ms : (entry.doh_working ? entry.doh_latency_ms : -1);
                 break;
             }
         }
@@ -1876,11 +1898,30 @@ void SmartDnsDialog::draw_card_item(Gdiplus::Graphics& g, size_t index, int y, i
     curCardY += addrH + dpf(2.0f);
 
     if (e.is_verified) {
-        std::wstring statStr = L"Статус: UDP " + (e.ping_ms > 0 ? std::to_wstring(e.ping_ms) + L" ms" : L"тайм-аут");
-        if (!e.doh_status.empty()) {
-            statStr += L"   |   " + e.doh_status;
+        std::wstring statStr;
+        Gdiplus::Color statColor;
+        if (e.udp_alive && e.ping_ms > 0) {
+            statStr = L"Статус: UDP " + std::to_wstring(e.ping_ms) + L" ms";
+            if (!e.doh_status.empty()) {
+                statStr += L"   |   " + e.doh_status;
+            }
+            statColor = Gdiplus::Color(255, GetRValue(pal.accentGreen), GetGValue(pal.accentGreen), GetBValue(pal.accentGreen));
+        } else if (e.doh_working) {
+            int dohMs = (e.doh_latency_ms > 0) ? e.doh_latency_ms : e.ping_ms;
+            if (dohMs > 0) {
+                statStr = L"Статус: DoH OK (только шифрованный DoH, " + std::to_wstring(dohMs) + L" мс)";
+            } else {
+                statStr = L"Статус: DoH OK (только шифрованный DoH)";
+            }
+            statColor = Gdiplus::Color(255, GetRValue(pal.accentGreen), GetGValue(pal.accentGreen), GetBValue(pal.accentGreen));
+        } else {
+            statStr = L"Статус: UDP тайм-аут";
+            if (!e.doh_status.empty()) {
+                statStr += L"   |   " + e.doh_status;
+            }
+            statColor = Gdiplus::Color(255, GetRValue(pal.accentRed), GetGValue(pal.accentRed), GetBValue(pal.accentRed));
         }
-        Gdiplus::SolidBrush statBr(e.ping_ms > 0 ? Gdiplus::Color(255, 34, 197, 94) : Gdiplus::Color(255, 239, 68, 68));
+        Gdiplus::SolidBrush statBr(statColor);
         g.DrawString(statStr.c_str(), -1, m_gpCardBadge.get(), Gdiplus::PointF(curCardX, curCardY), &statBr);
         curCardY += dpf(18.0f);
     }
@@ -2077,7 +2118,19 @@ LRESULT SmartDnsDialog::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 for (auto& e : m_allEntries) {
                     if (e.profile_id == r.profile_id) {
                         e.doh_status = r.doh_result.status_text;
-                        e.ping_ms = r.best_primary_latency;
+                        e.doh_working = r.doh_result.is_working;
+                        e.doh_latency_ms = r.doh_result.latency_ms;
+                        bool anyUdpAlive = false;
+                        for (const auto& c : r.candidate_ips) {
+                            if (c.is_alive && c.latency_ms > 0) {
+                                anyUdpAlive = true;
+                                break;
+                            }
+                        }
+                        e.udp_alive = anyUdpAlive;
+                        e.ping_ms = (anyUdpAlive && r.best_primary_latency > 0)
+                            ? r.best_primary_latency
+                            : (r.doh_result.is_working ? r.doh_result.latency_ms : r.best_primary_latency);
                         e.is_verified = true;
                         e.candidates = r.candidate_ips;
                         for (const auto& c : r.candidate_ips) {

@@ -15,6 +15,7 @@
 
 #include "smartdns_verifier.h"
 #include "ai_checker.h"
+#include "app_updater.h"
 #include "encoding_utils.h"
 
 #ifdef _MSC_VER
@@ -382,6 +383,8 @@ quickdns::SmartDnsVerificationResult verify_profile_impl(
     if (!alive.empty()) {
         res.best_primary_ip = alive[0].ip;
         res.best_primary_latency = alive[0].latency_ms;
+        res.best_latency_ms = alive[0].latency_ms;
+        res.is_doh_only = false;
 
         if (alive.size() > 1) {
             res.best_secondary_ip = alive[1].ip;
@@ -403,9 +406,21 @@ quickdns::SmartDnsVerificationResult verify_profile_impl(
             res.best_secondary_ip != res.original_secondary_ip) {
             res.ip_updated = true;
         }
+    } else if (res.doh_result.is_working) {
+        // Working DoH-only profile (e.g. DNS-AI where plain UDP/TCP port 53 is intentionally disabled)
+        res.best_primary_ip = profile.primary_ipv4;
+        res.best_secondary_ip = profile.secondary_ipv4;
+        res.best_primary_latency = -1;
+        res.best_secondary_latency = -1;
+        res.best_latency_ms = res.doh_result.latency_ms;
+        res.is_doh_only = true;
+        res.ip_updated = false;
     } else {
         res.best_primary_latency = -1;
         res.best_secondary_latency = -1;
+        res.best_latency_ms = -1;
+        res.is_doh_only = false;
+        res.ip_updated = false;
     }
 
     return res;
@@ -595,7 +610,7 @@ std::vector<std::string> SmartDnsVerifier::scrape_ips_from_webpage(
     }
 
     HINTERNET hSession = WinHttpOpen(
-        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) QuickDNS/2.3.0",
+        (std::wstring(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) QuickDNS/") + quickdns::APP_VERSION_W).c_str(),
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,
@@ -770,8 +785,9 @@ std::vector<DnsIpCandidate> SmartDnsVerifier::discover_candidate_ips(
     // 3. Resolve hostname from website_url ("resolved_host")
     std::string webHost = extract_host_from_url(profile.website_url);
     if (!webHost.empty() && webHost != dohHost && !is_cancelled(cancel_flag)) {
-        // Avoid resolving shared marketing domain geohide.ru into regional EU/US profiles
-        if (profile.id != "geohide_eu" && profile.id != "geohide_us") {
+        // Avoid resolving shared marketing domain geohide.ru into regional EU/US profiles,
+        // and exclude dns-ai.ru (web/SNI proxy 152.228.98.30, not a DNS resolver)
+        if (profile.id != "geohide_eu" && profile.id != "geohide_us" && profile.id != "dns_ai") {
             auto resolved = resolve_hostname_ips(webHost, 1000, cancel_flag);
             for (const auto& ip : resolved) {
                 add_candidate(ip, "resolved_host", false);
@@ -817,13 +833,16 @@ std::vector<DnsIpCandidate> SmartDnsVerifier::discover_candidate_ips(
         add_resolved_host("dns.mafioznik.xyz");
     } else if (profile.id.find("shecan") != std::string::npos) {
         add_resolved_host("free.shecan.ir");
+    } else if (profile.id == "dns_ai" || profile.id.find("dns_ai") != std::string::npos) {
+        add_resolved_host("dns.dns-ai.ru");
     }
 
     // 5. Safe HTTPS web scraping from provider webpage (defer UDP probing to verify_profile)
     if (!profile.website_url.empty() &&
         !is_cancelled(cancel_flag) &&
         profile.id != "geohide_eu" &&
-        profile.id != "geohide_us") {
+        profile.id != "geohide_us" &&
+        profile.id != "dns_ai") {
         auto scraped = scrape_ips_from_webpage(profile.website_url, 2200, cancel_flag);
         size_t added_scraped = 0;
         for (const auto& ip : scraped) {
@@ -1065,7 +1084,7 @@ DohVerificationResult SmartDnsVerifier::verify_doh(
     }
 
     HINTERNET hSession = WinHttpOpen(
-        L"QuickDNS/2.3.0 (Windows NT 10.0; Win64; x64)",
+        (std::wstring(L"QuickDNS/") + quickdns::APP_VERSION_W + L" (Windows NT 10.0; Win64; x64)").c_str(),
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,
@@ -1374,6 +1393,10 @@ int SmartDnsVerifier::apply_best_ips(
         for (const auto& c : alive) {
             add_to_pool(c.ip);
         }
+        if (res.is_doh_only || (alive.empty() && res.doh_result.is_working)) {
+            add_to_pool(p.primary_ipv4);
+            add_to_pool(p.secondary_ipv4);
+        }
         if (!res.best_primary_ip.empty()) {
             add_to_pool(res.best_primary_ip);
         }
@@ -1389,7 +1412,10 @@ int SmartDnsVerifier::apply_best_ips(
             profile_modified = true;
         }
 
-        if (res.ip_updated && is_valid_public_ipv4(res.best_primary_ip) &&
+        const bool is_doh_only_working = res.is_doh_only || (alive.empty() && res.doh_result.is_working);
+        if (!is_doh_only_working &&
+            res.ip_updated &&
+            is_valid_public_ipv4(res.best_primary_ip) &&
             (!p.is_smart_dns || !is_standard_public_resolver(res.best_primary_ip))) {
             std::string target_secondary;
             if (!res.best_secondary_ip.empty() &&

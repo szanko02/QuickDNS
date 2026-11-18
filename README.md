@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="res/app_logo.png" width="128" height="128" alt="QuickDNS Logo" />
 
@@ -15,7 +15,7 @@
 
 <br/>
 
-### [Скачать релиз v2.3.0 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
+### [Скачать релиз v2.3.1 (Portable ZIP / EXE)](https://github.com/szanko02/QuickDNS/releases/latest)
 > Не требует установки. Скачайте архив или файл `QuickDNS.exe` и запустите.
 
 </div>
@@ -35,12 +35,12 @@ QuickDNS автоматизирует этот процесс:
 ## Возможности
 
 * **Смена DNS в один клик:** Мгновенное применение IPv4/IPv6 настроек к активному сетевому адаптеру (Ethernet / Wi-Fi) через Windows IP Helper API (`SetInterfaceDnsSettings`) без перезагрузки системы и с автоматической очисткой кэша резолвера (`DnsFlushResolverCache`).
-* **Проверка доступности ИИ-сервисов (ChatGPT, Claude, Gemini, Copilot):** Отдельное окно комплексного аудита всех DNS-профилей с независимым UDP DNS-резолвом (RFC 1035), прямой проверкой TLS 1.2/1.3 через Windows Schannel (без изменения системного DNS), обнаружением геоблокировок (HTTP 403, unsupported country, редиректы, CDN-CGI trace) и применением лучшего профиля в один клик.
+* **Проверка доступности ИИ-сервисов (ChatGPT, Claude, Gemini, Copilot):** Отдельное окно комплексного аудита всех DNS-профилей с независимым UDP/TCP DNS-резолвом (RFC 1035) и автоматическим fallback на шифрованный DoH (RFC 8484 HTTP/2), прямой проверкой TLS 1.2/1.3 через Windows Schannel (без изменения системного DNS), обнаружением геоблокировок (HTTP 403, unsupported country, редиректы, CDN-CGI trace) и применением лучшего профиля в один клик.
 * **Каталог SmartDNS с автообновлением IP и DoH:** Встроенное окно с карточками провайдеров, категориями разблокируемых сервисов (нейросети, стриминги, рабочие платформы), поиском в реальном времени, верификатором рабочих IP-нод и проверкой RFC 8484 DoH.
 * **Пул альтернативных IP-адресов (`ip_pool`):** Выбор резервных и региональных IP-адресов внутри каждого профиля в один клик с автоматическим продвижением самых быстрых рабочих серверов.
 * **Поддержка DNS over HTTPS (DoH):** Настройка и валидация шаблонов DoH (`DohInterfaceSettings` / `DohProfileSettings` для Ethernet и Wi-Fi в Windows 10/11) с редактируемыми и копируемыми полями адресов.
-* **Интерактивный DNS Benchmark и мониторинг пинга:** Многопоточный замер задержки всех серверов с фильтрацией `[SmartDNS]`, выбором целевых доменов, непрерывным тестированием и sparkline-графиком стабильности отклика в реальном времени.
-* **Предустановленные и пользовательские профили:** 18 готовых пресетов (Comss.one, GeoHide RU/EU/US, Без межаў, Без межаў РФ, Zapret, Malw.link, Astracat, Mafioznik, Shecan, Control D, Akile, Cloudflare, Google, Quad9, AdGuard, DHCP), а также добавление и удаление собственных профилей.
+* **Интерактивный DNS Benchmark и мониторинг пинга:** Многопоточный замер задержки всех серверов (UDP/53 с автоматическим переключением на DoH HTTP/2 для шифрованных провайдеров) с фильтрацией `[SmartDNS]`, выбором целевых доменов, непрерывным тестированием и sparkline-графиком стабильности отклика в реальном времени.
+* **Предустановленные и пользовательские профили:** 19 готовых пресетов (Comss.one, GeoHide RU/EU/US, Без межаў, Без межаў РФ, Zapret, Malw.link, Astracat, Mafioznik, Shecan, Control D, Akile, DNS-AI (DoH), Cloudflare, Google, Quad9, AdGuard, DHCP), а также добавление и удаление собственных профилей.
 * **Работа в системном трее и быстрый доступ к сети Windows:** Сворачивание в область уведомлений, переключение DNS по правому клику без открытия главного окна и прямая кнопка вызова системных параметров сети Windows.
 * **Адаптивный Fluent-интерфейс (Dark / Light):** Плавное масштабирование под High-DPI (`PerMonitorV2`), рендеринг GDI+ со сглаживанием, переключение темной и светлой темы с адаптацией заголовка DWM и микроанимациями элементов управления.
 * **Безопасное автообновление и автономность:** Нативный C++20 и Win32 API со статической линковкой C++ Runtime (исполняемый файл ~1.3 МБ, потребление ~8 МБ RAM в фоне) и проверкой обновлений по SHA-256 через Windows BCrypt API.
@@ -64,6 +64,7 @@ QuickDNS автоматизирует этот процесс:
 | **Shecan DNS** | `[SmartDNS]` | `178.22.122.100` | `185.51.200.2` | `https://free.shecan.ir/dns-query` | [shecan.ir](https://shecan.ir/) | Антисанкционный: Docker Hub, Android Dev, Oracle, NVIDIA, Gradle, Google Services, AMD |
 | **Control D (ControlID)** | `[SmartDNS]` | `76.76.2.0` | `76.76.10.0` | `https://freedns.controld.com/p0` | [controld.com](https://controld.com/) | Anycast SmartDNS от Windscribe: ChatGPT, Claude, стриминги, защита от трекеров и фишинга |
 | **Akile DNS (AKDNS)** | `[SmartDNS]` | `66.66.66.66` | `108.160.138.51` | `https://dns.akile.ai/dns-query` | [dns.akile.ai](https://dns.akile.ai/) | Разблокировка стримингов: Netflix, Disney+, YouTube, ChatGPT, Spotify, TikTok |
+| **DNS-AI (DoH)** | `[SmartDNS]` | `194.87.196.13` | `45.151.102.219` | `https://dns.dns-ai.ru/dns-query` | [dns-ai.ru](https://dns-ai.ru/) | Шифрованный DoH (Win11+): ChatGPT, OpenAI, Claude, Gemini, AI Studio, Copilot, Grok, Cursor + AdBlock |
 | **Cloudflare (1.1.1.1)** | Публичный | `1.1.1.1` | `1.0.0.1` | `https://cloudflare-dns.com/dns-query` | [1.1.1.1](https://1.1.1.1/) | Высокая скорость отклика и повышенная приватность |
 | **Google Public DNS** | Публичный | `8.8.8.8` | `8.8.4.4` | `https://dns.google/dns-query` | [developers.google.com](https://developers.google.com/speed/public-dns) | Общедоступный стабильный глобальный DNS-резолвер |
 | **Quad9 DNS** | Безопасность | `9.9.9.9` | `149.112.112.112` | `https://dns.quad9.net/dns-query` | [quad9.net](https://quad9.net/) | Блокировка вредоносных и фишинговых ресурсов |
@@ -77,7 +78,7 @@ QuickDNS автоматизирует этот процесс:
 
 ## Инструкция по использованию
 
-1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v2.3.0-Portable.zip` со страницы последнего релиза.
+1. Скачайте [`QuickDNS.exe`](https://github.com/szanko02/QuickDNS/releases/latest) или архив `QuickDNS-v2.3.1-Portable.zip` со страницы последнего релиза.
 2. Запустите **`QuickDNS.exe`** (при запуске подтвердите стандартный запрос UAC для доступа к сетевым параметрам).
 3. Программа автоматически определит ваш активный адаптер (Wi-Fi или Ethernet).
 4. Выберите нужный DNS-профиль из выпадающего списка (при необходимости выберите альтернативную ноду из пула IP).
@@ -189,7 +190,6 @@ QuickDNS/
 │   └── nlohmann/
 │       └── json.hpp                   # Библиотека сериализации JSON
 ├── tools/                             # Утилиты генерации графических ассетов
-├── AGENTS.md                          # Правила разработки и оформления релизов
 ├── build.bat                          # Автономная сборка через LLVM-MinGW / MSYS2
 ├── CMakeLists.txt                     # Конфигурация сборки CMake и тестов CTest
 ├── LICENSE                            # Лицензия MIT

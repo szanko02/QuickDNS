@@ -79,13 +79,22 @@ public:
         const std::atomic<bool>* cancel_flag = nullptr
     );
 
-    // Checks a single AI service via a specific DNS server IP
+    // Resolves IPv4 A-record for `domain` via RFC 8484 DNS-over-HTTPS (HTTP/2 POST with GET fallback)
+    static std::string resolve_domain_via_doh(
+        const std::string& doh_url,
+        const std::string& domain,
+        int timeout_ms = 2500,
+        const std::atomic<bool>* cancel_flag = nullptr
+    );
+
+    // Checks a single AI service via a specific DNS server IP (with optional DoH fallback URL)
     static AiServiceCheckResult check_single_service(
         const std::string& dns_server_ip,
         AiService service,
         const std::string& client_country_code = "",
         int timeout_ms = 3500,
-        const std::atomic<bool>* cancel_flag = nullptr
+        const std::atomic<bool>* cancel_flag = nullptr,
+        const std::string& doh_url = ""
     );
 
     // Checks all 4 AI services (ChatGPT, Claude, Gemini, Copilot) concurrently for a single DnsProfile
