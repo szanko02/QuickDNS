@@ -1,5 +1,6 @@
 #include "app_updater.h"
 #include "encoding_utils.h"
+#include "split_routing.h"
 #include "../third_party/nlohmann/json.hpp"
 #include <winhttp.h>
 #include <shellapi.h>
@@ -8,6 +9,9 @@
 #include <algorithm>
 #include <iostream>
 #include <cctype>
+#include <charconv>
+#include <memory>
+#include <string_view>
 
 namespace quickdns {
 
@@ -67,213 +71,238 @@ bool AppUpdater::is_version_newer(const std::string& currentVer, const std::stri
     return false;
 }
 
-std::optional<ReleaseInfo> AppUpdater::check_github_update(
-    const std::string& currentVersion,
-    const std::string& repoOwner,
-    const std::string& repoName)
-{
-    HINTERNET hSession = WinHttpOpen(
-        L"QuickDNS-AppUpdater/2.0",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME,
-        WINHTTP_NO_PROXY_BYPASS, 0
-    );
-    if (!hSession) return std::nullopt;
+namespace {
 
-    DWORD to = 10000;
-    WinHttpSetTimeouts(hSession, to, to, to, to);
+using nlohmann::json;
 
-    // Follow redirects automatically, disallowing downgrade to HTTP
-    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
-    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+bool valid_repo_component(std::string_view name) {
+    constexpr std::string_view allowed =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.";
+    return !name.empty() && name != "." && name != ".." &&
+           name.find_first_not_of(allowed) == std::string_view::npos;
+}
 
-    HINTERNET hConnect = WinHttpConnect(hSession, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) {
-        WinHttpCloseHandle(hSession);
+bool valid_release_tag(std::string_view tag) {
+    if (!tag.starts_with('v')) return false;
+    tag.remove_prefix(1);
+    for (int index = 0; index < 3; ++index) {
+        const auto dot = tag.find('.');
+        if ((dot == std::string_view::npos) != (index == 2)) return false;
+        const auto part = tag.substr(0, dot);
+        if (part.empty() || (part.length() > 1 && part[0] == '0') ||
+            part.find_first_not_of("0123456789") != std::string_view::npos) return false;
+        int value = 0;
+        if (std::from_chars(part.data(), part.data() + part.size(), value).ec != std::errc{}) return false;
+        if (index != 2) tag.remove_prefix(dot + 1);
+    }
+    return true;
+}
+
+std::optional<std::string> fetch_release_response(const std::string& url, bool redirectOnly) {
+    constexpr std::string_view scheme = "https://";
+    if (!url.starts_with(scheme)) return std::nullopt;
+    const auto pathStart = url.find('/', scheme.size());
+    if (pathStart == std::string::npos) return std::nullopt;
+    const auto host = url.substr(scheme.size(), pathStart - scheme.size());
+    if (host != "github.com" && host != "api.github.com") return std::nullopt;
+
+    using HttpHandle = std::unique_ptr<void, decltype(&WinHttpCloseHandle)>;
+    HttpHandle session(WinHttpOpen(L"QuickDNS-AppUpdater/2.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0), WinHttpCloseHandle);
+    if (!session) return std::nullopt;
+    WinHttpSetTimeouts(session.get(), 10000, 10000, 10000, 10000);
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+    if (!WinHttpSetOption(session.get(), WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy)))
         return std::nullopt;
-    }
 
-    std::wstring path = L"/repos/" + QuickDns::Encoding::utf8_to_wide(repoOwner) + L"/" + QuickDns::Encoding::utf8_to_wide(repoName) + L"/releases/latest";
-    HINTERNET hRequest = WinHttpOpenRequest(
-        hConnect, L"GET", path.c_str(),
-        nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE
-    );
+    const auto hostWide = QuickDns::Encoding::utf8_to_wide(host);
+    HttpHandle connection(WinHttpConnect(session.get(), hostWide.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0),
+                          WinHttpCloseHandle);
+    if (!connection) return std::nullopt;
+    const auto pathWide = QuickDns::Encoding::utf8_to_wide(url.substr(pathStart));
+    HttpHandle request(WinHttpOpenRequest(connection.get(), redirectOnly ? L"HEAD" : L"GET", pathWide.c_str(),
+        nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE), WinHttpCloseHandle);
+    if (!request) return std::nullopt;
+    const wchar_t* headers = host == "api.github.com" ? L"Accept: application/vnd.github+json\r\n" : L"Accept: */*\r\n";
+    if (!WinHttpSendRequest(request.get(), headers, static_cast<DWORD>(-1), nullptr, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.get(), nullptr)) return std::nullopt;
 
-    if (!hRequest) {
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+    DWORD status = 0;
+    DWORD statusSize = sizeof(status);
+    if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX))
         return std::nullopt;
+    if (redirectOnly) {
+        if (status < 300 || status >= 400) return std::nullopt;
+        wchar_t location[1024]{};
+        DWORD size = sizeof(location);
+        if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
+                                location, &size, WINHTTP_NO_HEADER_INDEX)) return std::nullopt;
+        return QuickDns::Encoding::wide_to_utf8(location);
     }
+    if (status != 200) return std::nullopt;
 
-    std::wstring headers = L"User-Agent: QuickDNS-AppUpdater\r\nAccept: application/vnd.github+json\r\n";
-    BOOL sent = WinHttpSendRequest(hRequest, headers.c_str(), static_cast<DWORD>(headers.length()), nullptr, 0, 0, 0);
+    constexpr size_t maxResponseSize = 4 * 1024 * 1024;
+    std::string body;
+    char buffer[8192];
+    DWORD bytesRead = 0;
+    do {
+        if (!WinHttpReadData(request.get(), buffer, sizeof(buffer), &bytesRead) ||
+            body.size() + bytesRead > maxResponseSize) return std::nullopt;
+        body.append(buffer, bytesRead);
+    } while (bytesRead != 0);
+    return body;
+}
 
-    std::string responseBody;
-    if (sent && WinHttpReceiveResponse(hRequest, nullptr)) {
-        DWORD statusCode = 0;
-        DWORD sz = sizeof(statusCode);
-        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &sz, WINHTTP_NO_HEADER_INDEX);
+std::string_view release_tag_from_link(std::string_view link, std::string_view tagPath) {
+    constexpr std::string_view github = "https://github.com";
+    if (link.starts_with(github)) link.remove_prefix(github.size());
+    if (!link.starts_with(tagPath)) return {};
+    const auto tag = link.substr(tagPath.size());
+    return valid_release_tag(tag) ? tag : std::string_view{};
+}
 
-        if (statusCode == 200) {
-            char buffer[8192];
-            DWORD bytesRead = 0;
-            while (WinHttpReadData(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-                responseBody.append(buffer, bytesRead);
-            }
-        }
-    }
-
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
-
-    if (responseBody.empty()) {
-        // Fallback: Query https://github.com/{owner}/{repo}/releases/latest with HEAD request
-        // Bypasses api.github.com REST rate limits (e.g. HTTP 403 on shared SmartDNS IPs)
-        HINTERNET hFallbackSession = WinHttpOpen(
-            L"Mozilla/5.0",
-            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-            WINHTTP_NO_PROXY_NAME,
-            WINHTTP_NO_PROXY_BYPASS, 0
-        );
-        if (!hFallbackSession) return std::nullopt;
-
-        DWORD redirectPolicyNever = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
-        WinHttpSetOption(hFallbackSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicyNever, sizeof(redirectPolicyNever));
-
-        DWORD fbTo = 10000;
-        WinHttpSetTimeouts(hFallbackSession, fbTo, fbTo, fbTo, fbTo);
-
-        HINTERNET hFallbackConnect = WinHttpConnect(hFallbackSession, L"github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
-        if (!hFallbackConnect) {
-            WinHttpCloseHandle(hFallbackSession);
-            return std::nullopt;
-        }
-
-        std::wstring fbPath = L"/" + QuickDns::Encoding::utf8_to_wide(repoOwner) + L"/" + QuickDns::Encoding::utf8_to_wide(repoName) + L"/releases/latest";
-        HINTERNET hFallbackReq = WinHttpOpenRequest(
-            hFallbackConnect, L"HEAD", fbPath.c_str(),
-            nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE
-        );
-
-        if (!hFallbackReq) {
-            WinHttpCloseHandle(hFallbackConnect);
-            WinHttpCloseHandle(hFallbackSession);
-            return std::nullopt;
-        }
-
-        std::wstring fbHeaders = L"User-Agent: QuickDNS-AppUpdater\r\nAccept: */*\r\n";
-        std::wstring locHeader;
-        if (WinHttpSendRequest(hFallbackReq, fbHeaders.c_str(), static_cast<DWORD>(fbHeaders.length()), nullptr, 0, 0, 0) &&
-            WinHttpReceiveResponse(hFallbackReq, nullptr))
-        {
-            wchar_t locBuf[1024] = {};
-            DWORD locSz = sizeof(locBuf);
-            if (WinHttpQueryHeaders(hFallbackReq, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
-                                    locBuf, &locSz, WINHTTP_NO_HEADER_INDEX)) {
-                locHeader = locBuf;
-            }
-        }
-
-        WinHttpCloseHandle(hFallbackReq);
-        WinHttpCloseHandle(hFallbackConnect);
-        WinHttpCloseHandle(hFallbackSession);
-
-        if (locHeader.empty()) return std::nullopt;
-
-        size_t tagPos = locHeader.rfind(L"/tag/");
-        if (tagPos == std::wstring::npos) return std::nullopt;
-
-        std::wstring tagW = locHeader.substr(tagPos + 5);
-        if (tagW.empty()) return std::nullopt;
-
-        int utf8Len = WideCharToMultiByte(CP_UTF8, 0, tagW.c_str(), static_cast<int>(tagW.size()), nullptr, 0, nullptr, nullptr);
-        std::string tag(utf8Len, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, tagW.c_str(), static_cast<int>(tagW.size()), tag.data(), utf8Len, nullptr, nullptr);
-
-        ReleaseInfo fbInfo;
-        fbInfo.tag_name = tag;
-        fbInfo.title = "QuickDNS " + tag;
-        fbInfo.notes = "";
-        fbInfo.semver = tag;
-        if (!fbInfo.semver.empty() && (fbInfo.semver[0] == 'v' || fbInfo.semver[0] == 'V')) {
-            fbInfo.semver = fbInfo.semver.substr(1);
-        }
-        fbInfo.download_url = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/" + tag + "/QuickDNS.exe";
-        fbInfo.sha256_url = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/" + tag + "/QuickDNS.exe.sha256";
-        fbInfo.is_newer = is_version_newer(currentVersion, fbInfo.semver);
-        return fbInfo;
-    }
-
-    auto j = nlohmann::json::parse(responseBody, nullptr, false);
-    if (j.is_discarded() || !j.is_object()) {
-        std::wcerr << L"Не удалось разобрать ответ сервера обновлений." << std::endl;
-        return std::nullopt;
-    }
-
+ReleaseInfo release_info(const std::string& tag, const std::string& currentVersion,
+                         const std::string& releasesUrl, const char* assetName) {
     ReleaseInfo info;
-    std::string tag_name = j.value("tag_name", std::string{});
-    std::string body = j.value("body", std::string{});
-    info.title = j.value("name", std::string{});
-
-    std::string exeUrl;
-    std::string shaUrl;
-
-    if (j.contains("assets") && j["assets"].is_array()) {
-        for (const auto& asset : j["assets"]) {
-            if (!asset.is_object()) continue;
-            std::string assetName = asset.value("name", std::string{});
-            if (assetName == "QuickDNS.exe") {
-                exeUrl = asset.value("browser_download_url", std::string{});
-                if (asset.contains("size") && asset["size"].is_number()) {
-                    info.asset_size = asset["size"].get<size_t>();
-                }
-            } else if (assetName == "QuickDNS.exe.sha256") {
-                shaUrl = asset.value("browser_download_url", std::string{});
-            }
-        }
-
-        // As a fallback if exeUrl is still empty after checking for "QuickDNS.exe",
-        // accept the first asset whose "name" ends with ".exe" and store its "browser_download_url"
-        if (exeUrl.empty()) {
-            for (const auto& asset : j["assets"]) {
-                if (!asset.is_object()) continue;
-                std::string assetName = asset.value("name", std::string{});
-                if (assetName.size() >= 4 && assetName.compare(assetName.size() - 4, 4, ".exe") == 0) {
-                    exeUrl = asset.value("browser_download_url", std::string{});
-                    if (asset.contains("size") && asset["size"].is_number()) {
-                        info.asset_size = asset["size"].get<size_t>();
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    // Convert tag_name, body, exeUrl, shaUrl to std::wstring via QuickDns::Encoding::utf8_to_wide
-    std::wstring tag_name_w = QuickDns::Encoding::utf8_to_wide(tag_name);
-    std::wstring body_w = QuickDns::Encoding::utf8_to_wide(body);
-    std::wstring exeUrl_w = QuickDns::Encoding::utf8_to_wide(exeUrl);
-    std::wstring shaUrl_w = QuickDns::Encoding::utf8_to_wide(shaUrl);
-
-    // Also normalize lone \n (not preceded by \r) in info.changelog (notes) to \r\n for Win32 controls
-    body_w = normalize_crlf(body_w);
-
-    info.tag_name = QuickDns::Encoding::wide_to_utf8(tag_name_w);
-    info.notes = QuickDns::Encoding::wide_to_utf8(body_w);
-    info.download_url = QuickDns::Encoding::wide_to_utf8(exeUrl_w);
-    info.sha256_url = QuickDns::Encoding::wide_to_utf8(shaUrl_w);
-
-    if (info.tag_name.empty()) return std::nullopt;
-
-    info.semver = info.tag_name;
-    if (!info.semver.empty() && (info.semver[0] == 'v' || info.semver[0] == 'V')) {
-        info.semver = info.semver.substr(1);
-    }
-
-    info.is_newer = is_version_newer(currentVersion, info.semver);
+    info.tag_name = tag;
+    info.semver = tag.substr(1);
+    info.title = "QuickDNS " + tag;
+    info.download_url = releasesUrl + "/download/" + tag + "/" + assetName;
+    info.sha256_url = info.download_url + ".sha256";
+    info.is_newer = AppUpdater::is_version_newer(currentVersion, info.semver);
     return info;
+}
+
+std::string json_string(const json& object, const char* key) {
+    const auto it = object.find(key);
+    return it != object.end() && it->is_string() ? it->get<std::string>() : std::string{};
+}
+
+bool release_flag_clear(const json& release, const char* key) {
+    const auto it = release.find(key);
+    return it == release.end() || (it->is_boolean() && !it->get<bool>());
+}
+
+std::optional<ReleaseInfo> compatible_api_release(const json& release, const std::string& currentVersion,
+    const std::string& releasesUrl, const char* assetName, UpdateEdition edition) {
+    if (!release.is_object() || !release_flag_clear(release, "draft") ||
+        (edition == UpdateEdition::Classic && !release_flag_clear(release, "prerelease"))) return std::nullopt;
+    const auto tag = json_string(release, "tag_name");
+    const auto assets = release.find("assets");
+    if (!valid_release_tag(tag) || assets == release.end() || !assets->is_array()) return std::nullopt;
+
+    auto info = release_info(tag, currentVersion, releasesUrl, assetName);
+    const std::string checksumName = std::string(assetName) + ".sha256";
+    bool executableFound = false;
+    bool checksumFound = false;
+    for (const auto& asset : *assets) {
+        if (!asset.is_object()) continue;
+        const auto name = json_string(asset, "name");
+        const auto url = json_string(asset, "browser_download_url");
+        if (name == assetName && url == info.download_url) {
+            executableFound = true;
+            const auto size = asset.find("size");
+            if (size != asset.end() && size->is_number_unsigned()) info.asset_size = size->get<size_t>();
+        } else if (name == checksumName && url == info.sha256_url) {
+            checksumFound = true;
+        }
+    }
+    if (!executableFound || !checksumFound) return std::nullopt;
+    const auto title = json_string(release, "name");
+    if (!title.empty()) info.title = title;
+    info.notes = QuickDns::Encoding::wide_to_utf8(normalize_crlf(
+        QuickDns::Encoding::utf8_to_wide(json_string(release, "body"))));
+    return info;
+}
+
+std::vector<std::string> release_tags_from_feed(std::string_view feed, const std::string& tagPath) {
+    constexpr std::string_view href = " href=\"";
+    std::vector<std::string> tags;
+    size_t pos = 0;
+    while ((pos = feed.find(href, pos)) != std::string_view::npos) {
+        pos += href.size();
+        const auto end = feed.find('"', pos);
+        if (end == std::string_view::npos) break;
+        const auto tag = release_tag_from_link(feed.substr(pos, end - pos), tagPath);
+        if (!tag.empty()) tags.emplace_back(tag);
+        pos = end + 1;
+    }
+    std::sort(tags.begin(), tags.end(), [](const auto& a, const auto& b) {
+        return AppUpdater::is_version_newer(b, a);
+    });
+    tags.erase(std::unique(tags.begin(), tags.end()), tags.end());
+    return tags;
+}
+
+bool contains_asset_link(const std::string& html, const std::string& fullUrl) {
+    constexpr std::string_view github = "https://github.com";
+    return html.find(" href=\"" + fullUrl.substr(github.size()) + "\"") != std::string::npos ||
+           html.find(" href=\"" + fullUrl + "\"") != std::string::npos;
+}
+
+} // anonymous namespace
+
+std::optional<ReleaseInfo> AppUpdater::check_github_update(
+    const std::string& currentVersion, const std::string& repoOwner, const std::string& repoName,
+    UpdateEdition edition, ReleaseFetcher fetch) {
+    if (!valid_repo_component(repoOwner) || !valid_repo_component(repoName)) return std::nullopt;
+    if (!fetch) fetch = fetch_release_response;
+
+    const std::string releasesPath = "/" + repoOwner + "/" + repoName + "/releases";
+    const std::string releasesUrl = "https://github.com" + releasesPath;
+    const std::string apiUrl = "https://api.github.com/repos" + releasesPath;
+    const auto* assetName = edition == UpdateEdition::Embedded ? "QuickDNS-Embedded.exe" : "QuickDNS.exe";
+    if (edition == UpdateEdition::Classic) {
+        if (const auto response = fetch(apiUrl + "/latest", false)) {
+            const auto release = json::parse(*response, nullptr, false);
+            if (auto info = compatible_api_release(release, currentVersion, releasesUrl, assetName, edition)) return info;
+        }
+    } else {
+        std::optional<ReleaseInfo> best;
+        for (size_t page = 1; ; ++page) {
+            auto url = apiUrl + "?per_page=100";
+            if (page > 1) url += "&page=" + std::to_string(page);
+            const auto response = fetch(url, false);
+            if (!response) break;
+            const auto releases = json::parse(*response, nullptr, false);
+            if (!releases.is_array()) break;
+            for (const auto& release : releases) {
+                auto info = compatible_api_release(release, currentVersion, releasesUrl, assetName, edition);
+                if (info && (!best || is_version_newer(best->semver, info->semver))) best = std::move(info);
+            }
+            if (releases.size() < 100) break;
+        }
+        if (best) return best;
+    }
+
+    // Public GitHub pages remain available when the Releases API is rate-limited.
+    std::vector<std::string> tags;
+    const auto tagPath = releasesPath + "/tag/";
+    if (edition == UpdateEdition::Classic) {
+        if (const auto location = fetch(releasesUrl + "/latest", true)) {
+            const auto tag = release_tag_from_link(*location, tagPath);
+            if (!tag.empty()) tags.emplace_back(tag);
+        }
+    } else if (const auto feed = fetch(releasesUrl + ".atom", false)) {
+        tags = release_tags_from_feed(*feed, tagPath);
+    }
+    for (const auto& tag : tags) {
+        auto info = release_info(tag, currentVersion, releasesUrl, assetName);
+        const auto assets = fetch(releasesUrl + "/expanded_assets/" + tag, false);
+        if (assets && contains_asset_link(*assets, info.download_url) && contains_asset_link(*assets, info.sha256_url))
+            return info;
+    }
+    return std::nullopt;
+}
+
+bool AppUpdater::verify_executable_edition(const std::wstring& filePath, UpdateEdition edition) {
+    const auto image = LoadLibraryExW(filePath.c_str(), nullptr,
+                                      LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if (!image) return false;
+    const bool embedded = has_embedded_routing_engine(image);
+    FreeLibrary(image);
+    return embedded == (edition == UpdateEdition::Embedded);
 }
 
 bool AppUpdater::is_allowed_update_url(const std::wstring& url) {

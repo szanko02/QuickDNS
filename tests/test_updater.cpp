@@ -1,6 +1,8 @@
 #include "app_updater.h"
 #include <iostream>
 #include <cassert>
+#include <unordered_map>
+#include <string_view>
 
 using namespace quickdns;
 
@@ -61,6 +63,90 @@ void test_github_api_query() {
     } else {
         std::cout << "[WARN] GitHub API unreachable (network offline?); skipping remote query." << std::endl;
     }
+    const auto embedded = AppUpdater::check_github_update("1.7.0", "szanko02", "QuickDNS", UpdateEdition::Embedded);
+    if (embedded) {
+        TEST_CHECK(embedded->download_url.ends_with("/QuickDNS-Embedded.exe") &&
+                   embedded->sha256_url.ends_with("/QuickDNS-Embedded.exe.sha256"),
+                   "Live GitHub embedded pair found in " + embedded->tag_name);
+    } else {
+        std::cout << "[WARN] GitHub did not provide a compatible embedded release; skipping remote query." << std::endl;
+    }
+}
+
+void test_edition_selection() {
+    const std::string repo = "https://github.com/szanko02/QuickDNS";
+    const std::string api = "https://api.github.com/repos/szanko02/QuickDNS";
+    const auto asset = [&](const std::string& tag, const std::string& name) {
+        return "{\"name\":\"" + name + "\",\"browser_download_url\":\"" +
+            repo + "/releases/download/" + tag + "/" + name + "\"}";
+    };
+    const auto release = [&](const std::string& tag, const std::string& assets,
+                             bool prerelease = false, bool draft = false) {
+        return "{\"tag_name\":\"" + tag + "\",\"prerelease\":" + (prerelease ? "true" : "false") +
+            ",\"draft\":" + (draft ? "true" : "false") + ",\"assets\":[" + assets + "]}";
+    };
+    const auto pair = [&](const std::string& tag, const std::string& name) {
+        return asset(tag, name) + "," + asset(tag, name + ".sha256");
+    };
+    const std::string classic = "QuickDNS.exe";
+    const std::string embedded = "QuickDNS-Embedded.exe";
+    std::unordered_map<std::string, std::string> responses;
+    const auto check = [&](UpdateEdition edition, const std::string& version = "2.2.3") {
+        return AppUpdater::check_github_update(version, "szanko02", "QuickDNS", edition,
+            [&](const std::string& url, bool) -> std::optional<std::string> {
+                const auto it = responses.find(url);
+                if (it == responses.end()) return std::nullopt;
+                return it->second;
+            });
+    };
+
+    responses[api + "/releases/latest"] = release("v2.3.1", pair("v2.3.1", classic));
+    responses[api + "/releases?per_page=100"] = "[" +
+        release("v2.2.9", pair("v2.2.9", embedded), true) + "," +
+        release("v2.3.1", pair("v2.3.1", classic)) + "," +
+        release("v2.2.10", pair("v2.2.10", embedded), true) + "," +
+        release("v2.3.2", asset("v2.3.2", embedded) + "," + asset("v2.3.1", embedded + ".sha256")) + "," +
+        release("v2.3.3", pair("v2.3.3", embedded), false, true) + "," +
+        release("v2.3.4", pair("v2.3.4", embedded)) + "]";
+    auto& catalog = responses[api + "/releases?per_page=100"];
+    const auto wrong_repo = catalog.find("/szanko02/QuickDNS/releases/download/v2.3.4/");
+    catalog.replace(wrong_repo, std::string("/szanko02/QuickDNS").size(), "/other/QuickDNS");
+    const auto stable = check(UpdateEdition::Classic);
+    TEST_CHECK(stable && stable->tag_name == "v2.3.1" && stable->download_url.ends_with("/QuickDNS.exe"),
+               "Classic stays on the stable release and its own executable");
+    const auto routing = check(UpdateEdition::Embedded);
+    TEST_CHECK(routing && routing->tag_name == "v2.2.10" && routing->is_newer &&
+               routing->download_url.ends_with("/QuickDNS-Embedded.exe") &&
+               routing->sha256_url.ends_with("/QuickDNS-Embedded.exe.sha256"),
+               "Embedded picks the highest numeric compatible prerelease and skips invalid pairs and drafts");
+    const auto current = check(UpdateEdition::Embedded, "2.2.10");
+    TEST_CHECK(current && !current->is_newer, "No update when already running the newest compatible release");
+    responses[api + "/releases/latest"] = release("v2.3.1", pair("v2.3.1", embedded));
+    TEST_CHECK(!check(UpdateEdition::Classic), "Classic never accepts the embedded executable as a fallback");
+
+    responses.clear();
+    const auto release_link = [&](const std::string& tag) {
+        return "<link rel=\"alternate\" href=\"" + repo + "/releases/tag/" + tag + "\"/>";
+    };
+    const auto asset_link = [](const std::string& tag, const std::string& name) {
+        return "<a href=\"/szanko02/QuickDNS/releases/download/" + tag + "/" + name + "\">asset</a>";
+    };
+    responses[repo + "/releases.atom"] = release_link("v2.2.4") + release_link("v2.3.1");
+    responses[repo + "/releases/expanded_assets/v2.2.4"] =
+        asset_link("v2.2.4", embedded) + asset_link("v2.2.4", embedded + ".sha256");
+    responses[repo + "/releases/expanded_assets/v2.3.1"] =
+        asset_link("v2.3.1", classic) + asset_link("v2.3.1", classic + ".sha256");
+    responses[repo + "/releases/latest"] = repo + "/releases/tag/v2.3.1";
+    const auto fallback = check(UpdateEdition::Embedded);
+    TEST_CHECK(fallback && fallback->tag_name == "v2.2.4" && fallback->download_url.ends_with("/QuickDNS-Embedded.exe"),
+               "Public GitHub fallback verifies the embedded pair and skips a newer classic release");
+    const auto classic_fallback = check(UpdateEdition::Classic);
+    TEST_CHECK(classic_fallback && classic_fallback->tag_name == "v2.3.1" &&
+               classic_fallback->sha256_url.ends_with("/QuickDNS.exe.sha256"),
+               "Stable fallback verifies the classic checksum asset before offering an update");
+    responses[repo + "/releases/expanded_assets/v2.2.4"] =
+        asset_link("v2.2.4", embedded) + asset_link("v2.2.3", embedded + ".sha256");
+    TEST_CHECK(!check(UpdateEdition::Embedded), "Public GitHub fallback rejects a checksum from another release");
 }
 
 void test_allowed_hosts() {
@@ -233,17 +319,21 @@ void test_file_replacement_and_rollback() {
     DeleteFileW(oldPath.c_str());
 }
 
-int main() {
+int main(int argc, char** argv) {
     std::cout << "========================================" << std::endl;
     std::cout << "     QuickDNS App Updater Tests" << std::endl;
     std::cout << "========================================" << std::endl;
 
-    test_semver_parsing();
-    test_version_comparison();
-    test_allowed_hosts();
-    test_integrity_verification();
-    test_file_replacement_and_rollback();
-    test_github_api_query();
+    if (argc == 2 && std::string_view(argv[1]) == "--live") {
+        test_github_api_query();
+    } else {
+        test_semver_parsing();
+        test_version_comparison();
+        test_edition_selection();
+        test_allowed_hosts();
+        test_integrity_verification();
+        test_file_replacement_and_rollback();
+    }
 
     std::cout << "========================================" << std::endl;
     std::cout << "Results: " << g_pass << " PASSED, " << g_fail << " FAILED" << std::endl;

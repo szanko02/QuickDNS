@@ -6,6 +6,7 @@
 
 namespace quickdns {
 bool has_embedded_routing_engine();
+bool has_embedded_routing_engine(HMODULE image);
 std::wstring new_split_routing_tun_alias();
 struct SplitRoutingTarget {
     std::filesystem::path path;

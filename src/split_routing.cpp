@@ -33,8 +33,8 @@ bool has_active_quickdns_tun() {
     return active;
 }
 
-HRSRC embedded_engine() {
-    return FindResourceW(nullptr, MAKEINTRESOURCEW(4301), RT_RCDATA);
+HRSRC embedded_engine(HMODULE image = nullptr) {
+    return FindResourceW(image, MAKEINTRESOURCEW(4301), RT_RCDATA);
 }
 
 std::filesystem::path known_folder(REFKNOWNFOLDERID id) {
@@ -142,6 +142,7 @@ json split_dns_config(const RoutingAdapter& primary, const RoutingAdapter& secon
 }
 
 bool has_embedded_routing_engine() { return embedded_engine() != nullptr; }
+bool has_embedded_routing_engine(HMODULE image) { return embedded_engine(image) != nullptr; }
 
 std::wstring new_split_routing_tun_alias() {
     // sing-tun derives the Wintun device GUID from its alias. A previous device

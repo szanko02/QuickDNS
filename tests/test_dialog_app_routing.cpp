@@ -1,4 +1,5 @@
 #include "dialog_app_routing.h"
+#include "app_updater.h"
 #include "encoding_utils.h"
 #include "split_routing.h"
 #include <nlohmann/json.hpp>
@@ -174,12 +175,19 @@ int main() {
                 check(GetWindowRect(GetDlgItem(split_dialog.window(), id), &bounds), "missing routing control");
                 return bounds.top;
             };
-            check(top(SplitPrimary) == top(RoutingAdapterCombo) && top(SplitPrimary) < top(RoutingAdd) &&
-                  top(RoutingAdd) < top(RoutingList) && top(RoutingList) < top(SplitEngine),
-                  "network, rule, and engine controls are out of order");
+            check(top(SplitPrimary) == top(RoutingAdapterCombo) && top(SplitPrimary) < top(SplitEngine),
+                  "network controls must appear above the engine");
             const HWND engine = GetDlgItem(split_dialog.window(), SplitEngine);
             const HWND browse = GetDlgItem(split_dialog.window(), SplitBrowse);
             const bool embedded = has_embedded_routing_engine();
+            wchar_t test_executable[32768]{};
+            const auto exe_length = GetModuleFileNameW(nullptr, test_executable, static_cast<DWORD>(std::size(test_executable)));
+            const auto edition = embedded ? UpdateEdition::Embedded : UpdateEdition::Classic;
+            const auto other_edition = embedded ? UpdateEdition::Classic : UpdateEdition::Embedded;
+            check(exe_length > 0 && exe_length < std::size(test_executable) &&
+                  AppUpdater::verify_executable_edition(test_executable, edition) &&
+                  !AppUpdater::verify_executable_edition(test_executable, other_edition),
+                  "update payload must match the current edition by its embedded engine resource");
             const auto engine_style = GetWindowLongPtrW(engine, GWL_STYLE);
             check(engine && browse && (engine_style & WS_VISIBLE) &&
                   (GetWindowLongPtrW(browse, GWL_STYLE) & WS_VISIBLE),
@@ -197,10 +205,8 @@ int main() {
                 check(std::filesystem::path(engine_path) == std::filesystem::path(expected_engine),
                       "the EXE did not preselect the adjacent sing-box.exe");
             }
-            const HWND list = GetDlgItem(split_dialog.window(), RoutingList);
-            check((GetWindowLongPtrW(list, GWL_STYLE) & LBS_EXTENDEDSEL) != 0,
-                  "the live routing list must support multiple selection");
-            check((GetWindowLongPtrW(list, GWL_STYLE) & WS_VSCROLL) != 0, "rules list must scroll");
+            check(!GetDlgItem(split_dialog.window(), RoutingList) && !GetDlgItem(split_dialog.window(), RoutingAdd),
+                  "the two-network dialog must omit application rules");
             SendMessageW(GetDlgItem(split_dialog.window(), SplitPrimary), CB_SETCURSEL, 0, 0);
             SendMessageW(GetDlgItem(split_dialog.window(), RoutingAdapterCombo), CB_SETCURSEL, 0, 0);
             check(!GetDlgItem(split_dialog.window(), SplitDomains), "domain input must be hidden");

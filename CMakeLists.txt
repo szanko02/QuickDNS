@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QuickDNS VERSION 2.2.4 LANGUAGES C CXX)
+project(QuickDNS VERSION 2.2.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -275,6 +275,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_updater.cpp")
     add_executable(test_updater tests/test_updater.cpp ${DIAG_RC})
     target_link_libraries(test_updater PRIVATE quickdns_core ${WIN32_LIBS})
     add_test(NAME TestUpdater COMMAND test_updater)
+    add_test(NAME TestUpdaterLive COMMAND test_updater --live)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ai_checker.cpp")
@@ -284,7 +285,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ai_checker.cpp")
 endif()
 
 # Mark tests that perform live network/DNS/HTTP operations
-set_tests_properties(TestBenchmark TestSmartDnsVerifier TestUpdater PROPERTIES LABELS "network")
+set_tests_properties(TestBenchmark TestSmartDnsVerifier TestUpdaterLive PROPERTIES LABELS "network")
 set_tests_properties(TestDns TestConfig PROPERTIES TIMEOUT 30)
 
 add_executable(test_app_routing_backend tests/test_app_routing_backend.cpp

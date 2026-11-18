@@ -473,7 +473,7 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
         std::unique_ptr<quickdns::ReleaseInfo> pInfo(reinterpret_cast<quickdns::ReleaseInfo*>(lParam));
         if (!pInfo) {
-            MessageBoxW(hWnd, L"Не удалось связаться с сервером GitHub Releases. Проверьте интернет-соединение.",
+            MessageBoxW(hWnd, L"Не удалось найти совместимую сборку на GitHub Releases.",
                         L"Ошибка обновления", MB_OK | MB_ICONWARNING);
             return 0;
         }
@@ -481,7 +481,8 @@ LRESULT MainWindow::handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         quickdns::ReleaseInfo info = *pInfo;
 
         if (!info.is_newer) {
-            std::wstring msg = L"У вас установлена последняя версия QuickDNS (v" + std::wstring(quickdns::APP_VERSION_W) + L").\nОбновлений не требуется.";
+            std::wstring msg = L"Для установленной редакции QuickDNS (v" +
+                std::wstring(quickdns::APP_VERSION_W) + L") обновлений нет.";
             MessageBoxW(hWnd, msg.c_str(), L"QuickDNS актуален", MB_OK | MB_ICONINFORMATION);
             return 0;
         }
@@ -2254,7 +2255,9 @@ void MainWindow::check_manual_update() {
 
     HWND hWnd = m_hWnd;
     m_tasks.run([hWnd]() {
-        auto optInfo = quickdns::AppUpdater::check_github_update(quickdns::APP_VERSION);
+        const auto edition = quickdns::has_embedded_routing_engine()
+            ? quickdns::UpdateEdition::Embedded : quickdns::UpdateEdition::Classic;
+        auto optInfo = quickdns::AppUpdater::check_github_update(quickdns::APP_VERSION, "szanko02", "QuickDNS", edition);
         auto* pResult = optInfo ? new quickdns::ReleaseInfo(*optInfo) : nullptr;
         if (!PostMessageW(hWnd, WM_APP_UPDATE_RESULT, 0, reinterpret_cast<LPARAM>(pResult))) {
             delete pResult;
@@ -2287,7 +2290,7 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
     if (info.download_url.empty()) {
         MessageBoxW(m_hWnd, L"Не найден прямой файл обновления. Откройте страницу релиза на GitHub.",
                     L"Ошибка", MB_OK | MB_ICONERROR);
-        ShellExecuteW(nullptr, L"open", L"https://github.com/szanko02/QuickDNS/releases/latest", nullptr, nullptr, SW_SHOW);
+        ShellExecuteW(nullptr, L"open", L"https://github.com/szanko02/QuickDNS/releases", nullptr, nullptr, SW_SHOW);
         return;
     }
 
@@ -2315,8 +2318,10 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
     HWND hWnd = m_hWnd;
     std::wstring dlUrl = utf8_to_wide(info.download_url);
     std::wstring sha256Url = utf8_to_wide(info.sha256_url);
+    const auto edition = quickdns::has_embedded_routing_engine()
+        ? quickdns::UpdateEdition::Embedded : quickdns::UpdateEdition::Classic;
 
-    m_tasks.run([hWnd, dlUrl, sha256Url, tempExe]() {
+    m_tasks.run([hWnd, dlUrl, sha256Url, tempExe, edition]() {
         auto* res = new quickdns::DownloadUpdateResult();
         if (sha256Url.empty()) {
             res->success = false;
@@ -2347,6 +2352,11 @@ void MainWindow::prompt_and_install_update(const quickdns::ReleaseInfo& info) {
                 res->success = false;
                 res->errorMessage = L"Целостность файла обновления не подтверждена (неверный SHA-256 или поврежденный файл). Установка отменена.";
                 res->errorTitle = L"Ошибка проверки целостности";
+            } else if (!quickdns::AppUpdater::verify_executable_edition(tempExe, edition)) {
+                DeleteFileW(tempExe.c_str());
+                res->success = false;
+                res->errorMessage = L"Скачанный файл относится к другой редакции QuickDNS. Установка отменена.";
+                res->errorTitle = L"Ошибка обновления";
             } else {
                 std::wstring updaterError;
                 bool restarted = quickdns::AppUpdater::apply_update_and_restart(tempExe, &updaterError);
